@@ -1,0 +1,34 @@
+Keine Zeit Leveling Guide 1.0 (WoW Forever)
+Autor: jonnydiepalme. Lizenz: GNU General Public License Version 3 oder später (GPLv3), Volltext in LICENSE.txt.
+Copyright (C) 2026 jonnydiepalme. Dieses Programm ist freie Software: du kannst es unter den Bedingungen der GPLv3
+weitergeben und verändern. Es wird OHNE JEDE GEWÄHRLEISTUNG bereitgestellt, Einzelheiten in LICENSE.txt.
+
+Was drin ist (Version 1.0)
+- Leveling Route von 1 bis 60 mit Tempo Regler (Alles oder Normal, Grinden an oder aus), rechnet selbst nach, wenn du
+  etwas anderes machst
+- Pfeil, Navi und Mini Fenster: führt Stück für Stück um Berge und Wasser, durch Städte bis zum richtigen Tor, mit
+  Flugmeistern, Schiffen und Zeppelinen
+- Weltkarte: die Route auf Zonen, Kontinent und Azeroth Karte
+- Dungeons und Raids: passende Quests holen und zum Eingang
+- Touren: fehlende Flugpunkte, Alles entdecken, Bücher, Questlog Route, Stunden Budget
+- Gruppe: gemeinsame Route mit deiner Gruppe
+- Mein Weg: welche Funktion ab welchem Level kommt, mit deiner Figur auf dem Weg
+- Meine Route mit Verlauf: was du gemacht hast, je Level mit Zeit, nach Level 60 nach Monaten
+- Nach 60: alle übrigen Quests als Route
+- Farming Zusatz (eigenes Addon "Keine Zeit Leveling Guide: Farming"): Berufe und Gold farmen
+- Test Log Zusatz (eigenes Addon "Keine Zeit Leveling Guide Test Log") zum Fehler melden
+
+What is inside (version 1.0)
+- Leveling route from 1 to 60 with a pace setting (All or Normal, grinding on or off), recalculates by itself when you
+  do something else
+- Arrow, navigation and mini window: leads around mountains and water step by step, through cities to the right gate,
+  with flight masters, ships and zeppelins
+- World map: the route on zone, continent and Azeroth maps
+- Dungeons and raids: get the fitting quests and go to the entrance
+- Tours: missing flight points, explore everything, books, quest log route, hour budget
+- Group: shared route with your group
+- My way: which feature comes at which level, with your character on the path
+- My route with history: what you did, per level with time, after level 60 by month
+- After 60: all remaining quests as a route
+- Farming add-on (separate addon "Keine Zeit Leveling Guide: Farming"): professions and gold farming
+- Test log add-on (separate addon "Keine Zeit Leveling Guide Test Log") to report bugs

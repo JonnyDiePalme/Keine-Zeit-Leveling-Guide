@@ -1,0 +1,10 @@
+package-as: KeineZeitLevelingGuide
+
+move-folders:
+  KeineZeitLevelingGuide/KeineZeitLevelingGuide: KeineZeitLevelingGuide
+  KeineZeitLevelingGuide/KeineZeitLevelingGuide_Farming: KeineZeitLevelingGuide_Farming
+  KeineZeitLevelingGuide/KeineZeitLevelingGuide_Log: KeineZeitLevelingGuide_Log
+
+ignore:
+  - README.md
+  - .github
