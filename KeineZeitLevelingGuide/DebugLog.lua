@@ -18,16 +18,34 @@ local TR = ns.TR
 -- Einstellungen "Test Log schreiben"). Das merkt LOG.byHand
 local BETA = false
 ns.LOG_BETA = BETA
-local MAXL = 20000
-local MAXB = 1800000 -- alle Zeilen zusammen (die Datei bleibt so unter etwa 2 MB)
+-- v11e (K P36, S 10:55): statt fest 20000 Zeilen alles der letzten KEEP_H Stunden, harte Grenze MAXL. Beim Kuerzen zuerst
+-- ganze Sitzungen aelter als KEEP_H, dann Takt Zeilen (THIN) alter Sitzungen ausduennen, zuletzt von vorne kuerzen.
+-- Ausgeduennte Zeilen stehen je Sitzung in LOG.sess[si].gone (Folge Nummern), damit die Auswertung die Luecken kennt.
+local MAXL = 60000
+local KEEP_H = 48
+local MAXB = 9000000 -- alle Zeilen zusammen (Datei bis etwa 9 MB, Ladezeit im LT ansehen)
+local THIN = { POS = true, BUFFS = true, GPS = true, MARKE = true, ZIELKNOPF = true }
+local BIG_HINT_LINES = 30000 -- ab so vielen Zeilen seit dem Einloggen ein Hinweis (/reload sichert)
 local LINE_OVH = 12 -- so viel schreibt das Spiel pro Zeile dazu ("...", -- [123])
 local MAXLEN = 700 -- eine Zeile hoechstens so lang
 -- pro Sitzung hoechstens so viele Zeilen je Art, der Rest wird nur gezaehlt (steht am Ende in der Zusammenfassung)
-local CAP = { HINWEIS = 400, RECHNER = 600, PFEIL = 600, QUEST = 1200, NPC = 300, ZONE = 300, RUCKLER = 80, FEHLER = 150,
+local CAP = { HINWEIS = 400, RECHNER = 600, PFEIL = 600, QUEST = 1200, NPC = 300, ZONE = 300, RUCKLER = 80, FEHLER = 450,
   BLOCKIERT = 40, GPS = 60, BUFFS = 80, ROUTE = 300, RECHNEN = 500, PLAN = 200, SCHRITT = 2500, GRIND = 300, REISE = 400,
   TOD = 120, NACHRICHT = 120, PROFIL = 100, GRUPPE = 100, LANGSAM = 100, HAENGT = 200, STAND = 400,
   EINSTELLUNG = 300, FENSTER = 600, DARSTELLUNG = 100, POS = 1200 }
 local capN, capDrop = {}, {}
+-- v11e (P34): Fehler je Art einmal mit Stack, dann gezaehlt
+local ERRS = {}
+local ERR_UNIQ_MAX = 400
+local function ErrSum()
+  for k, e in pairs(ERRS) do
+    if type(e) == "table" and e.n > e.said and e.n > 1 then
+      e.said = e.n
+      if ns.TestLog then ns.TestLog("FEHLER_ZAHL", ("%dx in dieser Sitzung: %s"):format(e.n, e.msg)) end
+    end
+  end
+end
+ns.TestLogErrSum = ErrSum
 local LOG, CUR
 local CR, SI -- Schluessel und Nummer der laufenden Sitzung
 local SEQ = 0
@@ -94,20 +112,97 @@ local function Roster()
   end
 end
 
+local function LineSi(l) return tonumber(l:match("^(%d+)|")) end
+-- Folge Nummer jeder Zeile (je Sitzung: ab first, gone uebersprungen)
+-- Mengen nur zur Laufzeit (gespeichert sind die Listen low und gone je Sitzung)
+local setC = setmetatable({}, { __mode = "k" })
+local function SetOf(se, f)
+  local c = setC[se]
+  if not c then c = {}; setC[se] = c end
+  local t = c[f]
+  if not t or t.n ~= #(se[f] or {}) then
+    t = { n = #(se[f] or {}) }
+    for _, q in ipairs(se[f] or {}) do t[q] = true end
+    c[f] = t
+  end
+  return t
+end
+local function SeqWalker()
+  local nextSeq = {}
+  return function(si)
+    local se = LOG.sess and LOG.sess[si]
+    local q = nextSeq[si] or (se and se.first) or 1
+    local gs = se and SetOf(se, "gone")
+    while gs and gs[q] do q = q + 1 end
+    nextSeq[si] = q + 1
+    return q
+  end
+end
+local function GoneAdd(se, q)
+  se.gone = se.gone or {}
+  se.gone[#se.gone + 1] = q
+  local gs = SetOf(se, "gone")
+  gs[q] = true; gs.n = #se.gone
+end
 local function Trim()
   local lines = LOG.lines
-  local n, b, i = #lines, LOG.bytes or 0, 0
-  while i < n and (n - i > MAXL * 0.9 or b > MAXB * 0.9) do
-    i = i + 1
-    b = b - #lines[i] - LINE_OVH
+  local n, b = #lines, LOG.bytes or 0
+  local limN, limB = MAXL * 0.9, MAXB * 0.9
+  local now = time and time() or 0
+  local function Rebuild(dropFn)
+    local keep, bb, walk = {}, 0, SeqWalker()
+    for k = 1, #lines do
+      local l = lines[k]
+      local si = LineSi(l)
+      local q = si and walk(si)
+      if dropFn(l, si, q) then
+        -- weg
+      else
+        keep[#keep + 1] = l
+        bb = bb + #l + LINE_OVH
+      end
+    end
+    lines, b = keep, bb
   end
-  local keep = {}
-  for k = i + 1, n do keep[#keep + 1] = lines[k] end
-  LOG.lines, LOG.bytes = keep, b
+  -- 1. ganze alte Sitzungen
+  do
+    local old = {}
+    for si, se in pairs(LOG.sess or {}) do if si ~= SI and (se.t or now) < now - KEEP_H * 3600 then old[si] = true end end
+    if next(old) then Rebuild(function(_, si) return si and old[si] end) end
+  end
+  -- 2. Takt Zeilen alter Sitzungen ausduennen
+  if #lines > limN or b > limB then
+    Rebuild(function(_, si, q)
+      local se = si and si ~= SI and LOG.sess and LOG.sess[si]
+      if se and se.low and q and SetOf(se, "low")[q] then GoneAdd(se, q); return true end
+      return false
+    end)
+  end
+  -- 3. von vorne kuerzen
+  if #lines > limN or b > limB then
+    local cut = 0
+    local walk = SeqWalker()
+    local nn, bb = #lines, b
+    while cut < nn and (nn - cut > limN or bb > limB) do
+      cut = cut + 1
+      local l = lines[cut]
+      local si = LineSi(l)
+      local q = si and walk(si)
+      local se = si and LOG.sess and LOG.sess[si]
+      if se and q then se.first = q + 1 end
+      bb = bb - #l - LINE_OVH
+    end
+    local keep = {}
+    for k = cut + 1, nn do keep[#keep + 1] = lines[k] end
+    lines, b = keep, bb
+  end
+  LOG.lines, LOG.bytes = lines, b
   -- Sitzungen ohne Zeilen weg (ihr Schluessel wird nicht mehr gebraucht)
-  local minS = keep[1] and tonumber(keep[1]:match("^(%d+)|")) or SI
-  for k in pairs(LOG.sess or {}) do if minS and k < minS then LOG.sess[k] = nil end end
+  local have = {}
+  for k = 1, #lines do local si = LineSi(lines[k]); if si then have[si] = true end end
+  for k in pairs(LOG.sess or {}) do if k ~= SI and not have[k] then LOG.sess[k] = nil end end
 end
+ns.TestLogTrim = function() if LOG and LOG.lines then pcall(Trim) end end
 
 -- neue Sitzung im Log: Nummer, Zeitstempel, eigener Schluessel (RSA laeuft nebenbei, ein Stueck pro Bild)
 local function NewSession()
@@ -153,12 +248,23 @@ local function L(cat, msg)
   if not CR then return end
   SEQ = SEQ + 1
   local line = SI .. "|" .. ns.LogCryptSeal(CR, SEQ, plain)
-  if LOG.sess[SI] then LOG.sess[SI].n = SEQ end
+  if LOG.sess[SI] then
+    LOG.sess[SI].n = SEQ
+    -- v11e (P36): Takt Zeilen merken, die duerfen beim Kuerzen zuerst raus
+    if THIN[cat] then local se = LOG.sess[SI]; se.low = se.low or {}; se.low[#se.low + 1] = SEQ end
+  end
   local lines = LOG.lines
   lines[#lines + 1] = line
   LOG.bytes = (LOG.bytes or 0) + #line + LINE_OVH
   if #lines > MAXL or LOG.bytes > MAXB then Trim() end
-  if CUR then CUR.lines = (CUR.lines or 0) + 1 end
+  if CUR then
+    CUR.lines = (CUR.lines or 0) + 1
+    -- v11e (P36): grosses Log seit dem Einloggen: Hinweis, /reload sichert (nicht im Kampf, hoechstens 1x pro Std)
+    if CUR.lines >= BIG_HINT_LINES and not (InCombatLockdown and InCombatLockdown()) and GetTime() - (CUR.bigHintAt or -99999) > 3600 then
+      CUR.bigHintAt = GetTime()
+      if ns.Print then ns.Print(TR"Test Log ist gross, /reload sichert es.") end
+    end
+  end
 end
 ns.TestLog = L
 
@@ -451,7 +557,7 @@ local function Tick()
   -- stehen wie in jeder Zeile vorne, dazu Tempo in Yards pro Sekunde, beritten, schwimmend, Geist, Flug (je 1 oder 0)
   do
     local now = GetTime()
-    local spd = GetUnitSpeed and GetUnitSpeed("player") or 0
+    local spd = ns.Api.GetUnitSpeed and ns.Api.GetUnitSpeed("player") or 0
     local gap = (spd and spd > 0) and 15 or 60
     if not last.posAt or now - last.posAt >= gap then
       last.posAt = now
@@ -553,7 +659,7 @@ local function Tick()
     end
   end
   -- Pfeil Ziel gewechselt (Zahlen wie Entfernung oder 3/8 zaehlen nicht, Umweg Zeile auch nicht)
-  if not UnitOnTaxi("player") then
+  if not ns.Api.U(UnitOnTaxi, "player") then
     local an, asrc = ns.arrowNow, ns.arrowSrc
     local first = an and Clean(an):gsub(" / .*$", "") or nil
     local ak = first and (tostring(asrc) .. "|" .. first:gsub("%d+", "#")) or "none"
@@ -568,14 +674,14 @@ local function Tick()
   end
   -- gelaufen und Kampfzeit
   local m, x, y = Where()
-  if m and lastPos and ns.WorldDist and not UnitOnTaxi("player") then
+  if m and lastPos and ns.WorldDist and not ns.Api.U(UnitOnTaxi, "player") then
     local ok, dd = pcall(ns.WorldDist, lastPos, { m, x, y })
     if ok and dd and dd < 60 then stepStat.walk = stepStat.walk + dd end
   end
   lastPos = m and { m, x, y } or nil
-  if UnitAffectingCombat("player") then stepStat.fight = stepStat.fight + 1 end
+  if ns.Api.U(UnitAffectingCombat, "player") then stepStat.fight = stepStat.fight + 1 end
   -- welcher Hinweis steht oben im Fenster
-  if ns.TopHint and not UnitAffectingCombat("player") then
+  if ns.TopHint and not ns.Api.U(UnitAffectingCombat, "player") then
     local ok, h = pcall(ns.TopHint)
     local ht = ok and type(h) == "table" and (h.text or h[1]) or (ok and type(h) == "string" and h) or nil
     -- Zahlen (Restzeit, Entfernung) zaehlen nicht als neuer Hinweis, sonst steht jede Sekunde eine Zeile drin
@@ -635,7 +741,7 @@ local function Tick()
       last.bestD, last.bestT, last.bestWalk = d, GetTime(), stepStat.walk
     elseif d > 40 and not last.slowWarn and GetTime() - last.bestT > 90
       and stepStat.walk - (last.bestWalk or 0) > 30 -- nur wenn er sich bewegt, nicht wenn er einfach steht
-      and not UnitAffectingCombat("player") and not UnitIsDeadOrGhost("player") and not UnitOnTaxi("player") then
+      and not ns.Api.U(UnitAffectingCombat, "player") and not ns.Api.U(UnitIsDeadOrGhost, "player") and not ns.Api.U(UnitOnTaxi, "player") then
       last.slowWarn = true
       L("HAENGT", ("90s nicht naeher ans Ziel, noch %d Yards: %s"):format(math.floor(d), tostring(last.txt)))
       if CUR then CUR.stuck = (CUR.stuck or 0) + 1 end
@@ -789,14 +895,38 @@ local function Hooks()
     end)
   end
   -- Fehler aus dem Addon mitschreiben, die alte Fehleranzeige bleibt
+  -- v11e (K P34, S 10:51, Log "nicht geschrieben: FEHLER 1331"): alle Fehler, die uns betreffen: Meldung ODER Stack geht durch
+  -- unsere Dateien (auch _Log, _Farming und fremde Addons, die uns aufrufen). Gleiche Fehler einmal mit Stack, danach nur
+  -- gezaehlt; alle 5 Min und beim Ausloggen eine Zeile FEHLER_ZAHL je Fehler mit neuen Treffern. Neue Fehler bis ERR_UNIQ_MAX
   if geterrorhandler and seterrorhandler and not ns.fwLogErr then
     ns.fwLogErr = true
     local prev = geterrorhandler()
+    local function Ours(t)
+      return type(t) == "string" and (t:find(ADDON, 1, true) or t:find("ForeverWegweiser", 1, true) or t:find("KeineZeitLevelingGuide", 1, true)) and true or false
+    end
     seterrorhandler(function(msg, ...)
-      if type(msg) == "string" and (msg:find(ADDON, 1, true) or msg:find("ForeverWegweiser", 1, true)) then
-        L("FEHLER", msg .. " / " .. Clean((debugstack and debugstack(2, 6, 0)) or ""))
+      -- 1.1 (P48, K 12:55): Stack hier holen, nicht im pcall, und unsere eigene Fehler Funktion weglassen. Vorher stand
+      -- DebugLog.lua (dieser Handler) in JEDEM Stack, darum kamen fremde Fehler (ElvUI, Details) als unsere ins Log
+      local raw = (debugstack and debugstack(2, 14, 0)) or ""
+      local ok = pcall(function()
+        if type(msg) ~= "string" then return end
+        local keep = {}
+        for ln in tostring(raw):gmatch("[^\n]+") do
+          if not ln:find("DebugLog.lua", 1, true) and not ln:find("in function 'pcall'", 1, true) then keep[#keep + 1] = ln end
+        end
+        local stack = table.concat(keep, "\n")
+        if not (Ours(msg) or Ours(stack)) then return end
+        local key = msg:gsub("%d+%.%d+", "#"):sub(1, 240)
+        local e = ERRS[key]
+        if not e then
+          ERRS.n = (ERRS.n or 0) + 1
+          e = { n = 0, said = 0, msg = msg:sub(1, 300) }
+          ERRS[key] = e
+          if ERRS.n <= ERR_UNIQ_MAX then L("FEHLER", msg .. " / " .. Clean(stack)) end
+        end
+        e.n = e.n + 1
         if CUR then CUR.errors = (CUR.errors or 0) + 1 end
-      end
+      end)
       if prev then return prev(msg, ...) end
     end)
   end
@@ -807,9 +937,11 @@ end
 ------------------------------------------------------------
 local lvlStart = GetTime()
 local ev = CreateFrame("Frame")
+-- 1.1 (P57, K 14:33, Log 14:12:32 BLOCKIERT frueh UNKNOWN bei +0 s, Stack pcall): COMBAT_LOG_EVENT_UNFILTERED ist auf Forever
+-- fuer Addons gesperrt. Das Anmelden (auch im pcall) loeste beim Laden die Blizzard Sperre aus. Nicht mehr anmelden
 for _, e in ipairs({ "PLAYER_LOGIN", "PLAYER_LOGOUT", "QUEST_ACCEPTED", "QUEST_TURNED_IN", "QUEST_REMOVED", "PLAYER_LEVEL_UP", "PLAYER_DEAD",
   "PLAYER_ALIVE", "PLAYER_UNGHOST", "ZONE_CHANGED_NEW_AREA", "PLAYER_ENTERING_WORLD", "UNIT_SPELLCAST_SUCCEEDED", "PLAYER_CONTROL_LOST",
-  "PLAYER_CONTROL_GAINED", "GROUP_ROSTER_UPDATE", "COMBAT_LOG_EVENT_UNFILTERED", "MERCHANT_SHOW", "TRAINER_SHOW", "TAXIMAP_OPENED",
+  "PLAYER_CONTROL_GAINED", "GROUP_ROSTER_UPDATE", "MERCHANT_SHOW", "TRAINER_SHOW", "TAXIMAP_OPENED",
   "CHAT_MSG_ADDON", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do
   pcall(ev.RegisterEvent, ev, e)
 end
@@ -882,8 +1014,17 @@ ev:SetScript("OnEvent", function(_, e, a1, a2, a3, a4)
     local b = 0
     for i = 1, #LOG.lines do b = b + #LOG.lines[i] + LINE_OVH end
     LOG.bytes = b
+    -- v11e (P36): alte Sitzungen (ueber KEEP_H Stunden) gleich beim Laden weg
+    pcall(Trim)
     if not On() then return end
     NewSession()
+    -- 1.1 (P48): blockierte Aktionen von vor dem Log Start (Route.lua faengt sie ab dem Laden) jetzt nachtragen
+    ns.testLogLive = true
+    for _, b in ipairs(ns.blockedEarly or {}) do
+      L("BLOCKIERT", ("frueh %s %s: %s, letzte Aktion %s, Stack %s"):format(tostring(b[2]), b[1] == "ADDON_ACTION_FORBIDDEN" and "verboten" or "blockiert",
+        tostring(b[3]), tostring(b[4] or "unbekannt"), tostring(b[5] or "-")))
+    end
+    ns.blockedEarly = nil
     -- Test Kasten neben dem Mini Fenster (nur mit Log)
     if ns.TesterBoxStart then C_Timer.After(3, ns.TesterBoxStart) end
     C_Timer.After(3, function() if ns.TestLogStart then ns.TestLogStart() end end)
@@ -911,8 +1052,17 @@ ev:SetScript("OnEvent", function(_, e, a1, a2, a3, a4)
     return
   end
   if e == "ADDON_ACTION_BLOCKED" or e == "ADDON_ACTION_FORBIDDEN" then
-    if a1 == ADDON then
-      L("BLOCKIERT", ("%s: %s (im Kampf %s)"):format(e == "ADDON_ACTION_FORBIDDEN" and "verboten" or "blockiert", tostring(a2), tostring(InCombatLockdown and InCombatLockdown() or false)))
+    -- 1.1 (P48): fremde Addons nur kurz (hilft beim Suchen), unsere mit letzter geschuetzter Aktion
+    if a1 ~= ADDON then
+      L("BLOCKIERT", ("fremd %s: %s %s, Stack %s"):format(tostring(a1), e == "ADDON_ACTION_FORBIDDEN" and "verboten" or "blockiert", tostring(a2),
+        tostring(ns.BlockStack and ns.BlockStack() or "-")))
+      return
+    end
+    do
+      -- 1.1: bei "UNKNOWN()" die letzte geschuetzte Aktion aus Compat.lua dazu (gleiches Bild)
+      local guess = ns.Api and ns.Api.LastProt and ns.Api.LastProt()
+      L("BLOCKIERT", ("%s: %s (im Kampf %s)%s"):format(e == "ADDON_ACTION_FORBIDDEN" and "verboten" or "blockiert", tostring(a2), tostring(InCombatLockdown and InCombatLockdown() or false),
+        (guess and (", letzte Aktion " .. guess) or ", letzte Aktion unbekannt") .. ", Stack " .. tostring(ns.BlockStack and ns.BlockStack() or "-")))
       if CUR then CUR.blocked = (CUR.blocked or 0) + 1 end
     end
     return
@@ -942,6 +1092,34 @@ function ns.TestLogStart()
   local server = (ns.FOREVER and "Forever" or "Era") .. (hc and " Hardcore" or "")
   L("START", ("==== Sitzung %s, Version %s, Server %s, Sprache %s, Build %s, %s %s %s, Level %d"):format(LOG.sess and LOG.sess[SI] and LOG.sess[SI].id or "?", ver, server, tostring(GetLocale and GetLocale()),
     tostring((select(4, GetBuildInfo()))), tostring(race), tostring(cls), tostring(UnitFactionGroup("player")), UnitLevel("player") or 0))
+  -- v11e (K P35, S 10:51): Versionen (unser Addon, Zusatz Addons, Questie, QuestieDB, Client). Aendert sich etwas gegen die
+  -- letzte Sitzung oder waehrend der Sitzung (Pruefung alle 60 s), eine Zeile VERSIONEN mit alt und neu
+  do
+    local function V(nm) local ok, v = pcall(meta, nm, "Version"); return ok and v or nil end
+    local function Sig()
+      local cver, cbuild = GetBuildInfo()
+      local t = {
+        ("Addon %s"):format(tostring(ver)),
+        ("Log %s"):format(tostring(V(ADDON .. "_Log") or "-")),
+        ("Farming %s"):format(tostring(V(ADDON .. "_Farming") or "-")),
+        ("Questie %s"):format(tostring(V("Questie") or "-")),
+        ("QuestieDB %s"):format(tostring(V("QuestieDB") or "-")),
+        ("Client %s %s"):format(tostring(cver), tostring(cbuild)),
+      }
+      return table.concat(t, ", ")
+    end
+    local sig = Sig()
+    L("VERSIONEN", sig)
+    if LOG.verSig and LOG.verSig ~= sig then L("VERSIONEN", "geaendert seit der letzten Sitzung, vorher: " .. LOG.verSig) end
+    LOG.verSig = sig
+    if C_Timer and C_Timer.NewTicker then
+      C_Timer.NewTicker(60, function()
+        local okS, s2 = pcall(Sig)
+        if okS and s2 ~= LOG.verSig then L("VERSIONEN", "geaendert waehrend der Sitzung, vorher: " .. tostring(LOG.verSig) .. " | jetzt: " .. s2); LOG.verSig = s2 end
+      end)
+      C_Timer.NewTicker(300, function() pcall(ErrSum) end)
+    end
+  end
   -- gleich danach: Zusammenfassung der letzten Sitzung
   if type(LOG.cur) == "table" then
     for _, s in ipairs(SumLines(LOG.cur)) do L("LETZTE", s) end
@@ -1004,6 +1182,7 @@ end
 
 function ns.TestLogEvent(e, a1, a2, a3)
   if e == "PLAYER_LOGOUT" then
+    pcall(ErrSum)
     -- beim Ausloggen darf es kurz haken: Speicher genau messen (erst aufraeumen, dann pro Addon)
     local okM, msg = pcall(function()
       collectgarbage("collect")
@@ -1045,7 +1224,7 @@ function ns.TestLogEvent(e, a1, a2, a3)
     L("TOD", ("gestorben durch %s, Ziel war: %s%s"):format(tostring(lastHit or "?"), tostring(last.txt), d and (", noch %d yd"):format(math.floor(d)) or ""))
     if CUR then CUR.deaths = (CUR.deaths or 0) + 1 end
   elseif e == "PLAYER_ALIVE" then
-    if UnitIsGhost and UnitIsGhost("player") then L("TOD", "als Geist unterwegs zur Leiche")
+    if UnitIsGhost and ns.Api.U(UnitIsGhost, "player") then L("TOD", "als Geist unterwegs zur Leiche")
     elseif deadAt then L("TOD", ("wiederbelebt nach %ds"):format(math.floor(GetTime() - deadAt))); deadAt = nil end
   elseif e == "PLAYER_UNGHOST" then
     L("TOD", ("lebt wieder%s"):format(deadAt and (" nach %ds"):format(math.floor(GetTime() - deadAt)) or ""))
@@ -1063,7 +1242,7 @@ function ns.TestLogEvent(e, a1, a2, a3)
     if a3 == 8690 then L("REISE", "Ruhestein benutzt")
     elseif a3 == 556 then L("REISE", "Astraler Rueckruf") end
   elseif e == "PLAYER_CONTROL_LOST" then
-    C_Timer.After(1, function() if UnitOnTaxi("player") and not onTaxi then onTaxi = true; L("REISE", "Flug gestartet") end end)
+    C_Timer.After(1, function() if ns.Api.U(UnitOnTaxi, "player") and not onTaxi then onTaxi = true; L("REISE", "Flug gestartet") end end)
   elseif e == "PLAYER_CONTROL_GAINED" then
     if onTaxi then onTaxi = false; L("REISE", "Flug gelandet") end
   elseif e == "GROUP_ROSTER_UPDATE" then

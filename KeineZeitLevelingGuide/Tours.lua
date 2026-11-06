@@ -515,8 +515,8 @@ local function Abandon(qid)
     local _, _, _, isHeader, _, _, _, id = GetQuestLogTitle(i)
     if not isHeader and id == qid then
       SelectQuestLogEntry(i)
-      if SetAbandonQuest then SetAbandonQuest() end
-      if AbandonQuest then AbandonQuest() end
+      if SetAbandonQuest then ns.Api.Prot("SetAbandonQuest", SetAbandonQuest) end
+      if AbandonQuest then ns.Api.Prot("AbandonQuest", AbandonQuest) end
       return true
     end
   end

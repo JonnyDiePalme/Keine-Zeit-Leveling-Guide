@@ -1,4 +1,10 @@
 local ADDON, ns = ...
+-- 1.1 (P39, S 11:24): Mini Fenster zeigt ohne eigene Wahl 3 naechste Schritte. Wer schon gewaehlt hat, behaelt seine Zahl
+ns.HUD_STEPS_STD = 3
+function ns.HudSteps()
+  local n = ns.db and tonumber(ns.db.hudSteps)
+  return n or ns.HUD_STEPS_STD
+end
 local TR = ns.TR
 local UnitLevel = function(u) return ns.UnitLevel(u) end
 
@@ -460,9 +466,9 @@ local MENU = {
   { TR"Mehr Schritte", nil, function()
       local db = ns.db
       local NEXT = { [1] = 3, [3] = 5, [5] = 8, [8] = 1 }
-      db.hudSteps = NEXT[tonumber(db.hudSteps) or 1] or 1
-      if db.hudSteps == 1 then db.hudSteps = nil end
-      if db.hudSteps and db.hudSize == "small" then db.hudSize = "normal"; if ns.ApplyHudSize then ns.ApplyHudSize() end end
+      -- 1.1 (P39): eigene Wahl wird fest gespeichert (auch 1), ohne Wahl gilt der Standard ns.HUD_STEPS_STD
+      db.hudSteps = NEXT[ns.HudSteps()] or ns.HUD_STEPS_STD
+      if db.hudSteps > 1 and db.hudSize == "small" then db.hudSize = "normal"; if ns.ApplyHudSize then ns.ApplyHudSize() end end
       if ns.RefreshHud then pcall(ns.RefreshHud) end
     end, half = true, steps = true, keepOpen = true,
     tip = TR"Wie viele nächste Schritte das Mini Fenster zeigt: 1, 3, 5, 8, dann wieder 1. Gleich wie unter Einstellungen." },
@@ -840,7 +846,7 @@ local function BuildHud0()
         end
         -- 20.1 (P1): Mehr oder Weniger Schritte, je nachdem was gerade zu sehen ist
         if m.steps then
-          local nS = tonumber(ns.db.hudSteps) or 1
+          local nS = ns.HudSteps()
           local key = (nS >= 8) and TR"Weniger Schritte" or TR"Mehr Schritte"
           local lbl = (TR"Schritte: %d"):format(nS)
           local ic = T().HudIcon and T().HudIcon(key, 15)
@@ -997,7 +1003,8 @@ local function BuildHud0()
       hud.dist:SetText("")
     elseif i.name then
       hud.kind:SetText((TR"|cff%02x%02x%02x%s|r"):format(math.floor(c[1] * 255), math.floor(c[2] * 255), math.floor(c[3] * 255), (i.kind or ""):upper()))
-      hud.target:SetText(i.name)
+      -- 1.1 (P40): jetzige Quest heller und dezent nach Art gefaerbt
+      hud.target:SetText(i.tint and ("|cff" .. i.tint .. tostring(i.name) .. "|r") or i.name)
       hud.dist:SetText(i.dist and (TR"%d yd  %s"):format(i.dist, i.time) or "")
     else
       hud.kind:SetText("")
@@ -1010,6 +1017,9 @@ local function BuildHud0()
     local nw = ns.NoticeOn and ns.NoticeOn()
     if i.warn and not nw then table.insert(extra, "|TInterface\\DialogFrame\\UI-Dialog-Icon-AlertNew:14:14|t |cffff5050" .. i.warn .. "|r") end
     for _, l in ipairs(i.objs or {}) do table.insert(extra, "   " .. l) end
+    -- 1.1 (P41): Hoehe zum Ziel, nur wo es Hoehen Daten gibt
+    local hh = (not i.navi) and ns.ZielHoehe and ns.ZielHoehe()
+    if hh and not small then table.insert(extra, "|cffc8e6ff" .. hh .. "|r") end
     if i.progress then table.insert(extra, "|cffff66cc" .. i.progress .. "|r") end
     if i.along and #i.along > 0 and not small then
       local a2 = {}
@@ -1053,7 +1063,7 @@ local function BuildHud0()
           local t = parts[1] .. (parts[2] and (", " .. parts[2]) or "") .. (#parts > 2 and ("  +" .. (#parts - 2)) or "")
           table.insert(extra, base, TR"|cff9d9d9dDanach: " .. t .. "|r")
           -- 19.32 (Saschas Runde 1 Punkt 5): mehr Schritte zeigen (Einstellung 1, 3, 5 oder 8), je eine kurze Zeile
-          local nShow = tonumber(ns.db.hudSteps) or 1
+          local nShow = ns.HudSteps()
           local pos = base + 1
           for k = 2, math.min(nShow, 8) do
             local st2 = o.steps[(o.idx or 1) + k]
@@ -1069,7 +1079,9 @@ local function BuildHud0()
     -- 20.3z (S Wunsch 16:52, P11): beim Rechnen oben im Mini Fenster eine Sanduhr mit Stand, damit man sieht, dass etwas laeuft
     if (ns.OptBusy and ns.OptBusy()) or ns.planBuilding then
       local pt = ns.planBuilding and ns.planProgress or nil
-      table.insert(extra, 1, "|TInterface\\RaidFrame\\ReadyCheck-Waiting:12:12|t |cffffd100" .. (pt or TR"Route wird gerechnet ...") .. "|r")
+      -- 1.1 (P38): Stand in Prozent dazu (Rechnung laeuft in Stuecken ueber viele Bilder)
+      local pc = (ns.OptBusy and ns.OptBusy() and ns.optPct) and ("  " .. ns.optPct .. " %") or ""
+      table.insert(extra, 1, "|TInterface\\RaidFrame\\ReadyCheck-Waiting:12:12|t |cffffd100" .. (pt or TR"Route wird gerechnet ...") .. pc .. "|r")
     end
     -- 20.4a: kurzer Hinweis, wenn die Nach 60 Route im Hintergrund fertig gerechnet ist
     if ns.restDoneMsg and (GetTime() < ns.restDoneMsg.t) and not ((ns.OptBusy and ns.OptBusy()) or ns.planBuilding) then
@@ -1194,7 +1206,9 @@ local function BuildHud0()
           hud.xtext:SetText((TR"Level %d  %d%%  |cffe0a0e0> %d%%|r"):format(s.level, math.floor(s.xpFrac * 100), pct))
         end
       end
-      hud.xright:SetText(s.nextLevel and (TR"%s bis Lvl %d"):format(s.fmt(s.nextLevel), s.level + 1) or "")
+      -- 1.1 (P56): mit offenen Abgaben gerechnet, reicht die Abgabe schon: "Lvl 16 nach Abgabe"
+      if s.levelAfterTurnIn then hud.xright:SetText((TR"Lvl %d nach Abgabe"):format(s.level + 1))
+      else hud.xright:SetText(s.nextLevel and (TR"%s bis Lvl %d"):format(s.nextLevelText or s.fmt(s.nextLevel), s.level + 1) or "") end
     else
       hud.xbar:SetValue(0)
       hud.xtext:SetText((TR"Level %d"):format(s.level or 0))
@@ -1271,7 +1285,7 @@ local function NpcFromGUID(g)
   if t == "Creature" then return tonumber(id) end
 end
 local function LearnName(unit)
-  if not (UnitExists and UnitExists(unit)) or (UnitIsPlayer and UnitIsPlayer(unit)) then return end
+  if not (UnitExists and ns.Api.U(UnitExists, unit)) or (UnitIsPlayer and ns.Api.U(UnitIsPlayer, unit)) then return end
   local g = UnitGUID(unit)
   if ns.Plain then g = ns.Plain(g) end
   local id = NpcFromGUID(g)
@@ -1430,7 +1444,7 @@ BuildTargetButton = function()
     if acc < 0.25 then return end
     acc = 0
     if InCombatLockdown and InCombatLockdown() then return end
-    if tb:GetAttribute("type") ~= "macro" then tb:SetAttribute("type", "macro") end
+    if tb:GetAttribute("type") ~= "macro" then ns.Api.Mark("Zielknopf"); tb:SetAttribute("type", "macro") end
     local arrow = _G.TaurenRouteArrow
     local icon = arrow and arrow.kind
     -- erst pruefen, ob der Knopf ueberhaupt sichtbar sein kann (TargetInfo fragt Questie ab)
@@ -1438,7 +1452,7 @@ BuildTargetButton = function()
     local name, kind, list
     if can then name, kind, list = TargetInfo() end
     local show = can and name
-    if not show then if tb:IsShown() then tb:Hide() end return end
+    if not show then if tb:IsShown() then ns.Api.Mark("Zielknopf"); tb:Hide() end return end
     local key = list and table.concat(list, "|") or name
     if key ~= tb.key then
       tb.key, tb.name, tb.kind = key, list and table.concat(list, ", ") or name, kind
@@ -1448,6 +1462,7 @@ BuildTargetButton = function()
       local l = list or { name }
       for i = #l, 1, -1 do lines[#lines + 1] = "/targetexact " .. l[i] end
       if kind == "obj" then lines = { "" } end
+      ns.Api.Mark("Zielknopf")
       tb:SetAttribute("macrotext", table.concat(lines, "\n"))
     end
     -- ueber das Symbol legen (ohne Anker, damit der Pfeil frei verschiebbar bleibt)
@@ -1457,11 +1472,12 @@ BuildTargetButton = function()
       local x, y = cx * k, cy * k
       if tb.px ~= x or tb.py ~= y then
         tb.px, tb.py = x, y
+        ns.Api.Mark("Zielknopf")
         tb:ClearAllPoints()
         tb:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x, y)
       end
     end
-    if not tb:IsShown() then tb:Show() end
+    if not tb:IsShown() then ns.Api.Mark("Zielknopf"); tb:Show() end
   end)
 end
 ns.BuildTargetButton = BuildTargetButton
@@ -1618,4 +1634,72 @@ function ns.InitUI()
   SlashCmdList.TAURENROUTEUI = TogglePanel
   SLASH_TAURENROUTEHUD1 = "/trhud"
   SlashCmdList.TAURENROUTEHUD = function() ns.ToggleHud() end
+end
+
+------------------------------------------------------------
+-- 1.1 (S Log L10.0 "Map Icon oder Reiter fehlt"): Knopf an der Minimap. Links: grosses Fenster auf/zu, Rechts: Mini
+-- Fenster an/aus, Ziehen: um die Minimap verschieben (Winkel in db.minimapAngle). db.minimapBtn = false: aus
+------------------------------------------------------------
+do
+  local MM_RADIUS_ADD = 10   -- Abstand vom Minimap Rand
+  local btn
+  local function Place()
+    if not (btn and Minimap) then return end
+    local a = math.rad((ns.db and ns.db.minimapAngle) or 200)
+    local r = (Minimap:GetWidth() or 140) / 2 + MM_RADIUS_ADD
+    btn:ClearAllPoints()
+    btn:SetPoint("CENTER", Minimap, "CENTER", math.cos(a) * r, math.sin(a) * r)
+  end
+  local function Build()
+    if btn or not Minimap or (ns.db and ns.db.minimapBtn == false) then return end
+    btn = CreateFrame("Button", "KeineZeitLevelingGuideMinimapButton", Minimap)
+    btn:SetSize(31, 31)
+    btn:SetFrameStrata("MEDIUM")
+    btn:SetFrameLevel(8)
+    btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    btn:RegisterForDrag("LeftButton")
+    local icon = btn:CreateTexture(nil, "BACKGROUND")
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER", 0, 1)
+    icon:SetTexture((ns.APATH or "Interface\\AddOns\\KeineZeitLevelingGuide\\") .. "Media\\fw_logo_classic")
+    local ring = btn:CreateTexture(nil, "OVERLAY")
+    ring:SetSize(53, 53)
+    ring:SetPoint("TOPLEFT")
+    ring:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    btn:SetScript("OnClick", function(_, b)
+      if b == "RightButton" then if ns.ToggleHud then ns.ToggleHud() end
+      elseif ns.ToggleBig then ns.ToggleBig() end
+    end)
+    btn:SetScript("OnDragStart", function(self)
+      self:SetScript("OnUpdate", function()
+        local mx, my = Minimap:GetCenter()
+        local cx, cy = GetCursorPosition()
+        local s = Minimap:GetEffectiveScale()
+        if not (mx and cx) then return end
+        local ang = math.deg((math.atan2 or math.atan)(cy / s - my, cx / s - mx))
+        if ns.db then ns.db.minimapAngle = ang end
+        Place()
+      end)
+    end)
+    btn:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+    btn:SetScript("OnEnter", function(self)
+      if ns.TipOwner then ns.TipOwner(self, "ANCHOR_LEFT") else GameTooltip:SetOwner(self, "ANCHOR_LEFT") end
+      GameTooltip:AddLine("Keine Zeit Leveling Guide")
+      GameTooltip:AddLine(TR"Linksklick: Fenster auf oder zu", 1, 1, 1)
+      GameTooltip:AddLine(TR"Rechtsklick: Mini Fenster an oder aus", 1, 1, 1)
+      GameTooltip:AddLine(TR"Ziehen: verschieben", 0.7, 0.7, 0.7)
+      GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    Place()
+  end
+  ns.MinimapButtonBuild = Build
+  function ns.MinimapButtonShow(on)
+    if ns.db then ns.db.minimapBtn = on and true or false end
+    if on then Build(); if btn then btn:Show() end elseif btn then btn:Hide() end
+  end
+  local ef = CreateFrame("Frame")
+  ef:RegisterEvent("PLAYER_LOGIN")
+  ef:SetScript("OnEvent", function() C_Timer.After(2, function() pcall(Build) end) end)
 end

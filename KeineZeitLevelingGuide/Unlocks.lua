@@ -557,7 +557,7 @@ end
 
 -- Hinweise im Kampf zurueckhalten, danach zeigen
 local queued
-local function InCombat() return (InCombatLockdown and InCombatLockdown()) or (UnitAffectingCombat and UnitAffectingCombat("player")) end
+local function InCombat() return (InCombatLockdown and InCombatLockdown()) or (UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player")) end
 
 local function ShowUnlock(key, lvl)
   local u = U[key]

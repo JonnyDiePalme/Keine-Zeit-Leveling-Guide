@@ -7,7 +7,8 @@ local TR = ns.TR
 local marks = {}
 -- 20.1b (FEH 13:27, Sascha: Markieren geht in 20.0 Era nicht): Zaehler fuer die Zeile MARKE im Test Log. Der Code hier
 -- ist seit 19.33 gleich, darum zeigt die Zeile, woran es im Spiel liegt (Schalter, Plaketten, Questie Mobs, Blizzard)
-local diag = { mob = 0, giver = 0, raid = 0, raidErr = nil, giverName = nil }
+local diag = { mob = 0, giver = 0, raid = 0, raidErr = nil, giverName = nil, cmp = {} }
+local V_CMP_MAX = 6
 
 -- Fortschritt der Aufgabe, z.B. "1/7"
 local function Count(info)
@@ -91,17 +92,30 @@ local function Follow(m, plate, dy)
   follow[m] = true
 end
 
+-- 1.1 (S Wunsch 06.11.: "Symbole ueber Questgebern und Mobs groesser und deutlicher"): Groesse als Faktor, Einstellung
+-- db.markScale (Standard MARK_SCALE), dazu Mob Symbole mit dunklem Rand
+-- 1.1 (P51, S Bild 12:49 "immer noch zu klein"): Standard 2.5, Schrift groesser. Einstellung Groesse der Symbole
+local MARK_SCALE = 2.5
+ns.MARK_SCALE_BIG = 3.5
+ns.MARK_SCALE_STD = MARK_SCALE
+local function MarkScale() return (ns.db and tonumber(ns.db.markScale)) or MARK_SCALE end
 local function GetMark(plate)
   local m = marks[plate]
   if not m then
     m = CreateFrame("Frame", nil, UIParent)
     m:SetSize(24, 24)
+    m:SetScale(MarkScale())
+    m.back = m:CreateTexture(nil, "BACKGROUND")
+    m.back:SetTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMask")
+    m.back:SetPoint("CENTER")
+    m.back:SetSize(30, 30)
+    m.back:SetVertexColor(0, 0, 0, 0.6)
     Follow(m, plate, 2)
     m:SetFrameStrata("HIGH")
     m.icon = m:CreateTexture(nil, "OVERLAY")
     m.icon:SetAllPoints()
     m.icon:SetTexture("Interface\\GossipFrame\\AvailableQuestIcon")
-    m.text = m:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontNormalSmall"))
+    m.text = m:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontNormalLarge"))
     m.text:SetPoint("LEFT", m, "RIGHT", 0, 0)
     m.text:SetTextColor(1, 0.82, 0)
     marks[plate] = m
@@ -180,6 +194,7 @@ local function GetGiverMark(plate)
   if m then return m end
   m = CreateFrame("Frame", nil, UIParent)
   m:SetSize(44, 44)
+  m:SetScale(MarkScale())
   Follow(m, plate, 6)
   m:SetFrameStrata("HIGH")
   m.glow = m:CreateTexture(nil, "BACKGROUND")
@@ -226,7 +241,7 @@ local function MarkGiver(unit, kind)
   if issecretvalue and issecretvalue(cur) then return end
   local want = (kind == "both") and 1 or 4 -- Stern bei beidem, sonst gruenes Dreieck
   if cur ~= want then
-    local ok, err = pcall(SetRaidTarget, unit, want)
+    local ok, err = ns.Api.Prot("SetRaidTarget", SetRaidTarget, unit, want)
     if ok then diag.raid = diag.raid + 1 else diag.raidErr = tostring(err) end
   end
   raidMarked = ns.Plain(UnitName(unit))
@@ -238,6 +253,14 @@ local function UpdateGiverPlate(unit, giverName, kind, giverNpc)
   local id, name = Ident(unit)
   local okP, pl = pcall(UnitIsPlayer, unit)
   local isGiver = (giverNpc and id == giverNpc) or (giverName and name == giverName)
+  -- 1.1 (P54, K 13:30: Treffer Geber 0 bei 10 Plaketten): was verglichen wurde, fuer die Zeile MARKE (je Sitzung wenig)
+  if giverName and #diag.cmp < V_CMP_MAX and not (okP and ns.Plain(pl)) then
+    local okG, g = pcall(UnitGUID, unit)
+    local okN, n = pcall(UnitName, unit)
+    local sg = okG and issecretvalue and issecretvalue(g)
+    local sn = okN and issecretvalue and issecretvalue(n)
+    diag.cmp[#diag.cmp + 1] = ("%s/%s"):format(id and tostring(id) or (sg and "ID geheim" or "ID nil"), name or (sn and "Name geheim" or "Name nil"))
+  end
   if okP and ns.Plain(pl) then isGiver = false end
   if isGiver then
     diag.giver = diag.giver + 1
@@ -262,7 +285,7 @@ local function UpdateGiverPlate(unit, giverName, kind, giverNpc)
     -- altes Symbol weg, wenn das nicht mehr das Ziel ist
     if raidMarked and name == raidMarked and not (InCombatLockdown and InCombatLockdown()) then
       local cur = GetRaidTargetIndex(unit)
-      if not (issecretvalue and issecretvalue(cur)) and (cur == 1 or cur == 4) then pcall(SetRaidTarget, unit, 0) end
+      if not (issecretvalue and issecretvalue(cur)) and (cur == 1 or cur == 4) then ns.Api.Prot("SetRaidTarget", SetRaidTarget, unit, 0) end
       raidMarked = nil
     end
   end
@@ -280,7 +303,7 @@ local function UpdateAll()
   end
   -- ohne Plakette: Ziel oder Maus drueber markieren
   for _, u in ipairs({ "target", "mouseover" }) do
-    if giverName and UnitExists(u) and not UnitIsPlayer(u) then
+    if giverName and ns.Api.U(UnitExists, u) and not ns.Api.U(UnitIsPlayer, u) then
       local id, name = Ident(u)
       if (giverNpc and id == giverNpc) or name == giverName then MarkGiver(u, kind) end
     end
@@ -290,6 +313,7 @@ end
 -- Nur die Plaketten fuer freundliche NPCs einschalten, sonst sieht man den Marker nicht.
 -- Plaketten von anderen Spielern bleiben wie sie sind. Die alten Werte merken wir uns.
 local platesPending
+ns.PLATE_FAR_YD = 41
 local function EnsureFriendlyPlates()
   if not ns.db or ns.db.markGiver == false then return end
   if not (GetCVar and SetCVar) then return end
@@ -297,7 +321,7 @@ local function EnsureFriendlyPlates()
   -- aeltere Version hat auch die Spieler Plaketten eingeschaltet: das zuruecknehmen
   local old = ns.db.oldCVars
   if old and old.nameplateShowFriends ~= nil then
-    pcall(SetCVar, "nameplateShowFriends", old.nameplateShowFriends)
+    ns.Api.Prot("SetCVar", SetCVar, "nameplateShowFriends", old.nameplateShowFriends)
     old.nameplateShowFriends = nil
   end
   local cv = "nameplateShowFriendlyNPCs"
@@ -305,15 +329,29 @@ local function EnsureFriendlyPlates()
   if ok and v ~= nil and v ~= "1" then
     ns.db.oldCVars = ns.db.oldCVars or {}
     if ns.db.oldCVars[cv] == nil then ns.db.oldCVars[cv] = v end
-    pcall(SetCVar, cv, "1")
+    ns.Api.Prot("SetCVar", SetCVar, cv, "1")
     ns.Print(TR"Namensplaketten für freundliche NPCs eingeschaltet (Spieler bleiben wie sie sind), damit der Questgeber markiert werden kann. Ausschalten unter Einstellungen: Questgeber markieren.")
   end
+  -- 1.1 (P41, S 11:24): Marker von weiter weg. Plaketten (und damit die Marker darueber) bis PLATE_FAR_YD zeigen, das Spiel
+  -- begrenzt selbst. Alter Wert wird gemerkt und beim Ausschalten zurueck gesetzt. Aus: db.markFar = false
+  -- 1.1 (P48, K 12:55): nur wenn in den Einstellungen gewaehlt (db.markFar == true), nie von selbst
+  if ns.db.markFar == true then
+    local cf = "nameplateMaxDistance"
+    local okF, vf = pcall(GetCVar, cf)
+    if okF and vf ~= nil and (tonumber(vf) or 0) < ns.PLATE_FAR_YD then
+      ns.db.oldCVars = ns.db.oldCVars or {}
+      if ns.db.oldCVars[cf] == nil then ns.db.oldCVars[cf] = vf end
+      ns.Api.Prot("SetCVar", SetCVar, cf, tostring(ns.PLATE_FAR_YD))
+    end
+  end
 end
+
+ns.EnsureFriendlyPlates = EnsureFriendlyPlates
 
 local function RestorePlates()
   if not (ns.db and ns.db.oldCVars) then return end
   if InCombatLockdown and InCombatLockdown() then platesPending = "off"; return end
-  for cv, v in pairs(ns.db.oldCVars) do pcall(SetCVar, cv, v) end
+  for cv, v in pairs(ns.db.oldCVars) do ns.Api.Prot("SetCVar", SetCVar, cv, v) end
   ns.db.oldCVars = nil
 end
 
@@ -335,11 +373,11 @@ end
 local function MarkTarget()
   if not (ns.db and ns.db.markMobs ~= false) or ns.db.raidIcons == false then return end
   if IsInGroup and IsInGroup() then return end
-  if not UnitExists("target") or not Info("target") then return end
+  if not ns.Api.U(UnitExists, "target") or not Info("target") then return end
   local cur = GetRaidTargetIndex("target")
   if issecretvalue and issecretvalue(cur) then return end
   if cur == nil then
-    local ok, err = pcall(SetRaidTarget, "target", 8)
+    local ok, err = ns.Api.Prot("SetRaidTarget", SetRaidTarget, "target", 8)
     if ok then diag.raid = diag.raid + 1 else diag.raidErr = tostring(err) end
   end
 end
@@ -367,8 +405,11 @@ local function MarkDiag(why)
     why, ns.db.markGiver == false and "aus" or "an", ns.db.markMobs == false and "aus" or "an", ns.db.paused and "ja" or "nein",
     tostring(g or "-"), tostring(k or "-"), plates, fr, en, CV("nameplateShowFriendlyNPCs"), CV("nameplateShowEnemies"),
     ns.objMobs and tostring(nm) or "nil", diag.giver, diag.mob, diag.raid,
-    diag.raidErr and (", Fehler " .. diag.raidErr:sub(1, 80)) or "", blocked and (", Blizzard blockiert " .. blocked .. " mal") or ""))
+    diag.raidErr and (", Fehler " .. diag.raidErr:sub(1, 80)) or "", blocked and (", Blizzard blockiert " .. blocked .. " mal") or "")
+    .. (" | Instanz %s | gesucht %s/%s | Plaketten gesehen: %s"):format((ns.InInstance and ns.InInstance()) and "ja" or "nein",
+      tostring(select(3, CurrentGiver()) or "-"), tostring(g or "-"), #diag.cmp > 0 and table.concat(diag.cmp, ", ") or "-"))
   diag.giver, diag.mob, diag.raid, diag.raidErr = 0, 0, 0, nil
+  diag.cmp = {}
 end
 ns.MarkDiag = MarkDiag
 
@@ -389,7 +430,7 @@ f:SetScript("OnEvent", function(_, event, unit)
     local g, k, gn = CurrentGiver()
     UpdateGiverPlate(unit, g, k, gn)
     C_Timer.After(0.3, function()
-      if not UnitExists(unit) then return end
+      if not ns.Api.U(UnitExists, unit) then return end
       UpdatePlate(unit)
       local g2, k2, gn2 = CurrentGiver()
       UpdateGiverPlate(unit, g2, k2, gn2)
@@ -439,7 +480,7 @@ local function ApplySparkle()
     local ok, cur = pcall(GetCVar, cv)
     if ok and cur ~= nil then
       if ns.db.sparkleOld[cv] == nil then ns.db.sparkleOld[cv] = cur end
-      if cur ~= v then pcall(SetCVar, cv, v) end
+      if cur ~= v then ns.Api.Prot("SetCVar", SetCVar, cv, v) end
     end
   end
 end
@@ -447,7 +488,7 @@ end
 local function RestoreSparkle()
   if not (ns.db and ns.db.sparkleOld) then return end
   if InCombatLockdown and InCombatLockdown() then return end
-  for cv, v in pairs(ns.db.sparkleOld) do pcall(SetCVar, cv, v) end
+  for cv, v in pairs(ns.db.sparkleOld) do ns.Api.Prot("SetCVar", SetCVar, cv, v) end
   ns.db.sparkleOld = nil
 end
 
@@ -480,7 +521,13 @@ sp:SetScript("OnEvent", function(_, event, name)
 end)
 
 function ns.InitHighlight()
-  if ns.db.markGiver == nil then ns.db.markGiver = true end
+  -- 1.1 (P59, K 14:33): Forever gibt Plaketten Daten (GUID, Lage) nur als geheime Werte, der Marker ist so nicht sauber
+  -- moeglich (Treffer da, Symbol nicht sichtbar). Darum in 1.1 Standard AUS, auch fuer alle bisherigen (einmal). Die
+  -- Einstellungen bleiben, wer will, schaltet sie wieder ein. Richtig kommt es in 1.2
+  if ns.db.markV ~= 2 then
+    ns.db.markV = 2
+    ns.db.markGiver, ns.db.markMobs = false, false
+  end
   ns.Ticker(1, UpdateAll) -- Ziel und Quest Daten aendern sich
   -- 20.1b: Zeile MARKE im Test Log (keep: auch bei schwachem PC im Takt)
   C_Timer.After(40, function() pcall(MarkDiag, "Start") end)
@@ -495,4 +542,65 @@ function ns.InitHighlight()
   end, true)
   C_Timer.After(3, EnsureFriendlyPlates)
   C_Timer.After(2, ApplySparkle)
+  -- 1.1 (P41): Kartenpunkt aufs Ziel (siehe WpTick)
+  ns.Ticker(ns.WP_EVERY_S, function() pcall(ns.WpTick) end)
+end
+
+-- 1.1 (P41, S 11:24): Ziel von weitem und durch Waende. Kennt das Spiel Kartenpunkte (C_Map.SetUserWaypoint, C_SuperTrack),
+-- setzt die Route einen Kartenpunkt aufs jetzige Ziel: das Spiel zeigt ihn in der Welt mit Entfernung, auch hinter Waenden.
+-- Keine geschuetzte Aktion. Ein Punkt, den du selbst gesetzt hast, bleibt wie er ist. Aus: Einstellungen (db.worldPin = false)
+ns.WP_EVERY_S = 1
+local wp = { key = nil }
+local function WpApi()
+  return C_Map and C_Map.SetUserWaypoint and C_Map.GetUserWaypoint and C_Map.ClearUserWaypoint
+    and UiMapPoint and UiMapPoint.CreateFromCoordinates
+end
+-- nil: gar kein Punkt gesetzt, true: unserer, false: einer vom Spieler
+local function WpOurs()
+  local ok, p = pcall(C_Map.GetUserWaypoint)
+  if not ok or not p then return nil end
+  local o = wp.point
+  if not (o and p.position and o.position) then return false end
+  return p.uiMapID == o.uiMapID and math.abs((p.position.x or 0) - o.position.x) < 1e-4
+    and math.abs((p.position.y or 0) - o.position.y) < 1e-4
+end
+local function WpClear()
+  if wp.point and WpOurs() == true then pcall(C_Map.ClearUserWaypoint) end
+  wp.point, wp.key = nil, nil
+end
+function ns.WpTick()
+  if not WpApi() then
+    if not wp.said and ns.TestLog then wp.said = true; ns.TestLog("MARKE", "Welt Punkt: Spiel hat keine Kartenpunkte (C_Map.SetUserWaypoint fehlt)") end
+    return
+  end
+  local db = ns.db
+  -- 1.1 (P48): nur wenn in den Einstellungen gewaehlt (db.worldPin == true), nicht mehr von selbst
+  local on = db and db.worldPin == true and not db.paused and db.optMode
+  local st = on and ns.OptTarget and ns.OptTarget()
+  if not (st and st.map and st.x and st.y) or (ns.InInstance and ns.InInstance()) then WpClear(); return end
+  local key = st.map .. ":" .. math.floor(st.x * 1000) .. ":" .. math.floor(st.y * 1000)
+  local ours = WpOurs()
+  if ours == false then wp.point, wp.key = nil, nil; return end
+  if key == wp.key and ours == true then return end
+  if C_Map.CanSetUserWaypointOnMap then
+    local okC, can = pcall(C_Map.CanSetUserWaypointOnMap, st.map)
+    if okC and not can then WpClear(); return end
+  end
+  local okP, pt = pcall(UiMapPoint.CreateFromCoordinates, st.map, st.x, st.y)
+  if not (okP and pt) then return end
+  if pcall(C_Map.SetUserWaypoint, pt) then
+    wp.point, wp.key = pt, key
+    if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true) end
+    if not wp.logged and ns.TestLog then wp.logged = true; ns.TestLog("MARKE", "Welt Punkt: an (Kartenpunkt aufs Ziel)") end
+  end
+end
+function ns.ToggleWorldPin()
+  ns.db.worldPin = not (ns.db.worldPin == true)
+  if not ns.db.worldPin then WpClear() else wp.key = nil; pcall(ns.WpTick) end
+end
+
+-- 1.1 (P51): neue Groesse gleich auf alle schon gebauten Symbole
+function ns.MarkRescale()
+  for _, m in pairs(marks) do pcall(m.SetScale, m, MarkScale()) end
+  for _, m in pairs(giverMarks) do pcall(m.SetScale, m, MarkScale()) end
 end

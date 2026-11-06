@@ -9,6 +9,15 @@ local ADDON, ns = ...
 --   ns.DK.npc[id]   = { noFoe = true } (19.33, npc[id].kein_gegner: nie ein Gegner, in keiner Quest)
 local DK = { quest = {}, item = {}, npc = {}, nQ = 0, nI = 0, nN = 0 }
 ns.DK = DK
+-- 1.1 (K Stufe B 11): Zeitlimit einer Quest in Sekunden. Aus den Daten (quest[id].zeitlimit_s, schreibt Pr) oder vom
+-- Spiel gelernt, sobald die Quest im Log ist (db.questTimer, siehe Quest.lua). nil = kein Zeitlimit bekannt
+function ns.QuestTimer(qid)
+  if not qid then return nil end
+  local e = DK.quest[qid]
+  if e and e.timer then return e.timer end
+  local db = ns.db
+  return db and db.questTimer and db.questTimer[qid] or nil
+end
 
 local function List(list)
   if type(list) ~= "table" then return nil end
@@ -35,8 +44,8 @@ local function Take(part)
     for id, e in pairs(part.quest) do
       if type(id) == "number" and type(e) == "table" then
         local t = { skip = (e.ueberspringen == true) or nil, noFoe = Set(e.kein_gegner_npc), noLvl = Set(e.dropper_nicht_fuers_level),
-          pre = List(e.vorquest_fehlt) }
-        if t.skip or t.noFoe or t.noLvl or t.pre then
+          pre = List(e.vorquest_fehlt), timer = (type(e.zeitlimit_s) == "number" and e.zeitlimit_s > 0) and e.zeitlimit_s or nil }
+        if t.skip or t.noFoe or t.noLvl or t.pre or t.timer then
           if not DK.quest[id] then DK.nQ = DK.nQ + 1 end
           DK.quest[id] = t
         end

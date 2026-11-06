@@ -64,7 +64,7 @@ local function OnDeath()
   if not s then return end
   local now = Played()
   -- Tod an einem Elite: das Ziel war Elite (rare elite und Boss zaehlen mit)
-  local cl = UnitClassification and UnitExists and UnitExists("target") and UnitClassification("target")
+  local cl = UnitClassification and UnitExists and ns.Api.U(UnitExists, "target") and ns.Api.U(UnitClassification, "target")
   local elite = cl == "elite" or cl == "rareelite" or cl == "worldboss"
   table.insert(s.deaths, { t = now, e = elite or nil })
   s.calm = 0

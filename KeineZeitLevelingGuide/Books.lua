@@ -444,7 +444,7 @@ do
       for slot = 1, (nslots(bag) or 0) do
         local link
         if info then local i = info(bag, slot); link = i and i.hyperlink
-        elseif GetContainerItemLink then link = GetContainerItemLink(bag, slot) end
+        elseif ns.Api.GetContainerItemLink then link = ns.Api.GetContainerItemLink(bag, slot) end
         local nm = link and link:match("%[(.-)%]")
         local iid = link and tonumber(link:match("item:(%d+)"))
         -- gelernte Item IDs (deutscher Client: andere Namen), sonst der englische Name

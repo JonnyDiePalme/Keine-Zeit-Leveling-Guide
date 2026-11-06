@@ -440,7 +440,7 @@ local function MobScan()
   local count, maxLvl = 0, 0
   for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
     local u = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
-    if u and UnitCanAttack("player", u) and not UnitIsDead(u) and not UnitIsPlayer(u) then
+    if u and ns.Api.U(UnitCanAttack, "player", u) and not ns.Api.U(UnitIsDead, u) and not ns.Api.U(UnitIsPlayer, u) then
       local lvl = Plain(UnitLevel(u))
       if lvl == -1 then lvl = L + 10 end -- Totenkopf
       if lvl and lvl >= L + 3 then
@@ -470,7 +470,7 @@ end
 local fall = {}
 local function FallTick()
   if not db then return end
-  local falling = IsFalling and IsFalling()
+  local falling = IsFalling and ns.Api.U(IsFalling)
   local mapID = PlayerMap()
   if falling and not fall.active then
     local pos = mapID and C_Map.GetPlayerMapPosition(mapID, "player")
@@ -876,7 +876,7 @@ end
 function ns.SleepingBagReady()
   if not ns.HasSleepingBag() then return false end
   for _, x in ipairs(ns.XPBuffs()) do if x.kind == "bag" then return false end end
-  local cd = (C_Container and C_Container.GetItemCooldown) or GetItemCooldown
+  local cd = (C_Container and C_Container.GetItemCooldown) or ns.Api.GetItemCooldown
   if cd then
     local st, dur = cd(211527)
     if st and dur and dur > 1.5 and st + dur > GetTime() then return false end
@@ -897,10 +897,10 @@ function ns.HasSleepingBag()
 end
 HasSleepingBagRaw = function()
   -- Gemuetlicher Schlafsack, Item 211527
-  local cnt = (C_Item and C_Item.GetItemCount and C_Item.GetItemCount(211527)) or (GetItemCount and GetItemCount(211527)) or 0
+  local cnt = (C_Item and C_Item.GetItemCount and C_Item.GetItemCount(211527)) or (ns.Api.GetItemCount and ns.Api.GetItemCount(211527)) or 0
   if cnt > 0 then return true, (C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(211527)) or TR"den Schlafsack" end
   local slots = (C_Container and C_Container.GetContainerNumSlots) or GetContainerNumSlots
-  local link = (C_Container and C_Container.GetContainerItemLink) or GetContainerItemLink
+  local link = (C_Container and C_Container.GetContainerItemLink) or ns.Api.GetContainerItemLink
   if not (slots and link) then return false end
   for bag = 0, 4 do
     for slot = 1, (slots(bag) or 0) do
@@ -922,7 +922,7 @@ function ns.GroupXPShare()
   local sum, cnt = L, 1
   for i = 1, 4 do
     local u = "party" .. i
-    if UnitExists and UnitExists(u) then
+    if UnitExists and ns.Api.U(UnitExists, u) then
       local l = UnitLevel(u)
       if type(l) == "number" and l > 0 then sum = sum + l; cnt = cnt + 1 end
     end
@@ -1162,7 +1162,7 @@ local function RecordFight(xp)
   -- Mob Level: das tote Ziel, sonst aus den XP geschaetzt
   local L = UnitLevel("player")
   local diff
-  if UnitExists and Plain(UnitExists("target")) and UnitIsDead and Plain(UnitIsDead("target")) then
+  if UnitExists and Plain(ns.Api.U(UnitExists, "target")) and UnitIsDead and Plain(ns.Api.U(UnitIsDead, "target")) then
     local ml = Plain(UnitLevel("target"))
     if ml and ml > 0 then diff = ml - L end
   end
@@ -1551,7 +1551,9 @@ local function DrawZone(mapID, route)
     end
   end
   -- starke Patrouillen (Elite oder weit ueber dir): Weg in Rot
-  if db.patrolWarn ~= false and ns.Ways and ns.Ways.DangerPatrols and ns.Waypoints then
+  -- 1.1 (S Log L14.5 "Patrouillen Mobs sollten waehrend dem Fliegen nicht angezeigt werden"): im Flug nicht
+  local flying = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")
+  if db.patrolWarn ~= false and not flying and ns.Ways and ns.Ways.DangerPatrols and ns.Waypoints then
     for _, e in ipairs(ns.Ways.DangerPatrols(mapID, UnitLevel("player") or 1)) do
       for _, path in ipairs(ns.Waypoints(e.id, mapID) or {}) do
         for k = 2, #path do AddLine(path[k - 1][1], path[k - 1][2], path[k][1], path[k][2], { 1, 0.15, 0.1 }, 0.7, 2) end
@@ -1723,6 +1725,7 @@ local function DrawOpt(mapID, optArg)
   if pp then
     local px, py = pp:GetXY()
     lastX, lastY = ToView(pm, px, py, mapID)
+    if type(lastX) ~= "number" or type(lastY) ~= "number" then lastX, lastY = nil, nil end
   end
   if not lastX then
     local pos = C_Map.GetPlayerMapPosition(mapID, "player")
@@ -1733,14 +1736,29 @@ local function DrawOpt(mapID, optArg)
   local zoneView = vinfo and vinfo.mapType == Enum.UIMapType.Zone
   -- 20.4a4 (K 20:30 z6 Punkt 1): Kontinent und Welt (Azeroth mit zwei Kontinenten) wie beim Navi umrechnen
   local wide = vinfo and vinfo.mapType and vinfo.mapType < Enum.UIMapType.Zone
+  -- 1.1 (S Log 06.11., Core.lua:1753 compare nil with number, 173x): Schritte ohne Punkt (zb Reise ohne Ziel) oder eine
+  -- Umrechnung mit nur einem Wert. View gibt nur noch ein ganzes Paar Zahlen zurueck oder nichts
   local function View(zone, x, y)
+    if not (zone and type(x) == "number" and type(y) == "number") then return nil, nil end
     local u, v = ToView(zone, x, y, mapID)
-    if not u and wide and ns.MapViewPt then u, v = ns.MapViewPt(zone, x, y, mapID) end
+    if not (type(u) == "number" and type(v) == "number") and wide and ns.MapViewPt then u, v = ns.MapViewPt(zone, x, y, mapID) end
+    if type(u) ~= "number" or type(v) ~= "number" then return nil, nil end
     return u, v
   end
   if wide and not lastX and pm and pp then lastX, lastY = View(pm, pp:GetXY()) end
   local list = ns.MapStepList(opt, start, wide)
   local drawn = 0
+  -- v11f (K P37): Runde im grossen Gegner Gebiet (Arrow.lua NaviRundPts) als geschlossener Kreis
+  do
+    local rp = not wide and ns.NaviRundPts and ns.NaviRundPts(mapID)
+    if rp and #rp >= 4 then
+      for k = 2, #rp do
+        local ax, ay = View(mapID, rp[k - 1][1], rp[k - 1][2])
+        local bx, by = View(mapID, rp[k][1], rp[k][2])
+        if ax and bx then AddLine(ax, ay, bx, by, { 0.35, 0.95, 0.5 }, 0.8, 3) end
+      end
+    end
+  end
   -- 20.3o (S Punkt 27 eckige Route 1 bis 11, Na 23:11): Zusatz Routen liefern seit 20.3k bis 300 Stopps ueber alle Zonen.
   -- In der Zonenansicht nur die Schritte dieser Zone (Reise Schritte als Uebergang dazu), die Nummer bleibt die Stelle in
   -- der Route. Kontinent und Welt zeigen weiter alles. Vorher kamen Punkte der Nachbarzonen als Kaestchen ins Bild
@@ -2154,13 +2172,13 @@ ns.Draw = Draw
 ns.speed = 7
 local function SampleSpeed()
   if not db then return end
-  if UnitOnTaxi and UnitOnTaxi("player") then return end
-  local cur = Plain(GetUnitSpeed("player"))
+  if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then return end
+  local cur = Plain(ns.Api.GetUnitSpeed("player"))
   if cur and cur > 0 and cur < 30 then
     ns.speed = cur
     -- Reittier Tempo merken (gemessen, wenn du draufsitzt)
-    if IsMounted and IsMounted() and cur > 8 then db.mountSpeed = math.max(db.mountSpeed or 0, cur) end
-    if not (IsMounted and IsMounted()) and cur >= 6 and cur <= 8 then db.runSpeed = cur end
+    if IsMounted and ns.Api.U(IsMounted) and cur > 8 then db.mountSpeed = math.max(db.mountSpeed or 0, cur) end
+    if not (IsMounted and ns.Api.U(IsMounted)) and cur >= 6 and cur <= 8 then db.runSpeed = cur end
   end
 end
 
@@ -2656,6 +2674,30 @@ ns.KIND_COLORS = {
   { { 0.4, 1, 0.6 }, TR"Mintgrün: Farmen" },
   { { 0.6, 0.6, 0.6 }, TR"Grau: Händler, Lehrer, Gasthaus, Ruhestein, Buch" },
 }
+-- 1.1 (P40, S 11:24): jetzige Quest heller und dezent nach Art gefaerbt (toeten, sammeln, annehmen, abgeben, reisen).
+-- Zaehler gruen, sobald das Ziel fast voll ist (ab HUD_NEAR_DONE oder es fehlt nur noch eins)
+ns.HUD_KIND_TINT = { kill = "ffd2c8", collect = "fff0b4", accept = "ffdcae", turnin = "c4ffd4", travel = "c8e6ff", other = "ffffff" }
+ns.HUD_NEAR_DONE = 0.75
+ns.HUD_NEAR_LEFT = 1
+ns.HUD_NEAR_COL = "50ff50"
+ns.HUD_KIND_OF_ACT = { A = "accept", T = "turnin", R = "travel", F = "travel" }
+function ns.ObjKind(o)
+  local t = o and o.typ
+  if t == "monster" then return "kill" end
+  if t == "item" or t == "object" then return "collect" end
+  return "other"
+end
+function ns.ObjHud(o)
+  local txt = tostring(o and o.text or "")
+  if o and o.done then return "|cff6d6d6d" .. txt .. "|r" end
+  local tint = ns.HUD_KIND_TINT[ns.ObjKind(o)] or "ffffff"
+  local head, have, need = txt:match("^(.-)(%d+)%s*/%s*(%d+)%s*$")
+  have, need = tonumber(have), tonumber(need)
+  if have and need and need > 0 and (have / need >= ns.HUD_NEAR_DONE or need - have <= ns.HUD_NEAR_LEFT) then
+    return "|cff" .. tint .. head .. "|r|cff" .. ns.HUD_NEAR_COL .. have .. "/" .. need .. "|r"
+  end
+  return "|cff" .. tint .. txt .. "|r"
+end
 function ns.HudInfo()
   local i = {}
   if not db then return i end
@@ -2762,7 +2804,8 @@ function ns.HudInfo()
             if o then
               seenL[a.qid .. ":" .. oi] = true
               hit = true
-              if #i.objs < 4 then table.insert(i.objs, (o.done and "|cff6d6d6d" or "|cffffffff") .. o.text .. "|r") end
+              if #i.objs < 4 then table.insert(i.objs, ns.ObjHud(o)) end
+              if not o.done and not i.objKind then i.objKind = ns.ObjKind(o) end
             end
             shown[want] = true
           end
@@ -2772,12 +2815,20 @@ function ns.HudInfo()
             for oi, o in ipairs(lp.objs or {}) do
               if not seenL[a.qid .. ":" .. oi] and #i.objs < 4 then
                 seenL[a.qid .. ":" .. oi] = true
-                table.insert(i.objs, (o.done and "|cff6d6d6d" or "|cffffffff") .. o.text .. "|r")
+                table.insert(i.objs, ns.ObjHud(o))
+                if not o.done and not i.objKind then i.objKind = ns.ObjKind(o) end
               end
             end
           end
         end
       end
+    end
+    -- 1.1 (P40): Farbe fuer den Namen oben (Art der offenen Aktion, bei Questzielen die Art vom ersten offenen Ziel)
+    do
+      local ca3 = st and ns.OptCurrentAct and ns.OptCurrentAct()
+      local k3 = (ca3 and ca3.k) or (st and st.acts and st.acts[1] and st.acts[1].k)
+      local kind3 = (k3 == "O") and (i.objKind or "other") or ns.HUD_KIND_OF_ACT[k3]
+      i.tint = kind3 and ns.HUD_KIND_TINT[kind3] or nil
     end
     -- gleiches Ziel fuer mehrere Quests (zb drei Quests wollen Eberlungen): einmal zeigen, mit Anzahl Quests
     if #i.objs > 1 then
@@ -2968,10 +3019,10 @@ local function RateBucket()
   return b
 end
 local function ActiveTick()
-  local moving = GetUnitSpeed and (Plain(GetUnitSpeed("player")) or 0) > 0
-  local fight = UnitAffectingCombat and UnitAffectingCombat("player")
-  local afk = UnitIsAFK and UnitIsAFK("player")
-  local taxi = UnitOnTaxi and UnitOnTaxi("player")
+  local moving = ns.Api.GetUnitSpeed and (Plain(ns.Api.GetUnitSpeed("player")) or 0) > 0
+  local fight = UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player")
+  local afk = UnitIsAFK and ns.Api.U(UnitIsAFK, "player")
+  local taxi = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")
   if moving or fight or taxi then idleFor = 0 else idleFor = idleFor + 1 end
   -- kurz stehen (reden, looten, essen) gehoert dazu, ab 90 Sekunden ohne alles gilt es als Pause
   if afk or idleFor > 90 then return end
@@ -3104,6 +3155,7 @@ function ns.HudLines()
 end
 
 -- Zahlen fuer die Kacheln auf der Charakterseite
+ns.STAT_LOG_S = 300
 function ns.Stats()
   local s = {}
   if not db then return s end
@@ -3115,10 +3167,10 @@ function ns.Stats()
   -- Vorher nur das zuletzt gemessene Tempo beim Laufen (im Stehen auf dem Reittier blieb 100%)
   do
     local sp = ns.speed or 7
-    if GetUnitSpeed and not (UnitOnTaxi and UnitOnTaxi("player")) then
-      local cur, run, _, swim = GetUnitSpeed("player")
+    if ns.Api.GetUnitSpeed and not (UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")) then
+      local cur, run, _, swim = ns.Api.GetUnitSpeed("player")
       cur, run, swim = Plain(cur), Plain(run), Plain(swim)
-      if IsSwimming and IsSwimming() and swim and swim > 0 then sp = swim
+      if IsSwimming and ns.Api.U(IsSwimming) and swim and swim > 0 then sp = swim
       elseif run and run > 0 and run < 40 then sp = run
       elseif cur and cur > 0 and cur < 40 then sp = cur end
     end
@@ -3148,6 +3200,23 @@ function ns.Stats()
   if ns.PendingQuestXP and s.qDone and s.qDone > 0 then
     local ok, px, plv, pfrac = pcall(ns.PendingQuestXP)
     if ok and px and px > 0 then s.pendXP, s.pendLevel, s.pendFrac = px, plv, pfrac end
+  end
+  -- 1.1 (P56, K 14:24, S Bild "2:33 Std bis Lvl 16" mit 9 fertigen Quests): Zeit bis zum Level ohne die XP der fertigen,
+  -- noch nicht abgegebenen Quests. Reicht die Abgabe schon, heisst es "nach Abgabe"
+  if xp and mx and mx > 0 and s.xph > 0 then
+    local rest = mx - xp - (s.pendXP or 0)
+    if s.pendXP and rest <= 0 then
+      s.nextLevel, s.levelAfterTurnIn = 0, true
+    else
+      s.nextLevel = math.max(0, rest) / s.xph * 3600
+    end
+  end
+  s.nextLevelText = s.levelAfterTurnIn and TR"nach Abgabe" or (s.nextLevel and Clock(s.nextLevel)) or nil
+  -- Log STAT hoechstens alle STAT_LOG_S, wenn offene Abgabe XP da sind
+  if ns.TestLog and s.pendXP and GetTime() - (ns.statLogAt or -999) > ns.STAT_LOG_S then
+    ns.statLogAt = GetTime()
+    ns.TestLog("STAT", ("Zeit bis Level %d: %s, offene Abgabe %d XP aus %d Quests, %d XP pro Stunde"):format((s.level or 0) + 1,
+      tostring(s.nextLevelText), s.pendXP, s.qDone or 0, math.floor(s.xph or 0)))
   end
   if db.planTarget and ns.planTime then
     s.planTarget = db.planTarget
@@ -3217,7 +3286,7 @@ end
 
 local function PerfTick()
   if not db then return end
-  if UnitIsAFK and UnitIsAFK("player") then return end
+  if UnitIsAFK and ns.Api.U(UnitIsAFK, "player") then return end
   local mapID = ZoneOnly(PlayerMap())
   if not mapID then return end
   local z = ZoneStat(mapID)
@@ -3228,10 +3297,10 @@ local function PerfTick()
   ns.perfZone = mapID
   -- wofuer geht die Zeit drauf (Session und gesamt)
   local kind
-  if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then kind = "dead"
-  elseif UnitOnTaxi and UnitOnTaxi("player") then kind = "fly"
-  elseif UnitAffectingCombat and UnitAffectingCombat("player") then kind = "fight"
-  elseif GetUnitSpeed and (Plain(GetUnitSpeed("player")) or 0) > 0 then kind = "walk"
+  if UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, "player") then kind = "dead"
+  elseif UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then kind = "fly"
+  elseif UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player") then kind = "fight"
+  elseif ns.Api.GetUnitSpeed and (Plain(ns.Api.GetUnitSpeed("player")) or 0) > 0 then kind = "walk"
   else kind = "idle" end
   sess.split = sess.split or {}
   sess.split[kind] = (sess.split[kind] or 0) + 1
@@ -4441,11 +4510,17 @@ f:SetScript("OnEvent", function(_, event, ...)
     if not db.hudDefault2 then db.hudDefault2 = true; db.hud = true; db.hudExt = true end
     -- neues Mini Fenster: Menue startet zu
     if not db.hudDefault3 then db.hudDefault3 = true; db.hudExt = false end
+    -- 1.1 (P52, K 13:30): Pause VOR dem Aufbau der Fenster zuruecksetzen. Vorher danach, dann blieben Pfeil und
+    -- Minimap Weg aus dem Aufbau mit Pause versteckt (kein Weg auf der Minimap, keine PFEIL Zeilen im Log)
+    -- 1.1 (P49, K 12:55, S Log 12:45: neuer Tauren startete mit "Pause ja"): Pause gilt nur bis zum Ausloggen, beim Einloggen
+    -- ist sie immer aus (vorher blieb sie aus einer alten Sitzung haengen, auch "Pfeil und Mini Fenster aus")
+    if db.paused or db.quiet then
+      db.paused, db.quiet = false, nil
+      if ns.TestLog then C_Timer.After(5, function() ns.TestLog("PAUSE", "aus beim Einloggen (war aus alter Sitzung an)") end) end
+    end
     if ns.InitUI then ns.InitUI() end
     local rp = ns.racePlan
     Print((TR"geladen, Startroute für %s ab %s"):format(rp and rp.name or "Horde", ZoneName(ns.zoneOrder[1])))
-    -- 17.9: Pause bleibt ueber das Ausloggen hinweg, darum beim Einloggen daran erinnern (Chaos Test: sonst wundert man sich)
-    if db.paused then Print(TR"Pause ist noch an, nichts wird gerechnet. Weiter: Mini Fenster Menü, Weitermachen, oder /klg pause.") end
     C_Timer.After(3, function() if db.show then Announce(PlayerMap()) end end)
     return
   end

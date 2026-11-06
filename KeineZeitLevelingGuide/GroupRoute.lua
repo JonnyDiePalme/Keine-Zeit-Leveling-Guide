@@ -13,7 +13,7 @@ local dqStatus = {}    -- [key] = { [Name] = { [qid] = "done"/"log"/"open"/"pre"
 local SendDone         -- erledigte Quests an den Leiter (weiter unten)
 
 local function Me() return UnitName("player") end
-local function Leader() return UnitIsGroupLeader and UnitIsGroupLeader("player") end
+local function Leader() return UnitIsGroupLeader and ns.Api.U(UnitIsGroupLeader, "player") end
 local function Mates() local n = 0; for _ in pairs(ns.group or {}) do n = n + 1 end; return n end
 local function Send(m) if ns.GroupSend then ns.GroupSend(m) end end
 local function QName(qid)
@@ -483,8 +483,8 @@ local function SendState(force)
   local db = ns.db or {}
   local bi = db.bindInn
   local hcd = 0
-  if GetItemCooldown then
-    local st, dur = GetItemCooldown(6948)
+  if ns.Api.GetItemCooldown then
+    local st, dur = ns.Api.GetItemCooldown(6948)
     if st and st > 0 and dur and dur > 0 then hcd = math.max(0, math.floor(st + dur - GetTime())) end
   end
   local _, _, rid = UnitRace("player")
@@ -691,7 +691,7 @@ end)
 local function Warlock()
   for i = 1, 4 do
     local u = "party" .. i
-    if UnitExists and UnitExists(u) then
+    if UnitExists and ns.Api.U(UnitExists, u) then
       local _, c = UnitClass(u)
       if c == "WARLOCK" and (UnitLevel(u) or 0) >= 20 then return (UnitName(u)) end
     end
@@ -713,7 +713,7 @@ local orig = ns.PartyOnMessage
 -- Gruppen Route kommt nur vom Leiter
 local function IsLeader(who)
   local n = who and ((Ambiguate and Ambiguate(who, "none")) or who:gsub("%-.*$", ""))
-  return n and UnitIsGroupLeader and UnitIsGroupLeader(n) and true or false
+  return n and UnitIsGroupLeader and ns.Api.U(UnitIsGroupLeader, n) and true or false
 end
 local followSet, replanAt = "", nil
 -- Leiter: Abschnitt neu rechnen (kommt mehreres kurz nacheinander, nur einmal: d Sekunden nach dem letzten)
@@ -893,9 +893,9 @@ local function RosterKey()
   local n = GetNumGroupMembers and GetNumGroupMembers() or 0
   local names = {}
   local pre = (IsInRaid and IsInRaid()) and "raid" or "party"
-  for i = 1, n do local u = pre .. i; if UnitExists(u) then names[#names + 1] = (UnitName(u) or "?") .. (UnitIsGroupLeader(u) and "*" or "") end end
+  for i = 1, n do local u = pre .. i; if ns.Api.U(UnitExists, u) then names[#names + 1] = (UnitName(u) or "?") .. (ns.Api.U(UnitIsGroupLeader, u) and "*" or "") end end
   table.sort(names)
-  return table.concat(names, ",") .. (UnitIsGroupLeader("player") and "|L" or "")
+  return table.concat(names, ",") .. (ns.Api.U(UnitIsGroupLeader, "player") and "|L" or "")
 end
 gf:SetScript("OnEvent", function()
   if rosterWait then return end
@@ -903,7 +903,7 @@ gf:SetScript("OnEvent", function()
   C_Timer.After(2, function()
     rosterWait = false
     local L = mir and mir.leader
-    local leader = L and UnitIsGroupLeader and UnitIsGroupLeader(L)
+    local leader = L and UnitIsGroupLeader and ns.Api.U(UnitIsGroupLeader, L)
     if L and not (IsInGroup() and leader) then
       ns.groupAbst = {}
       EndMirror(TR"Gruppen Route beendet, jetzt wieder deine eigene Route.")
@@ -932,7 +932,7 @@ lf:SetScript("OnEvent", function()
   C_Timer.After(6, function()
     local o = ns.db and ns.db.opt
     if o and o.mirror then
-      if IsInGroup and IsInGroup() and not Leader() and UnitIsGroupLeader and UnitIsGroupLeader(o.mirror) then
+      if IsInGroup and IsInGroup() and not Leader() and UnitIsGroupLeader and ns.Api.U(UnitIsGroupLeader, o.mirror) then
         mir = { leader = o.mirror, key = o.key, base = o.base or 0, total = #o.steps, opt = o, beat = GetTime() }
         ShowMirror()
         Ask("login")

@@ -416,7 +416,7 @@ local function UpdateHeader(s)
   if s.xpFrac then
     xpBar:SetValue(s.xpFrac)
     xpBar.text:SetText((TR"Level %d  %d%%"):format(s.level, math.floor(s.xpFrac * 100)))
-    xpBar.right:SetText(s.nextLevel and (TR"noch %s"):format(s.fmt(s.nextLevel)) or "")
+    xpBar.right:SetText(s.nextLevel and (TR"noch %s"):format(s.nextLevelText or s.fmt(s.nextLevel)) or "")
   else
     xpBar.text:SetText((TR"Level %d"):format(s.level or 0))
     xpBar.right:SetText("")
@@ -427,7 +427,7 @@ local function UpdateTiles(s)
   local v = tiles
   v[1].value:SetText(s.xph and s.xph > 0 and s.num(s.xph) or TR"|cff9d9d9dnoch offen|r")
   v[1].label:SetText(TR"XP pro Stunde")
-  local nl = s.nextLevel and s.fmt(s.nextLevel):gsub(" Min", ""):gsub(" Std", " h")
+  local nl = s.nextLevel and (s.nextLevelText or s.fmt(s.nextLevel)):gsub(" Min", ""):gsub(" Std", " h")
   if nl and ns.EN then nl = nl:gsub(" min$", "") end -- englisch kommt " min" klein
   v[2].value:SetText(nl or TR"|cff9d9d9dnoch offen|r")
   v[2].label:SetText(TR"bis Level " .. ((s.level or 0) + 1))
@@ -791,13 +791,12 @@ local function BuildFunctions(parent, sfName, only, easyOnly)
     btn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD - 8, y)
     local NEXT = { [1] = 3, [3] = 5, [5] = 8, [8] = 1 }
     local function Fill()
-      local n = tonumber(db.hudSteps) or 1
+      local n = ns.HudSteps and ns.HudSteps() or 1
       t:SetText((TR"Mini Fenster zeigt %d nächste Schritte"):format(n))
       btn:SetText(n >= 8 and TR"weniger" or TR"mehr")
     end
     btn:SetScript("OnClick", function()
-      db.hudSteps = NEXT[tonumber(db.hudSteps) or 1] or 1
-      if db.hudSteps == 1 then db.hudSteps = nil end
+      db.hudSteps = NEXT[ns.HudSteps and ns.HudSteps() or 1] or 3
       Fill()
       if ns.RefreshHud then pcall(ns.RefreshHud) end
     end)
@@ -939,6 +938,22 @@ local function BuildFunctions(parent, sfName, only, easyOnly)
     TR"Nein (Standard): nur Quests aus deiner Route und Klassenquests. Ja: jede passende Quest.")
   Toggle(TR"Quest Mobs markieren?", function() return db.markMobs ~= false end, function() ns.ToggleMarkMobs() end)
   Toggle(TR"Questgeber markieren?", function() return db.markGiver ~= false end, function() ns.ToggleMarkGiver() end)
+  -- 1.1 (P41): Kartenpunkt aufs Ziel, von weitem und durch Waende sichtbar
+  Toggle(TR"Kartenpunkt aufs Ziel (von weitem sichtbar)?", function() return db.worldPin == true end, function() if ns.ToggleWorldPin then ns.ToggleWorldPin() end end)
+  -- 1.1 (P48): Plaketten weiter sichtbar nur auf Wunsch (setzt eine Spiel Einstellung, nie im Kampf)
+  Toggle(TR"Namensplaketten weiter sichtbar (41 Yards)?", function() return db.markFar == true end, function()
+    db.markFar = not (db.markFar == true)
+    if not db.markFar and db.oldCVars and db.oldCVars.nameplateMaxDistance ~= nil and not (InCombatLockdown and InCombatLockdown()) then
+      ns.Api.Prot("SetCVar", SetCVar, "nameplateMaxDistance", db.oldCVars.nameplateMaxDistance)
+      db.oldCVars.nameplateMaxDistance = nil
+    elseif db.markFar and ns.EnsureFriendlyPlates then ns.EnsureFriendlyPlates() end
+  end)
+  -- 1.1 (P51): Groesse der Symbole ueber Questgebern und Mobs (Standard 2.5 fach, gross 3.5 fach)
+  Toggle(TR"Symbole über NPCs extra gross?", function() return (tonumber(db.markScale) or ns.MARK_SCALE_STD or 2.5) > (ns.MARK_SCALE_STD or 2.5) end, function()
+    local std = ns.MARK_SCALE_STD or 2.5
+    if (tonumber(db.markScale) or std) > std then db.markScale = nil else db.markScale = ns.MARK_SCALE_BIG end
+    if ns.MarkRescale then ns.MarkRescale() end
+  end)
   -- 20.2 (P11): Raid Symbole sind nur noch ein Zusatz zu den eigenen Markern (Blizzard kann sie sperren)
   Toggle(TR"Dazu Raid Symbole setzen (Totenkopf, Stern)?", function() return db.raidIcons ~= false end, function() db.raidIcons = (db.raidIcons == false) end,
     TR"Nur allein und ausserhalb vom Kampf. Die eigenen Marker über Quest Mobs und Questgeber kommen immer, auch ohne Raid Symbole.")
@@ -2291,7 +2306,7 @@ local function BuildBig()
       local d = sel
       if not d then return end
       local steps, info = ns.DungeonRoute(d)
-      if steps then info.dungeonRoute = true; ns.OptLoad(steps, info); ns.db.opt.dungeonRoute = true else ns.Print(TR"Keine Route: " .. tostring(info)) end
+      if steps then info.dungeonRoute = true; ns.OptLoad(steps, info); ns.db.opt.dungeonRoute = true; ns.db.opt.dungeonName = d.name else ns.Print(TR"Keine Route: " .. tostring(info)) end
     end)
     toEntry:SetScript("OnClick", function()
       local d = sel
@@ -2768,7 +2783,7 @@ local function BuildBig()
   -- Statistik, Gold und Ruf (Knopf oben rechts in der Reiter Leiste)
   do
     local pg = Page("statgold")
-    local bx = Box(pg, TR"Gold und Ruf")
+    local bx = Box(pg, TR"Gold")
     bx:SetAllPoints(pg)
     pg.text = ScrollText(bx, "TaurenRouteBigStatGold", ns.FontName("GameFontHighlight"))
     pg.text:SetPoint("TOPLEFT", 8, -24); pg.text:SetPoint("BOTTOMRIGHT", -26, 8)
@@ -3235,7 +3250,7 @@ local function BuildBig()
         local it = q and q.items[k]
         if it then
           r.link = it.link
-          r.icon:SetTexture((GetItemIcon and GetItemIcon(it.id)) or select(10, GetItemInfo(it.id)))
+          r.icon:SetTexture((ns.Api.GetItemIcon and ns.Api.GetItemIcon(it.id)) or select(10, ns.Api.GetItemInfo(it.id)))
           local cur = it.slot and GetInventoryItemLink and GetInventoryItemLink("player", it.slot)
           local pct = (it.empty and TR"|cff40ff40leerer Platz|r") or (it.pct and (TR"|cff40ff40ca +%d%%|r"):format(math.floor(it.pct + 0.5))) or TR"|cff40ff40neu|r"
           r.text:SetText((TR"%s  %s  |cff9d9d9d%s, statt %s|r"):format(it.link, pct, ns.SlotName(it.loc), cur or TR"nichts"))
@@ -3576,7 +3591,7 @@ function ns.RefreshBig(auto)
   if s.xpFrac then
     big.xbar:SetValue(s.xpFrac)
     big.xbar.text:SetText((TR"Level %d  %d%%"):format(s.level, math.floor(s.xpFrac * 100)))
-    big.xbar.right:SetText(s.nextLevel and (TR"Level %d in %s"):format(s.level + 1, s.fmt(s.nextLevel)) or "")
+    big.xbar.right:SetText(s.nextLevel and (s.levelAfterTurnIn and (TR"Level %d nach Abgabe"):format(s.level + 1) or (TR"Level %d in %s"):format(s.level + 1, s.nextLevelText or s.fmt(s.nextLevel))) or "")
   end
   -- alte Seiten Namen auf die neue Seitenleiste
   local ALIAS = { start = "overview", actions = "opt", func = "set", settings = "set", goldprof = "berufe" }
@@ -4911,7 +4926,7 @@ local function JPage(key)
       local num, fmt = s.num or tostring, s.fmt or tostring
       -- noch nichts gemessen: ein kurzer Satz statt Punkte
       pg.stats.Set(1, (s.xph and s.xph > 0) and num(s.xph) or TR"|cff9d9d9dnoch offen|r", (s.xph and s.xph > 0) and TR"XP pro Stunde" or TR"XP pro Stunde, wird gerade gemessen")
-      pg.stats.Set(2, s.nextLevel and fmt(s.nextLevel) or TR"|cff9d9d9dnoch offen|r", TR"bis Level " .. ((s.level or 0) + 1))
+      pg.stats.Set(2, s.nextLevel and (s.nextLevelText or fmt(s.nextLevel)) or TR"|cff9d9d9dnoch offen|r", TR"bis Level " .. ((s.level or 0) + 1))
       pg.stats.Set(3, ("%d / %d"):format(s.qLog or 0, ns.LogMax and ns.LogMax() or 20), TR"Questlog")
       pg.stats.Set(4, tostring(s.qDone or 0), TR"fertig zum Abgeben")
       local pf = s.pendFrac and ((s.pendLevel or 0) > (s.level or 0) and 1 or s.pendFrac) or 0
@@ -5262,7 +5277,7 @@ local JHERO = {
   perf = { TR"Statistik", TR"Jetzt: Tempo, Kills und wo Zeit verloren geht", "fw_banner_stats" },
   detail = { TR"Statistik", TR"Pro Level: Zeiten pro Abschnitt und Zone", "fw_banner_stats" },
   stats = { TR"Statistik", TR"Gesamt: dein Weg in Zahlen", "fw_banner_stats" },
-  statgold = { TR"Statistik", TR"Gold und Ruf pro Stunde", "fw_banner_gold" },
+  statgold = { TR"Statistik", TR"Gold pro Stunde und nach Quelle", "fw_banner_gold" },
   help = { TR"Hilfe", TR"Was welche Funktion macht", "fw_banner_stats" },
   route = { TR"Weg zu 60", TR"Alle Schritte bis Level 60, Zeit pro Level und Zone", "fw_banner_route" },
 }
@@ -5312,7 +5327,7 @@ JournalShow = function(view, s, auto)
   if not tabBar then
     tabBar = T.TabBar(big.body, 26)
     tabBar.onPick = function(k) bigView = k; ns.RefreshBig() end
-    goldBtn = T.Button(tabBar, TR"Gold und Ruf", 130, 22)
+    goldBtn = T.Button(tabBar, TR"Gold", 130, 22)
     goldBtn:SetPoint("RIGHT", 0, 2)
     goldBtn:SetScript("OnClick", function() bigView = (bigView == "statgold") and "perf" or "statgold"; ns.RefreshBig() end)
   end
@@ -5329,7 +5344,7 @@ JournalShow = function(view, s, auto)
       if not (d.lock and not ns.Unlocked(d.lock)) then list[#list + 1] = { d[1], d[2] } end
     end
     tabBar.Set(list, view == "statgold" and "perf" or view)
-    goldBtn:SetText(view == "statgold" and TR"Zurück zu Leveln" or TR"Gold und Ruf")
+    goldBtn:SetText(view == "statgold" and TR"Zurück zu Leveln" or TR"Gold")
     goldBtn:SetShown(defs.extra and (ns.Unlocked("gold") or ns.Unlocked("rep")) and true or false)
     local p = big.pages[view]
     if p and not routeGrp or (routeGrp and view == "route" and p) then

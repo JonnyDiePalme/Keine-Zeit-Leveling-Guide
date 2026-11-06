@@ -18,6 +18,20 @@ end
 local CATS = {}
 local function Cat(key, title, lines) CATS[#CATS + 1] = { key = key, title = title, lines = lines } end
 
+-- 1.1 (K: Versionsverlauf im Spiel nur Kernpunkte, nie Details)
+Cat("neu", TR"Neu in 1.1", function()
+  return {
+    H .. TR"Neu in Version 1.1|r",
+    TR"- Fehler behoben (Forever Client 1.60.1)",
+    TR"- Leveling Route optimiert, rechnet flüssig in Schritten",
+    TR"- Navi und Pfeil verbessert, auch in Städten",
+    TR"- Log erweitert",
+    TR"- Neue Anzeige im Mini Fenster: jetzige Quest farbig, Höhe zum Ziel",
+    TR"- Marker von weitem, Kartenpunkt aufs Ziel",
+    TR"- Gold Statistik, Mein Weg mit Ausrüstung, Knopf an der Minimap",
+  }
+end)
+
 Cat("start", TR"Erste Schritte", function()
   return {
     H .. TR"So geht es los|r",
@@ -144,7 +158,7 @@ Cat("goals", TR"Ziele", function()
     "",
     H .. TR"Mein Weg|r",
     TR"Alle Stufen bis 60 als Karten, mit einer Linie verbunden. Klick auf eine freie Karte springt zur Funktion. Eine gesperrte Karte kannst du nicht anklicken, Maus drauf zeigt, ab welchem Level sie kommt. Die Erklärung kommt, sobald du das Level erreichst.",
-    TR"Dein Charakter läuft als kleine Figur den Weg entlang bis zu deinem Level, mit der Ausrüstung, die du trägst. Alle 5 Level merkt sich das Addon, was du anhast. " .. k(TR"Rückblick") .. TR" auf der Karte Level 60 lässt ihn den ganzen Weg nochmal ablaufen, mit der Ausrüstung von damals.",
+    TR"Dein Charakter läuft als kleine Figur den Weg entlang bis zu deinem Level, mit der Ausrüstung, die du trägst. Bei jedem Level merkt sich das Addon, was du anhast, und die Figur bleibt bei einem Upgrade kurz stehen. " .. k(TR"Rückblick") .. TR" auf der Karte Level 60 lässt ihn den ganzen Weg nochmal ablaufen, mit der Ausrüstung von damals.",
     "",
     H .. TR"Statistik|r",
     TR"Deine gemessenen Zeiten: XP pro Stunde, Kampf, Laufen, Pausen und " .. k(TR"Zeit pro Zone") .. TR" (geplant gegen echt).",
@@ -304,7 +318,8 @@ end
 function ns.HelpLines(key)
   local acc = ns.T and ns.T.AccHex() or "7fd1b9"
   local cat = CATS[1]
-  for _, c in ipairs(CATS) do if c.key == key then cat = c end end
+  -- 1.1: ohne Auswahl wie bisher Erste Schritte (Neu in 1.1 steht nur oben in der Liste)
+  for _, c in ipairs(CATS) do if c.key == (key or "start") then cat = c end end
   local out = {}
   for _, l in ipairs(cat.lines()) do
     if l == "@UNLOCKS@" then

@@ -263,7 +263,7 @@ local function OwnTeles()
   if teleCache and GetTime() - teleAt < 30 then return teleCache end
   teleCache, teleAt = {}, GetTime()
   local fac = UnitFactionGroup and UnitFactionGroup("player")
-  local runes = GetItemCount and GetItemCount(17031) or 0
+  local runes = ns.Api.GetItemCount and ns.Api.GetItemCount(17031) or 0
   if runes <= 0 then return teleCache end
   for _, p in ipairs(TELES) do
     local known = p.fac == fac and ((IsPlayerSpell and IsPlayerSpell(p.spell)) or (IsSpellKnown and IsSpellKnown(p.spell)))
@@ -503,8 +503,8 @@ hf:SetScript("OnEvent", function(_, _, unit, _, spellID)
   if spellID == 556 then
     -- Astraler Rueckruf (Schamane): eigene Abklingzeit messen
     C_Timer.After(1, function()
-      if not (ns.db and GetSpellCooldown) then return end
-      local _, dur = GetSpellCooldown(556)
+      if not (ns.db and ns.Api.GetSpellCooldown) then return end
+      local _, dur = ns.Api.GetSpellCooldown(556)
       if dur and dur > 60 then ns.db.recallCD = dur end
     end)
     return
@@ -513,7 +513,7 @@ hf:SetScript("OnEvent", function(_, _, unit, _, spellID)
   -- selbst merken, wann er benutzt wurde: manche Clients melden die Abklingzeit nicht (Tester: Route wollte den Ruhestein auf Abklingzeit)
   if ns.db then ns.db.hearthUsedAt = time and time() or nil end
   C_Timer.After(1, function()
-    local gic = (C_Container and C_Container.GetItemCooldown) or GetItemCooldown
+    local gic = (C_Container and C_Container.GetItemCooldown) or ns.Api.GetItemCooldown
     if not (ns.db and gic) then return end
     local ok, _, dur = pcall(gic, 6948)
     if ok and dur and dur > 60 then ns.db.hearthCD = dur end
@@ -523,7 +523,7 @@ end)
 -- Ruhestein: wie lange noch Abklingzeit (Sekunden). Vom Spiel und selbst gemerkt, der laengere Wert zaehlt
 function ns.HearthLeft()
   local left = 0
-  local gic = (C_Container and C_Container.GetItemCooldown) or GetItemCooldown
+  local gic = (C_Container and C_Container.GetItemCooldown) or ns.Api.GetItemCooldown
   if gic then
     local ok, st, dur = pcall(gic, 6948)
     if ok and st and st > 0 and dur and dur > 1.5 then left = math.max(0, st + dur - GetTime()) end

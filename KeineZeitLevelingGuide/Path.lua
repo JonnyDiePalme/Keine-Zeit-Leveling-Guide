@@ -246,7 +246,7 @@ end
 do
   -- Sprung oder Sturz genau messen (der Lern Takt ist nur einmal pro Sekunde)
   local function Sample()
-    local f = IsFalling and IsFalling()
+    local f = IsFalling and ns.Api.U(IsFalling)
     if f and not fallT0 then fallT0 = GetTime()
     elseif not f and fallT0 then
       fallLen, fallEnd = GetTime() - fallT0, GetTime()
@@ -311,7 +311,7 @@ local function Tick()
   local db = ns.db
   if not db then return end
   if not db.dockFallClean and ns.NearDock then db.dockFallClean = 1918; pcall(CleanDockFalls, db) end
-  if (UnitOnTaxi and UnitOnTaxi("player")) or (IsFlying and IsFlying()) or (UnitIsDeadOrGhost and UnitIsDeadOrGhost("player")) then Break(); return end
+  if (UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")) or (IsFlying and ns.Api.U(IsFlying)) or (UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, "player")) then Break(); return end
   local map = ns.PlayerMap and ns.PlayerMap()
   local info = map and C_Map.GetMapInfo(map)
   if not (info and info.mapType == Enum.UIMapType.Zone) then Break(); return end
@@ -321,7 +321,7 @@ local function Tick()
   x, y = Plain(x), Plain(y)
   if not (x and y) or x <= 0 or y <= 0 then return end
   local now = GetTime()
-  local sp = Plain(GetUnitSpeed and GetUnitSpeed("player")) or 7
+  local sp = Plain(ns.Api.GetUnitSpeed and ns.Api.GetUnitSpeed("player")) or 7
   local k = Key(Cell(x, y))
   -- Schiff, Zeppelin, Aufzug, Teleport, Sturmangriff: schneller als die eigenen Beine, nichts lernen
   if last and last.map == map then
@@ -353,11 +353,11 @@ local function Tick()
     return
   end
   -- in der Luft: nichts lernen, aber merken, wo der Sprung anfing
-  if IsFalling and IsFalling() then
+  if IsFalling and ns.Api.U(IsFalling) then
     if last and last.map == map and last.k and not fallFrom then fallFrom = last.k end
     return
   end
-  local swim = (IsSwimming and IsSwimming()) and 1 or 0
+  local swim = (IsSwimming and ns.Api.U(IsSwimming)) and 1 or 0
   db.walk = db.walk or {}
   db.walk[map] = db.walk[map] or {}
   local w = db.walk[map]
@@ -468,7 +468,7 @@ local function CostFn(ui)
   local cX = painted and COST_X_P or COST_X
   local cHi = painted and COST_HI_P or COST_HI
   local cSh = painted and COST_SH_P or COST_SH
-  local swimMul = (IsMounted and IsMounted()) and SWIM_MOUNT or SWIM
+  local swimMul = (IsMounted and ns.Api.U(IsMounted)) and SWIM_MOUNT or SWIM
   local posts = EnemyPosts(ui)
   local MaskHas = Wy and Wy.MaskHas or function() return true end
   -- Klippe der Karte: Feld k geht in Richtung down nach unten. Hoch (Gegenrichtung, auch schraeg) ist gesperrt,
@@ -661,7 +661,7 @@ function ns.WalkPath(ui, fx, fy, tx, ty)
   local dangers = ns.Dangers and ns.Dangers(ui) or {}
   local stamp = W() and W().Layer(ui)
   local ck = ui .. ":" .. Key(sx, sy) .. ":" .. Key(gx, gy) .. ":" .. #dangers .. ":" .. (stamp and stamp.t or 0) .. ":" .. (ns.blockRev or 0)
-    .. ":" .. ((IsMounted and IsMounted()) and 1 or 0)
+    .. ":" .. ((IsMounted and ns.Api.U(IsMounted)) and 1 or 0)
   local c = cache[ck]
   if c and GetTime() - c.t < 20 then return c.path end
   local cost = CostFn(ui)
@@ -747,6 +747,9 @@ end
 -- ob es bleibt. Schalter ns.db.stadtTore = false: aus. Welt x = Norden, y = Westen (Ge); Reihenfolge wird je Stadt geprueft.
 -- (die 228 eingebauten Kandidaten aus Stand 161 sind weg: S hat 45 mit Ja, 183 mit Nein beantwortet, Stand 164 Stadt.lua ist die Quelle)
 local TOR_NEAR_YD, TOR_MAX_S, TOR_ENGE_YD, TOR_DETOUR, TOR_SICHER_YD = 15, 25, 80, 1.6, 150
+-- 1.1 (P58, K 14:33: Pfeil in der Stadt Luftlinie statt Weg): nach Ende oder Zeit um nach so vielen Sekunden neu rechnen
+-- (vorher dann fuer immer gerade aufs Ziel), wenn das Ziel noch weiter als GATE_FAR_YD weg ist
+local GATE_RETRY_S, GATE_FAR_YD = 15, 30
 -- 20.4b (Na, Ge Stand 164, S hat die Tore beantwortet): 45 Tore mit sicher = 1 (Ja), dazu je Stadt Wege Linien, die S gezeichnet hat
 -- (Orgrimmar hat gar kein Tor, nur Wege). Wege Linien sind bewiesene Wege, in beide Richtungen. Daraus wird je Stadt ein Wegnetz:
 -- Knoten alle WEG_STEP_YD auf den Linien, Linien die sich auf WEG_JOIN_YD beruehren sind verbunden, Tore sind Knoten (TOR_JOIN_YD zu
@@ -754,6 +757,7 @@ local TOR_NEAR_YD, TOR_MAX_S, TOR_ENGE_YD, TOR_DETOUR, TOR_SICHER_YD = 15, 25, 8
 -- Der Pfeil geht die Knoten der Reihe nach ab (Log STADTTOR), danach gerade aufs Ziel. Stadt.lua Eintraege koennen Listen sein
 -- ({id, x, y, art, breite_yd, sicher}, {x, y}) oder mit Namen (t.x), beides wird gelesen. Welt x = Norden, y = Westen (Ge).
 local WEG_STEP_YD, WEG_JOIN_YD, TOR_JOIN_YD, FREI_FAKTOR, ANBIND_YD = 10, 8, 12, 1.5, 250
+local NETZ_Z_STEP = 6   -- 1.1: Stadt Netz mit Hoehe, ab so viel Hoehen Unterschied ein eigener Wegpunkt
 local torFlip = {}   -- [ui] = true, wenn der Spiel Vektor x und y vertauscht
 -- Ge Stadt.lua: FWW_AUTO_STADT.forever.staedte[ui] = { tore = { {id, x, y, art, breite_yd, sicher} }, innen = { {x, y, art, grund} }, wege = { { {x, y}, ... } } }
 local function StadtDaten(ui)
@@ -849,6 +853,47 @@ local function Netz(ui)
   N = false
   local sd = StadtDaten(ui)
   local cv = CityConv(ui, Samples(ui))
+  -- 1.1 (Ka Stand 166, absprache wege_logik 09:20): eigenes Stadt Wegnetz netz = { knoten = { {x, y, z} }, kanten = { a, b, ... },
+  -- tore = { {tor_id, knoten} } } aus NPC Laufwegen und Linien von S, bewiesen begehbar. Ist es da, ersetzt es das alte Netz
+  -- aus Toren und Wege Linien. Kosten = Laenge mit Hoehe (z), Knoten ausserhalb der Karte bleiben im Netz (nur nicht als Ziel)
+  local nz = sd and type(sd.netz) == "table" and type(sd.netz.knoten) == "table" and #sd.netz.knoten > 1 and sd.netz
+  if nz and cv then
+    local nodes, adj = {}, {}
+    local artOf = {}
+    for _, t in ipairs(type(sd.tore) == "table" and sd.tore or {}) do local id, _, _, art = TorF(t); if id then artOf[id] = art end end
+    for k, p in ipairs(nz.knoten) do
+      local a, b, z = p[1] or p.x, p[2] or p.y, p[3] or p.z
+      if type(a) == "number" and type(b) == "number" then
+        local u, v = cv.Map(a, b)
+        nodes[k] = { a, b, u, v, nil, "netz", type(z) == "number" and z or nil }
+      else
+        nodes[k] = { 0, 0, nil, nil, nil, "leer" }
+      end
+      adj[k] = {}
+    end
+    local kn = nz.kanten or {}
+    local ne = 0
+    for e = 1, #kn - 1, 2 do
+      local i, j = kn[e], kn[e + 1]
+      local ni, nj = nodes[i], nodes[j]
+      if ni and nj and ni[6] == "netz" and nj[6] == "netz" then
+        local dz = (ni[7] and nj[7]) and (ni[7] - nj[7]) or 0
+        local d = math.sqrt((ni[1] - nj[1]) ^ 2 + (ni[2] - nj[2]) ^ 2 + dz * dz)
+        adj[i][#adj[i] + 1] = { j, d }
+        adj[j][#adj[j] + 1] = { i, d }
+        ne = ne + 1
+      end
+    end
+    local nt = 0
+    for _, t in ipairs(type(nz.tore) == "table" and nz.tore or {}) do
+      local id, k = t[1], t[2]
+      if id and nodes[k] then nodes[k][5] = id; nodes[k][6] = artOf[id] or "tor"; nt = nt + 1 end
+    end
+    N = { nodes = nodes, adj = adj, netz = true }
+    if ns.TestLog then ns.TestLog("STADTTOR", ("Stadt %s: Stadt Netz %d Knoten, %d Kanten, %d Tore"):format(tostring(ui), #nodes, ne, nt)) end
+    netzC[ui] = N
+    return N
+  end
   if sd and cv then
     local nodes, adj, lineOf = {}, {}, {}
     local function Add(a, b, id, art, line)
@@ -919,32 +964,63 @@ local function Netz(ui)
   return N
 end
 -- kuerzester Weg von (sa, sb) nach (ga, gb): Liste von Knoten Indizes, Kosten. Start und Ziel haengen frei (mal FREI_FAKTOR) an Knoten
+-- 1.1: A* mit Heap (das neue Stadt Netz hat bis 2900 Knoten, die alte Suche war n mal n und ruckelte)
+local function HeapPush(h, f, i)
+  local n = #h + 1
+  h[n] = { f, i }
+  while n > 1 do
+    local p = math.floor(n / 2)
+    if h[p][1] <= h[n][1] then break end
+    h[p], h[n] = h[n], h[p]
+    n = p
+  end
+end
+local function HeapPop(h)
+  local n = #h
+  if n == 0 then return end
+  local top = h[1]
+  h[1] = h[n]; h[n] = nil; n = n - 1
+  local i = 1
+  while true do
+    local l, r, m = i * 2, i * 2 + 1, i
+    if l <= n and h[l][1] < h[m][1] then m = l end
+    if r <= n and h[r][1] < h[m][1] then m = r end
+    if m == i then break end
+    h[i], h[m] = h[m], h[i]
+    i = m
+  end
+  return top[1], top[2]
+end
 local function NetzWeg(N, sa, sb, ga, gb)
   local nodes, adj = N.nodes, N.adj
   local n = #nodes
   local dist, prev, done = {}, {}, {}
   local lim2 = ANBIND_YD * ANBIND_YD
+  local heap = {}
+  local function H(i) return math.sqrt((nodes[i][1] - ga) ^ 2 + (nodes[i][2] - gb) ^ 2) end
   for i = 1, n do
-    local d2 = (nodes[i][1] - sa) ^ 2 + (nodes[i][2] - sb) ^ 2
-    if d2 <= lim2 then dist[i] = math.sqrt(d2) * FREI_FAKTOR end
+    if nodes[i][6] ~= "leer" then
+      local d2 = (nodes[i][1] - sa) ^ 2 + (nodes[i][2] - sb) ^ 2
+      if d2 <= lim2 then dist[i] = math.sqrt(d2) * FREI_FAKTOR; HeapPush(heap, dist[i] + H(i), i) end
+    end
   end
   local best, bi = nil, nil
-  for _ = 1, n do
-    local u, ud
-    for i = 1, n do
-      if not done[i] and dist[i] and (not ud or dist[i] < ud) then u, ud = i, dist[i] end
-    end
+  while true do
+    local f, u = HeapPop(heap)
     if not u then break end
-    done[u] = true
-    local d2 = (nodes[u][1] - ga) ^ 2 + (nodes[u][2] - gb) ^ 2
-    if d2 <= lim2 then
-      local tot = ud + math.sqrt(d2) * FREI_FAKTOR
-      if not best or tot < best then best, bi = tot, u end
-    end
-    if best and ud >= best then break end
-    for _, e in ipairs(adj[u]) do
-      local v, c = e[1], ud + e[2]
-      if not done[v] and (not dist[v] or c < dist[v]) then dist[v], prev[v] = c, u end
+    if best and f >= best then break end
+    if not done[u] then
+      done[u] = true
+      local ud = dist[u]
+      local d2 = (nodes[u][1] - ga) ^ 2 + (nodes[u][2] - gb) ^ 2
+      if d2 <= lim2 then
+        local tot = ud + math.sqrt(d2) * FREI_FAKTOR
+        if not best or tot < best then best, bi = tot, u end
+      end
+      for _, e in ipairs(adj[u]) do
+        local v, c = e[1], ud + e[2]
+        if not done[v] and (not dist[v] or c < dist[v]) then dist[v], prev[v] = c, u; HeapPush(heap, c + H(v), v) end
+      end
     end
   end
   if not bi then return nil end
@@ -968,19 +1044,34 @@ local function GateOr(ui, fx, fy, cx, cy, force)
     -- schon an einem der naechsten Knoten vorbei? dann dorthin springen
     while g do
       local d = ns.WorldDist({ ui, fx, fy }, { ui, g[1], g[2] })
-      if d and d <= TOR_NEAR_YD then
+      -- 1.1 (P58): auch weiter, wenn du am Punkt vorbei bist (zum naechsten Punkt naeher als der Punkt selbst davon weg ist),
+      -- sonst zeigte der Pfeil zurueck auf einen knapp verpassten Punkt
+      local nx = r[gateS.i + 1]
+      local passed = false
+      if d and nx and d > TOR_NEAR_YD then
+        local dn = ns.WorldDist({ ui, fx, fy }, { ui, nx[1], nx[2] })
+        local seg = ns.WorldDist({ ui, g[1], g[2] }, { ui, nx[1], nx[2] })
+        passed = dn and seg and dn < seg
+      end
+      if d and (d <= TOR_NEAR_YD or passed) then
         if ns.TestLog and g[3] then ns.TestLog("STADTTOR", ("Tor %s erreicht (Abstand %d yd)"):format(tostring(g[3]), math.floor(d))) end
         gateS.i = gateS.i + 1
+        gateS.t0 = now -- Fortschritt: Zeit fuer den Rest neu
         g = r[gateS.i]
       else break end
     end
     if g and now - gateS.t0 <= gateS.cap then ns.walkGate = true; return g[1], g[2] end
     if ns.TestLog then ns.TestLog("STADTTOR", g and "Weg Zeit um, weiter gerade aufs Ziel" or ("Weg fertig (%d Punkte), weiter gerade aufs Ziel"):format(#r)) end
     gateS.route = nil
+    gateS.tried = now
     return cx, cy
   end
-  if gateS.tried then return cx, cy end
-  gateS.tried = true
+  -- 1.1 (P58): nicht fuer immer gerade aufs Ziel. Nach GATE_RETRY_S neu, solange das Ziel noch weiter weg ist
+  if gateS.tried then
+    local dz = ns.WorldDist({ ui, fx, fy }, { ui, cx, cy })
+    if not (now - gateS.tried >= GATE_RETRY_S and dz and dz > GATE_FAR_YD) then return cx, cy end
+  end
+  gateS.tried = now
   local dDirect = ns.WorldDist({ ui, fx, fy }, { ui, cx, cy })
   if not dDirect then return cx, cy end
   local N = Netz(ui)
@@ -1001,13 +1092,16 @@ local function GateOr(ui, fx, fy, cx, cy, force)
     return cx, cy
   end
   -- nur Knoten die als Zwischenziel taugen: Tore immer, Linien Knoten etwa alle 30 yd (der Pfeil geht dann gerade dazwischen)
-  local pts, lastA, lastB = {}, nil, nil
+  local pts, lastA, lastB, lastZ = {}, nil, nil, nil
   for k, idx in ipairs(path) do
     local nd = N.nodes[idx]
     local keep = nd[5] ~= nil or k == #path or k == 1
+    -- Netz mit Hoehe: auch bei grossem Hoehen Wechsel (Rampe, Aufzug, Treppe) einen Punkt setzen
+    if not keep and N.netz and lastZ and nd[7] and math.abs(nd[7] - lastZ) >= NETZ_Z_STEP then keep = true end
     if not keep and lastA then keep = (nd[1] - lastA) ^ 2 + (nd[2] - lastB) ^ 2 >= 30 * 30 end
-    if keep then pts[#pts + 1] = { nd[3], nd[4], nd[5], nd[6] }; lastA, lastB = nd[1], nd[2] end
+    if keep and nd[3] then pts[#pts + 1] = { nd[3], nd[4], nd[5], nd[6] }; lastA, lastB, lastZ = nd[1], nd[2], nd[7] or lastZ end
   end
+  if #pts == 0 then return cx, cy end
   gateS.route, gateS.i, gateS.t0 = pts, 1, now
   gateS.cap = TOR_MAX_S + cost / 4
   if ns.TestLog then ns.TestLog("STADTTOR", ("Stadt %s: Weg ueber %d Punkte (%d Knoten), %d yd statt Luftlinie %d yd%s"):format(
@@ -1023,6 +1117,22 @@ function ns.WalkNext(ui, fx, fy, tx, ty)
   local city = K and K.InCity and K.InCity(ui, fx, fy)
   local now = GetTime and GetTime() or 0
   if not city then ns.walkCity = nil end
+  -- 1.1 (Ka Befund Log 08:46 "Stadt 1411: kein Wegnetz"): du stehst auf der Zonen Karte (zb Durotar) im Bereich einer Stadt.
+  -- Dann in der Stadt Karte rechnen und das Ergebnis zurueck auf die Zone umrechnen (vorher suchte es das Netz der Zone)
+  if city and city ~= ui and ns.ToMap and not ns.walkInner then
+    local cfx, cfy = ns.ToMap(ui, fx, fy, city)
+    local ctx, cty = ns.ToMap(ui, tx, ty, city)
+    if cfx and ctx then
+      ns.walkInner = true
+      local ok, rx, ry = pcall(ns.WalkNext, city, cfx, cfy, ctx, cty)
+      ns.walkInner = nil
+      if ok and rx and ry then
+        local zx, zy = ns.ToMap(city, rx, ry, ui)
+        if zx then return zx, zy end
+      end
+      if ok then return nil end
+    end
+  end
   local s = cityS
   local same = s.ui == ui and math.abs((s.tx or -1) - tx) < 0.002 and math.abs((s.ty or -1) - ty) < 0.002
   -- 20.3w: Ziel in der Stadt auf einen erreichbaren Punkt auf der Karte ziehen (cx, cy); same und cityS bleiben beim Original
@@ -1033,6 +1143,14 @@ function ns.WalkNext(ui, fx, fy, tx, ty)
     if ns.walkCity ~= "innen" and ns.TestLog then ns.TestLog("STADTTOR", ("Ziel innen in Stadt %s, Karte %.3f %.3f"):format(tostring(ui), cx, cy)) end
     ns.walkCity = "innen"
     return GateOr(ui, fx, fy, cx, cy, true)
+  end
+  -- 1.1 (Ka Stand 166): Stadt mit eigenem Netz (bewiesene Wege mit Hoehe): zuerst das Netz, die Karte nur fuer das letzte Stueck
+  if city and city == ui and db.stadtNetz ~= false then
+    local sd = StadtDaten(ui)
+    if sd and type(sd.netz) == "table" then
+      local gx, gy = GateOr(ui, fx, fy, cx, cy, true)
+      if gateS.route then return gx, gy end
+    end
   end
   if city and same and s.straightUntil and now < s.straightUntil then return GateOr(ui, fx, fy, cx, cy) end
   if K and K.HasZone(ui) then
@@ -1204,3 +1322,55 @@ end
 
 -- 19.32 (Saschas Entscheid 22:45): die Bruecke zu AzerothGPS ist raus. Pfeil, Minimap und Weltkarte zeigen den eigenen Weg
 -- (Gelaende Karte, Karte.lua), alte Einstellungen useGPS und gpsDock werden ignoriert.
+
+-- 1.1 (P41, S 11:24): Hoehe zum Ziel ("Ziel oben, ca 6 m hoeher"). Geht nur, wo es Hoehen Daten gibt: Stadt Netz von Ka
+-- (Knoten mit z). Spieler Hoehe aus UnitPosition, wenn das Spiel sie liefert, sonst vom naechsten Netz Knoten. Liegen an einer
+-- Stelle mehrere Stockwerke uebereinander (Knoten in HOEHE_NEAR_YD mit NETZ_Z_STEP Unterschied), wird nichts gesagt
+local HOEHE_NEAR_YD = 8
+local HOEHE_MIN_YD = 5
+local YD_TO_M = 0.9144
+local function NetzZ(ui, x, y)
+  local N = Netz(ui)
+  if not (N and N.netz and ns.WorldDist) then return nil end
+  local best, bz, zmin, zmax
+  for _, n in ipairs(N.nodes) do
+    if n[7] and n[3] then
+      local d = ns.WorldDist({ ui, x, y }, { ui, n[3], n[4] })
+      if d and d <= HOEHE_NEAR_YD then
+        zmin = math.min(zmin or n[7], n[7]); zmax = math.max(zmax or n[7], n[7])
+        if not best or d < best then best, bz = d, n[7] end
+      end
+    end
+  end
+  if bz and zmax - zmin >= NETZ_Z_STEP then return nil end
+  return bz
+end
+local hz = { t = -10 }
+function ns.ZielHoehe()
+  local now = GetTime and GetTime() or 0
+  if now - hz.t < 1 then return hz.v end
+  hz.t, hz.v = now, nil
+  if not (ns.OptTarget and ns.PlayerMap and ns.db and ns.db.optMode) then return nil end
+  local st = ns.OptTarget()
+  local m = ns.PlayerMap()
+  if not (st and st.map and st.x and m and st.map == m) then return nil end
+  local pos = C_Map.GetPlayerMapPosition(m, "player")
+  if not pos then return nil end
+  local px, py = pos:GetXY()
+  local tz = NetzZ(m, st.x, st.y)
+  if not tz then return nil end
+  local ok, _, _, z = pcall(UnitPosition, "player")
+  z = ok and ns.Plain and ns.Plain(z) or nil
+  local fromGame = type(z) == "number" and z ~= 0
+  if not hz.logged and ns.TestLog then
+    hz.logged = true
+    ns.TestLog("PFEIL", ("Hoehe: Spieler Hoehe vom Spiel %s"):format(fromGame and "ja" or "nein, vom Stadt Netz"))
+  end
+  local pz = fromGame and z or NetzZ(m, px, py)
+  if not pz then return nil end
+  local dz = tz - pz
+  if math.abs(dz) < HOEHE_MIN_YD then return nil end
+  local mtr = math.floor(math.abs(dz) * YD_TO_M + 0.5)
+  hz.v = dz > 0 and (TR"Ziel oben, ca %d m höher"):format(mtr) or (TR"Ziel unten, ca %d m tiefer"):format(mtr)
+  return hz.v
+end

@@ -1,5 +1,5 @@
 -- Forever Wegweiser Daten Korrektur (schreibt der Daten Chat, liest das Addon). Nur Daten, kein Code.
--- Stand 2026-10-30 09:48 Daten 4. Quellen: QuestieDB 1.0.7 (QuestieDB_Vanilla.toc und QuestieDB_Forever.toc aus _classic_era_\Interface\AddOns,
+-- Stand 2026-11-01 13:25 Daten 7. Quellen: QuestieDB 1.0.7 (QuestieDB_Vanilla.toc und QuestieDB_Forever.toc aus _classic_era_\Interface\AddOns,
 -- bzw. Sim Claude\ForeverWegweiser_Sim\daten\realf\rdb_forever.lua als entpackte Forever Fassung), VMaNGOS 1.12 (mangos.sqlite aus dem Gelaende
 -- Cache, deckt nur Vanilla Inhalte ab, keine Forever eigenen Zonen/Quests) als zweite Quelle fuer Drops, Elite und Vorquests.
 -- Aufbau: alle = gilt fuer Era und Forever, era und forever = nur dort (ueberschreibt alle fuer dieselbe Nummer).
@@ -11,7 +11,7 @@
 -- Jeder Eintrag hat grund und quelle in FWW_Daten_Korrektur_Gruende.md. Unbekannte Felder ignorieren, Datei kann fehlen.
 FWW_DATEN_KORREKTUR = {
   format = 1,
-  stand = "2026-10-30 09:48 Daten 4",
+  stand = "2026-11-01 13:25 Daten 7",
   alle = {
     quest = {
       [10] = { vorquest_fehlt = { 82 } },
@@ -28,6 +28,7 @@ FWW_DATEN_KORREKTUR = {
       [117] = { dropper_nicht_fuers_level = { 573 } },
       [150] = { dropper_nicht_fuers_level = { 1027, 1029, 1418, 4819, 4820, 6243, 10643 } },
       [153] = { dropper_nicht_fuers_level = { 450 } },
+      [156] = { vorquest_fehlt = { 158 } },
       [185] = { vorquest_fehlt = { 583 } },
       [194] = { vorquest_fehlt = { 583 } },
       [209] = { dropper_nicht_fuers_level = { 1059 }, vorquest_fehlt = { 189 } },
@@ -41,6 +42,7 @@ FWW_DATEN_KORREKTUR = {
       [317] = { dropper_nicht_fuers_level = { 119, 157, 330, 454, 547, 1190, 1191, 1192, 1689, 3225 } },
       [349] = { dropper_nicht_fuers_level = { 1559, 2521, 5262, 6513, 6514, 6516, 6585, 9622 } },
       [374] = { dropper_nicht_fuers_level = { 1664, 1665 } },
+      [415] = { vorquest_fehlt = { 315 } },
       [418] = { dropper_nicht_fuers_level = { 345, 547, 1192, 4422, 4511, 4512, 4514, 7333, 7334, 1189, 2165 } },
       [429] = { dropper_nicht_fuers_level = { 1923 } },
       [440] = { vorquest_fehlt = { 439 } },
@@ -53,6 +55,7 @@ FWW_DATEN_KORREKTUR = {
       [496] = { dropper_nicht_fuers_level = { 14280, 2348 } },
       [501] = { dropper_nicht_fuers_level = { 2406, 2407 } },
       [503] = { kein_gegner_npc = { 2316 } },
+      [504] = { vorquest_fehlt = { 500 } },
       [515] = { dropper_nicht_fuers_level = { 14277 } },
       [555] = { dropper_nicht_fuers_level = { 2505, 4396, 4397, 4398, 4399, 4400, 5432, 6352, 6369, 7977, 8213, 13599, 13896, 14123 } },
       [560] = { vorquest_fehlt = { 559 } },
@@ -77,6 +80,7 @@ FWW_DATEN_KORREKTUR = {
       [756] = { vorquest_fehlt = { 754 } },
       [777] = { vorquest_fehlt = { 734 } },
       [780] = { vorquest_fehlt = { 750 } },
+      [794] = { vorquest_fehlt = { 792, 1499 } },
       [818] = { dropper_nicht_fuers_level = { 6020, 3228 } },
       [821] = { dropper_nicht_fuers_level = { 5828 } },
       [822] = { dropper_nicht_fuers_level = { 5827 } },
@@ -121,6 +125,7 @@ FWW_DATEN_KORREKTUR = {
       [1526] = { vorquest_fehlt = { 1525 } },
       [1560] = { kein_gegner_npc = { 6015 } },
       [1640] = { kein_gegner_npc = { 6090 } },
+      [1691] = { vorquest_fehlt = { 1690 } },
       [1824] = { dropper_nicht_fuers_level = { 3253 } },
       [2078] = { kein_gegner_npc = { 6669 } },
       [2178] = { dropper_nicht_fuers_level = { 2172, 2323, 3245 } },
@@ -135,6 +140,7 @@ FWW_DATEN_KORREKTUR = {
       [2584] = { dropper_nicht_fuers_level = { 8301 } },
       [2585] = { dropper_nicht_fuers_level = { 8301 } },
       [2586] = { dropper_nicht_fuers_level = { 8301 } },
+      [2621] = { vorquest_fehlt = { 2784 } },
       [2744] = { kein_gegner_npc = { 7783 } },
       [2755] = { kein_gegner_npc = { 7790 } },
       [2765] = { kein_gegner_npc = { 7802 } },
@@ -359,6 +365,7 @@ FWW_DATEN_KORREKTUR = {
       [8412] = { dropper_nicht_fuers_level = { 1811 } },
       [65610] = { dropper_nicht_fuers_level = { 3931 } },
       [92466] = { dropper_nicht_fuers_level = { 252076, 252666 } },
+      [92472] = { vorquest_fehlt = { 92470 } },
       [92514] = { kein_gegner_npc = { 254089 } },
       [92551] = { dropper_nicht_fuers_level = { 259385, 259398 } },
       [92553] = { dropper_nicht_fuers_level = { 2172, 2321, 2322, 2323, 3244, 3245, 3246 } },

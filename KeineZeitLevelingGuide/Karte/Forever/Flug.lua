@@ -1,4 +1,4 @@
--- Flugdaten aus den Spieldaten fuer Forever Wegweiser (Forever, Build WOW-70685patch1.60.1_Retail, Werkzeug Stand 60, 2026-10-29 22:21)
+-- Flugdaten aus den Spieldaten fuer Forever Wegweiser (Forever, Build WOW-70790patch1.60.1_Retail, Werkzeug Stand 167, 2026-11-06 09:22)
 -- FWW_AUTO_TAXI.knoten[id] = { ui, x, y, fraktion, name_en, name_de, kontinent, welt_x, welt_y, bit, npc }
 --   npc = NPC Nummer des Flugmeisters (aus Questie, naechster Flugmeister bis 40 Yards, gleiche Karte bis 150), 0 wenn keiner
 --   id = TaxiNodes ID (gleich wie im Spiel), ui und x, y wie C_Map (0 bis 1), fraktion "A", "H" oder "AH",
@@ -118,7 +118,7 @@ FWW_AUTO_TAXI.forever = {
     { 11, 10, 102, 110, 3180 },
     { 11, 13, 135, 330, 4222 },
     { 11, 17, 285, 530, 9014 },
-    { 11, 21, 473, 630, 15026 },
+    { 11, 21, 467, 630, 14837 },
     { 11, 68, 248, 1020, 7849 },
     { 11, 76, 270, 730, 8530 },
     { 12, 2, 85, 330, 2629 },
@@ -363,10 +363,8 @@ FWW_AUTO_TAXI.forever = {
     { 3242, 52, 120, 1020, 3745 },
     { 3242, 53, 127, 1020, 3967 },
     { 3242, 559, 61, 510, 1849 },
-    { 3275, 3276, 54, 330, 1624 },
     { 3276, 5, 125, 630, 3917 },
     { 3276, 8, 165, 630, 5193 },
     { 3276, 71, 118, 630, 3676 },
-    { 3276, 3275, 66, 330, 2029 },
   },
 }

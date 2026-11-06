@@ -1,4 +1,4 @@
--- Gelaende aus den Spieldaten fuer Forever Wegweiser (Forever, Build WOW-70755patch1.60.1_Retail, Werkzeug Stand 164, 2026-11-03 21:03)
+-- Gelaende aus den Spieldaten fuer Forever Wegweiser (Forever, Build WOW-70790patch1.60.1_Retail, Werkzeug Stand 167, 2026-11-06 09:22)
 -- Aufbau pro Zone: siehe Kopf von Karte_Forever.lua im Werkzeug Ordner Karte
 FWW_AUTO_KARTE = FWW_AUTO_KARTE or {}
 FWW_AUTO_KARTE_RAW = FWW_AUTO_KARTE_RAW or {}
@@ -18,4 +18,4 @@ function FWW_AutoKarte(ui)
 end
 -- Zone wieder freigeben (Text bleibt, Tabelle kann der Speicher wieder wegraeumen)
 function FWW_AutoKarteFrei(ui) FWW_AUTO_KARTE[ui] = nil end
-FWW_AUTO_KARTE_INFO = { format = 2, client = "forever", build = "WOW-70755patch1.60.1_Retail", stand = "164", erstellt = "2026-11-03" }
+FWW_AUTO_KARTE_INFO = { format = 2, client = "forever", build = "WOW-70790patch1.60.1_Retail", stand = "167", erstellt = "2026-11-06" }

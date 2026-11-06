@@ -107,9 +107,24 @@ function ns.Paused() return ns.db and ns.db.paused and true or false end
 -- 17.9: im Dungeon oder Schlachtzug (keine Position, keine Wege): Route und Pfeil warten bis draussen
 function ns.InInstance()
   if not IsInInstance then return false end
+  -- 1.1 (P55, K 13:30: "Pause an (party, ?)" beim Einloggen mit Karte ? 0,0): erst entscheiden, wenn die Welt geladen ist
+  -- (kurz nach PLAYER_ENTERING_WORLD) und das Spiel eine Karte kennt. Vorher zaehlt nichts als Instanz
+  if not ns.worldReady then return false end
+  local okM, m = pcall(C_Map.GetBestMapForUnit, "player")
+  if not (okM and m) then return false end
   local inI, typ = IsInInstance()
+  inI, typ = ns.Api.Plain(inI), ns.Api.Plain(typ)
+  if not inI then return false end
+  -- 1.1 (P60, K 14:33: "Pause an (party, Orgrimmar)" mitten in OG im Duo): Instanz nur, wenn das Spiel dort keine Position
+  -- auf der Karte gibt oder die Karte eine Dungeon Karte ist. Hauptstaedte und Zonen haben immer eine Position
+  local okP, pos = pcall(C_Map.GetPlayerMapPosition, m, "player")
+  local hasPos = okP and pos ~= nil
+  local okI, info = pcall(C_Map.GetMapInfo, m)
+  local dung = okI and info and Enum and Enum.UIMapType and info.mapType == Enum.UIMapType.Dungeon
   -- 20.4a (K 17:49, S 17:48): auch Schlachtfeld und Arena, dort rechnet und prueft das Addon ebenfalls nichts
-  return inI and (typ == "party" or typ == "raid" or typ == "pvp" or typ == "arena") or false
+  if typ == "pvp" or typ == "arena" then return true end
+  if hasPos and not dung then return false end
+  return (typ == "party" or typ == "raid") or false
 end
 local lowCache, lowAt = false, 0
 function ns.LowPower()
@@ -159,6 +174,42 @@ function ns.Ticker(interval, fn, keep)
   end)
 end
 
+-- 1.1 (P53, K 13:30): bei BLOCKIERT den Stack mitschreiben (Datei:Zeile statt nur UNKNOWN). Eigene Zeilen dieser
+-- Funktion und vom Ereignis fallen raus, damit man sieht, welcher Code gerade lief
+function ns.BlockStack()
+  if not debugstack then return nil end
+  local raw = debugstack(2, 14, 0) or ""
+  local out = {}
+  for ln in tostring(raw):gmatch("[^\n]+") do
+    if not ln:find("Route.lua", 1, true) and not ln:find("DebugLog.lua", 1, true) then
+      local f, l = ln:match("([%w_]+%.lua)%D+(%d+)")
+      out[#out + 1] = f and (f .. ":" .. l) or ln:gsub("^%s+", ""):sub(1, 40)
+    end
+    if #out >= 6 then break end
+  end
+  return #out > 0 and table.concat(out, " < ") or "leer"
+end
+
+-- 1.1 (P55): Welt geladen? Bei jedem Ladebild kurz nein, INSTANCE_WAIT_S nach PLAYER_ENTERING_WORLD ja
+ns.INSTANCE_WAIT_S = 1.5
+do
+  local wf = CreateFrame("Frame")
+  wf:RegisterEvent("PLAYER_ENTERING_WORLD")
+  wf:RegisterEvent("LOADING_SCREEN_ENABLED")
+  wf:SetScript("OnEvent", function(_, ev)
+    ns.worldReady = false
+    ns.worldTok = (ns.worldTok or 0) + 1
+    if ev ~= "PLAYER_ENTERING_WORLD" then return end
+    local tok = ns.worldTok
+    C_Timer.After(ns.INSTANCE_WAIT_S, function()
+      if tok ~= ns.worldTok then return end
+      ns.worldReady = true
+      if ns.WorldReadyHooks then for _, f in ipairs(ns.WorldReadyHooks) do pcall(f) end end
+    end)
+  end)
+end
+ns.WorldReadyHooks = ns.WorldReadyHooks or {}
+
 -- ganz frueh: blockierte Aktionen schon beim Laden mitbekommen (Deps.lua wertet sie aus)
 ns.blockedQueue = {}
 do
@@ -166,6 +217,14 @@ do
   eb:RegisterEvent("ADDON_ACTION_BLOCKED")
   eb:RegisterEvent("ADDON_ACTION_FORBIDDEN")
   eb:SetScript("OnEvent", function(_, ev, addon, func)
+    -- 1.1 (P48): bis das Test Log laeuft hier merken, DebugLog traegt es nach
+    if not ns.testLogLive then
+      ns.blockedEarly = ns.blockedEarly or {}
+      if #ns.blockedEarly < 20 then
+        ns.blockedEarly[#ns.blockedEarly + 1] = { ev, addon, func, ns.Api and ns.Api.LastProt and ns.Api.LastProt() or nil,
+          ns.BlockStack and ns.BlockStack() or nil }
+      end
+    end
     if ns.OnBlocked then ns.OnBlocked(ev, addon, func) else table.insert(ns.blockedQueue, { ev, addon, func }) end
   end)
 end

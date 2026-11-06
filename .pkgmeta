@@ -5,6 +5,10 @@ move-folders:
   KeineZeitLevelingGuide/KeineZeitLevelingGuide_Farming: KeineZeitLevelingGuide_Farming
   KeineZeitLevelingGuide/KeineZeitLevelingGuide_Log: KeineZeitLevelingGuide_Log
 
+manual-changelog:
+  filename: KeineZeitLevelingGuide/_Versionen.txt
+  markup-type: plain
+
 ignore:
   - README.md
   - .github

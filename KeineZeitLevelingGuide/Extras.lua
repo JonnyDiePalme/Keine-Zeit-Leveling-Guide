@@ -84,7 +84,7 @@ local function Rebuild()
   ns.neededItems = need
   neededNames = {}
   for id, why in pairs(need) do
-    local name = GetItemInfo and GetItemInfo(id)
+    local name = ns.Api.GetItemInfo and ns.Api.GetItemInfo(id)
     if name then neededNames[name] = why end
   end
 end
@@ -245,9 +245,9 @@ local function Score(link)
   if not link then return 0, nil end
   local _, cls = UnitClass("player")
   local w = W[cls] or W.WARRIOR
-  local stats = GetItemStats and GetItemStats(link) or {}
+  local stats = ns.Api.GetItemStats and ns.Api.GetItemStats(link) or {}
   local s = 0
-  local _, _, _, _, _, _, _, _, loc, _, _, classID, subID = GetItemInfo(link)
+  local _, _, _, _, _, _, _, _, loc, _, _, classID, subID = ns.Api.GetItemInfo(link)
   for k, v in pairs(stats) do
     local key = STAT[k]
     if key == "DPS" and (loc == "INVTYPE_RANGED" or loc == "INVTYPE_RANGEDRIGHT" or loc == "INVTYPE_THROWN") and w.RDPS then key = "RDPS" end
@@ -272,7 +272,7 @@ end
 -- Zweihaender in der Haupthand? Beidhaendig kaempfen gelernt?
 local function MainIs2H()
   local l = GetInventoryItemLink and GetInventoryItemLink("player", 16)
-  local eq = l and select(9, GetItemInfo(l))
+  local eq = l and select(9, ns.Api.GetItemInfo(l))
   return eq == "INVTYPE_2HWEAPON"
 end
 local function CanDW()
@@ -373,7 +373,7 @@ end
 -- Zum Verkaufen zuerst ein Teil, das du tragen kannst, wenn es gleich viel bringt. Jede Wahl kommt ins Test Log
 local ARMOR_NAME = { [1] = "Stoff", [2] = "Leder", [3] = "Kette", [4] = "Platte", [6] = "Schild" }
 local function ArmorOf(link)
-  local _, _, _, _, _, _, _, _, loc, _, _, classID, subID = GetItemInfo(link)
+  local _, _, _, _, _, _, _, _, loc, _, _, classID, subID = ns.Api.GetItemInfo(link)
   if classID == 4 then return ARMOR_NAME[subID] or ("Art " .. tostring(subID)), loc end
   if classID == 2 then return "Waffe", loc end
   return "anderes", loc
@@ -391,10 +391,10 @@ function ns.BestReward()
       local use = s and s >= 0 and UsableChoice(i)
       local ok = gain and use and (gain > 0.5 or (empty and gain > 0))
       if ok and (not bestGain or gain > bestGain) then best, bestGain = i, gain end
-      local price = select(11, GetItemInfo(link)) or 0
+      local price = select(11, ns.Api.GetItemInfo(link)) or 0
       if not bestSell or price > bestSell or (price == bestSell and use) then bestSell, sellIdx = price, i end
       local art = ArmorOf(link)
-      info[#info + 1] = ("%d %s (%s, Wertung %.1f, Gewinn %s%s%s)"):format(i, (GetItemInfo(link)) or "?", art, s or 0,
+      info[#info + 1] = ("%d %s (%s, Wertung %.1f, Gewinn %s%s%s)"):format(i, (ns.Api.GetItemInfo(link)) or "?", art, s or 0,
         gain and ("%.1f"):format(gain) or "-", empty and ", Platz leer" or "", use and "" or ", kann nicht tragen")
     end
   end
@@ -493,7 +493,7 @@ f:SetScript("OnEvent", function(_, event, a1)
       Bags(function(id) if ns.neededItems[id] then now[id] = (now[id] or 0) + 1 end end)
       for id, n in pairs(snapshot) do
         if (now[id] or 0) < n then
-          local name = GetItemInfo(id) or (TR"Item " .. id)
+          local name = ns.Api.GetItemInfo(id) or (TR"Item " .. id)
           Warn((TR"Achtung: %s verkauft, %s. Beim Händler unter Rückkauf zurückholen!"):format(name, ns.neededItems[id]))
         end
       end
@@ -640,17 +640,17 @@ function ns.SupplyNeeds()
   local food, water = 0, 0
   local info = (C_Container and C_Container.GetContainerItemInfo) or nil
   Bags(function(id, bag, slot)
-    local _, _, _, _, _, _, _, _, _, _, _, classID, subID = GetItemInfo(id)
+    local _, _, _, _, _, _, _, _, _, _, _, classID, subID = ns.Api.GetItemInfo(id)
     if classID == 0 and subID == 5 then
       local count = 1
       if info then
         local t = info(bag, slot)
         count = (type(t) == "table" and t.stackCount) or 1
-      elseif GetContainerItemInfo then
-        local _, c = GetContainerItemInfo(bag, slot)
+      elseif ns.Api.GetContainerItemInfo then
+        local _, c = ns.Api.GetContainerItemInfo(bag, slot)
         count = c or 1
       end
-      local spell = GetItemSpell and GetItemSpell(id) or ""
+      local spell = ns.Api.GetItemSpell and ns.Api.GetItemSpell(id) or ""
       if spell:find("Trinken") or spell:find("Drink") then water = water + count else food = food + count end
     end
   end)
@@ -676,7 +676,7 @@ local function CheckWeapon()
   if not (ns.db and ns.db.weaponHint ~= false and GetSkillLineInfo and GetNumSkillLines) then return end
   local link = GetInventoryItemLink and GetInventoryItemLink("player", 16)
   if not link then return end
-  local _, _, _, _, _, _, sub = GetItemInfo(link)
+  local _, _, _, _, _, _, sub = ns.Api.GetItemInfo(link)
   if type(sub) ~= "string" then return end
   local want = sub:lower()
   -- erst genau gleich ("Zweihandschwerter" nicht als "Schwerter" erkennen), dann Teilstring
@@ -725,14 +725,14 @@ function ns.ShoppingList()
     local drops = QI(qdb, item, "npcDrops")
     local odrops = QI(qdb, item, "objectDrops")
     if (type(drops) == "table" and #drops > 0) or (type(odrops) == "table" and #odrops > 0) then return end
-    local have = (GetItemCount and GetItemCount(item)) or 0
+    local have = (ns.Api.GetItemCount and ns.Api.GetItemCount(item)) or 0
     if need and have >= need then return end
     local vend = QI(qdb, item, "vendors")
     local where = TR"im Auktionshaus oder herstellen"
     if type(vend) == "table" and vend[1] then
       where = TR"beim Händler " .. (NI(vend[1], "name") or "?")
     end
-    table.insert(out, { item = item, name = name or GetItemInfo(item) or (TR"Item " .. item), need = need, have = have, quest = quest, where = where })
+    table.insert(out, { item = item, name = name or ns.Api.GetItemInfo(item) or (TR"Item " .. item), need = need, have = have, quest = quest, where = where })
   end
   -- Quests im Log
   for qid, p in pairs(ns.logProgress or {}) do

@@ -712,7 +712,7 @@ function ns.EndSession()
   if #on > 0 then ns.Print(TR"Auf dem Weg noch abgeben: " .. table.concat(on, ", ")) end
   -- Forever (17.5): der Schlafsack zaehlt auch als Ruhezone, Ausloggen darin geht ueberall
   if ns.HasSleepingBag and ns.HasSleepingBag() then
-    local cd = (C_Container and C_Container.GetItemCooldown) or GetItemCooldown
+    local cd = (C_Container and C_Container.GetItemCooldown) or ns.Api.GetItemCooldown
     local st, dur = 0, 0
     if cd then st, dur = cd(211527) end
     local left = (st and dur and dur > 1.5) and (st + dur - GetTime()) or 0
@@ -724,7 +724,7 @@ function ns.EndSession()
     if ns.TestLog then ns.TestLog("FEIERABEND", ("Schlafsack als Möglichkeit genannt (bereit %s)"):format(left > 0 and "nein" or "ja")) end
   end
   local bi = ns.db and ns.db.bindInn
-  local ready = GetItemCooldown and select(2, GetItemCooldown(6948)) == 0 and (not GetItemCount or GetItemCount(6948) > 0)
+  local ready = ns.Api.GetItemCooldown and select(2, ns.Api.GetItemCooldown(6948)) == 0 and (not ns.Api.GetItemCount or ns.Api.GetItemCount(6948) > 0)
   if bi and ready and d and d > 600 then
     ns.Print((TR"Schneller: Ruhestein benutzen, du bist in %s gebunden."):format(ns.ZoneName(bi[1])))
   end
@@ -785,7 +785,7 @@ function ns.TrainerSpells(L, onlyLevel)
       local up = false
       if ok and e.r then
         local need = e.r[1]
-        local n1, n2 = GetSpellInfo(id), GetSpellInfo(need)
+        local n1, n2 = ns.Api.GetSpellInfo(id), ns.Api.GetSpellInfo(need)
         up = n1 ~= nil and n1 == n2
         -- braucht einen Zauber, den du nicht hast und der auch nicht beim Lehrer wartet (Form, Talent): weglassen
         if not Known(need) and not pend[need] then ok = false end
@@ -821,7 +821,7 @@ local function SpellRank(id)
     local ok, r = pcall(GetSpellSubtext, id)
     if ok and type(r) == "string" and r ~= "" then return r end
   end
-  local _, r = GetSpellInfo(id)
+  local _, r = ns.Api.GetSpellInfo(id)
   if type(r) == "string" and r ~= "" then return r end
 end
 function ns.TrainerPopup(L, force)
@@ -914,9 +914,9 @@ function ns.TrainerPopup(L, force)
       tp.rows[i] = r
     end
     r.id, r.isUp = e.id, e.up
-    r.icon:SetTexture(GetSpellTexture and GetSpellTexture(e.id) or "Interface\\Icons\\INV_Misc_QuestionMark")
+    r.icon:SetTexture(ns.Api.GetSpellTexture and ns.Api.GetSpellTexture(e.id) or "Interface\\Icons\\INV_Misc_QuestionMark")
     r.up:SetShown(e.up and true or false)
-    local nm = GetSpellInfo and GetSpellInfo(e.id) or ("#" .. e.id)
+    local nm = ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(e.id) or ("#" .. e.id)
     local rk = SpellRank(e.id)
     r.name:SetText(nm .. (rk and (" |cff9d9d9d" .. rk .. "|r") or "") .. (e.lvl < L - 1 and (" |cffff9030(" .. (TR"seit Level %d"):format(e.lvl) .. ")|r") or ""))
     local c, row = math.floor((i - 1) / perCol), (i - 1) % perCol
@@ -1114,6 +1114,8 @@ do
     -- 19.33c (absprache hearth_bind, Navi Befund): nur EIN Lernen pro Zauber. Sonst lernte jedes Neuladen, Schiff oder
     -- Zeppelin in den 90 s danach die Stelle dort als Ruhestein Ort
     castAt = -999
+    -- 1.1 (S Log L14.5): angekommen, die Route nachfuehren
+    if ns.AfterHearth then C_Timer.After(1, function() pcall(ns.AfterHearth) end) end
   end
   hf:SetScript("OnEvent", function(_, e, unit, _, spellID)
     if e == "UNIT_SPELLCAST_SUCCEEDED" then
@@ -1298,14 +1300,14 @@ ev:SetScript("OnEvent", function(_, event, ...)
           -- Art "binder" oder Symbol vom Gastwirt (jede Spielsprache), sonst der Text auf Deutsch, Englisch, Franzoesisch, Spanisch
           if o.type == "binder" or o.icon == 132052 or t:find("zuhause", 1, true) or t:find("your home", 1, true)
             or t:find("foyer", 1, true) or t:find("hogar", 1, true) then
-            pcall(C_GossipInfo.SelectOption, o.gossipOptionID); picked = true; break
+            ns.Api.Prot("C_GossipInfo.SelectOption", C_GossipInfo.SelectOption, o.gossipOptionID); picked = true; break
           end
         end
       end
       if not picked and GetGossipOptions and SelectGossipOption then
         local g = { GetGossipOptions() }
         for k = 1, #g, 2 do
-          if g[k + 1] == "binder" then pcall(SelectGossipOption, (k + 1) / 2); break end
+          if g[k + 1] == "binder" then ns.Api.Prot("SelectGossipOption", SelectGossipOption, (k + 1) / 2); break end
         end
       end
     end

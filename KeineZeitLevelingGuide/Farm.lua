@@ -72,7 +72,7 @@ function ns.ItemValue(id)
   if not id then return 0 end
   local c = valCache[id]
   if c and GetTime() - c.t < 120 then return c.v, c.src end
-  local _, link, quality, _, _, _, _, _, _, _, sell = GetItemInfo(id)
+  local _, link, quality, _, _, _, _, _, _, _, sell = ns.Api.GetItemInfo(id)
   if quality == nil then
     -- noch nicht im Cache: beim Spiel anfragen, kommt beim naechsten Mal
     if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id) end
@@ -159,7 +159,7 @@ end
 
 -- braucht ein offenes Questziel gerade dieses Item? (dann zaehlt der Kill als Versuch)
 local function QuestWanted(item)
-  local name = GetItemInfo and GetItemInfo(item)
+  local name = ns.Api.GetItemInfo and ns.Api.GetItemInfo(item)
   if not name then return false end
   for _, lp in pairs(ns.logProgress or {}) do
     if not lp.complete then
@@ -319,9 +319,9 @@ end
 -- Kills zaehlen ohne Kampflog (auf Forever fuer Addons gesperrt): dein Ziel stirbt und war deins
 local counted = {}
 local function CountTargetKill()
-  if not (UnitExists and UnitExists("target") and UnitIsDead and UnitIsDead("target")) then return end
-  if UnitIsPlayer and UnitIsPlayer("target") then return end
-  if UnitIsTapDenied and UnitIsTapDenied("target") then return end
+  if not (UnitExists and ns.Api.U(UnitExists, "target") and UnitIsDead and ns.Api.U(UnitIsDead, "target")) then return end
+  if UnitIsPlayer and ns.Api.U(UnitIsPlayer, "target") then return end
+  if UnitIsTapDenied and ns.Api.U(UnitIsTapDenied, "target") then return end
   local g = Plain(UnitGUID("target"))
   if type(g) ~= "string" or counted[g] then return end
   counted[g] = GetTime()
@@ -843,7 +843,7 @@ function ns.FarmSpotLines(s)
       table.sort(items, function(a, b) return a.v > b.v end)
       for j, it in ipairs(items) do
         if j > 3 or it.v <= 0 then break end
-        local name = GetItemInfo(it.id) or (TR"Item " .. it.id)
+        local name = ns.Api.GetItemInfo(it.id) or (TR"Item " .. it.id)
         table.insert(out, (TR"      |cff9d9d9d%s %s, %s pro Kill (%s)|r"):format(name, Pct(math.min(it.rate, 9.99)), ns.Money(it.v), it.src or "?"))
       end
     end

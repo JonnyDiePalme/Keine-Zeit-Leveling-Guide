@@ -1,7 +1,25 @@
-Keine Zeit Leveling Guide 1.0 (WoW Forever)
+Keine Zeit Leveling Guide 1.1 (WoW Forever)
 Autor: jonnydiepalme. Lizenz: GNU General Public License Version 3 oder später (GPLv3), Volltext in LICENSE.txt.
 Copyright (C) 2026 jonnydiepalme. Dieses Programm ist freie Software: du kannst es unter den Bedingungen der GPLv3
 weitergeben und verändern. Es wird OHNE JEDE GEWÄHRLEISTUNG bereitgestellt, Einzelheiten in LICENSE.txt.
+
+Neu in Version 1.1
+- Fehler behoben (Forever Client 1.60.1)
+- Leveling Route optimiert, rechnet flüssig in Schritten
+- Navi und Pfeil verbessert, auch in Städten
+- Log erweitert
+- Neue Anzeige im Mini Fenster: jetzige Quest farbig, Höhe zum Ziel
+- Marker von weitem, Kartenpunkt aufs Ziel
+- Gold Statistik, Mein Weg mit Ausrüstung, Knopf an der Minimap
+
+New in version 1.1
+- Bugs fixed (Forever client 1.60.1)
+- Leveling route optimized, calculates smoothly in steps
+- Navi and arrow improved, also in cities
+- Log extended
+- New display in the mini window: current quest colored, height to the target
+- Markers from afar, map pin on the target
+- Gold statistics, my way with gear, minimap button
 
 Was drin ist (Version 1.0)
 - Leveling Route von 1 bis 60 mit Tempo Regler (Alles oder Normal, Grinden an oder aus), rechnet selbst nach, wenn du

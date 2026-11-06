@@ -2,11 +2,12 @@
 ## Title: Keine Zeit Leveling Guide
 ## Notes: Keine Zeit Leveling Guide: Leveling Route fuer WoW Forever mit Pfeil, Mini Fenster, Karte, Tempo Regler, Zielen und Gruppen Sync
 ## Author: jonnydiepalme
-## Version: 1.0
+## Version: 1.1
 ## X-License: GPL-3.0-or-later, see LICENSE.txt
 ## OptionalDeps: TaurenRoute, QuestieDB, NauticusClassicResurrected, ElvUI, Questie, OpenMap, GatherMate2, AtlasLootClassic, AtlasLootContinued, Auctionator, Leatrix_Maps, Leatrix_Plus, TomTom, RXPGuides, ZygorGuidesViewerClassic, WeakAuras, Details, Plater, DBM-Core, BigWigs, TradeSkillMaster, Baganator, Syndicator, Bagnon, pfQuest, Bartender4, Dominos, Prat-3.0, Altoholic, DataStore, Armory, AtlasLoot, Gargul, NovaWorldBuffs, NovaInstanceTracker, RareScanner, VuhDo, MRT, Decursive, Dejunk, WIM, OmniCC, LoonBestInSlot, Guild_Roster_Manager
 ## SavedVariables: KeineZeitLevelingGuideDB
 
+Compat.lua
 Locale.lua
 Locale_enUS.lua
 Route.lua

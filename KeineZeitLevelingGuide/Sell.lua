@@ -5,7 +5,7 @@ local TR = ns.TR
 -- beim Haendler ein Knopf "Haendler Kram verkaufen" (nur graue Items).
 
 local function Worth(id, link)
-  local vendor = select(11, GetItemInfo(link or id)) or 0
+  local vendor = select(11, ns.Api.GetItemInfo(link or id)) or 0
   local ah = ns.AHPrice and ns.AHPrice(id, link)
   -- AH lohnt, wenn nach 5% Gebuehr klar mehr als beim Haendler (und mindestens 20 Silber mehr)
   if ah and ah * 0.95 > vendor * 1.5 and ah * 0.95 - vendor > 2000 then return "ah", ah, vendor end
@@ -22,7 +22,7 @@ local function OnItem(tt)
   if not link then return end
   local id = tonumber(link:match("item:(%d+)"))
   if not id then return end
-  local _, _, quality, _, _, _, _, _, _, _, sell = GetItemInfo(link)
+  local _, _, quality, _, _, _, _, _, _, _, sell = ns.Api.GetItemInfo(link)
   if not sell or sell <= 0 then return end
   local w, ah = Worth(id, link)
   if w == "ah" then
@@ -54,8 +54,8 @@ local function Info(bag, slot)
     if i then return i.hyperlink, i.quality, i.itemID end
     return
   end
-  if GetContainerItemInfo then
-    local _, _, _, q, _, _, link, _, _, id = GetContainerItemInfo(bag, slot)
+  if ns.Api.GetContainerItemInfo then
+    local _, _, _, q, _, _, link, _, _, id = ns.Api.GetContainerItemInfo(bag, slot)
     return link, q, id
   end
 end
@@ -68,7 +68,7 @@ local function JunkList()
     for slot = 1, (nslots and nslots(bag) or 0) do
       local link, q, id = Info(bag, slot)
       if link and id then
-        local _, _, _, _, _, class, _, _, equipLoc, _, sell, classID = GetItemInfo(link)
+        local _, _, _, _, _, class, _, _, equipLoc, _, sell, classID = ns.Api.GetItemInfo(link)
         -- Quest Items an der Klasse 12 erkennen (der Text "Quest" ist je nach Sprache anders)
         local quest = (ns.neededItems and ns.neededItems[id]) or classID == 12 or class == "Quest" or class == "Quest Item" or class == "Quest Items"
         if sell and sell > 0 and not quest then
@@ -93,7 +93,7 @@ function ns.SellJunk()
       if not (MerchantFrame and MerchantFrame:IsShown()) then return end
       -- liegt noch dasselbe Teil auf dem Platz? (Doppelklick, Kauf in der Zwischenzeit)
       local now = Info(e.bag, e.slot)
-      if now == e.link then use(e.bag, e.slot) end
+      if now == e.link then ns.Api.Prot("UseContainerItem", use, e.bag, e.slot) end
     end)
     total = total + e.sell
   end

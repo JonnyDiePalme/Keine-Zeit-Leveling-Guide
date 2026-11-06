@@ -23,8 +23,8 @@ local function FromGroup(ch, sender)
   if ch ~= "PARTY" and ch ~= "RAID" and ch ~= "INSTANCE_CHAT" then return false end
   if type(sender) ~= "string" then return false end
   local n = (Ambiguate and Ambiguate(sender, "none")) or sender:gsub("%-.*$", "")
-  if UnitIsUnit and UnitIsUnit(n, "player") then return true end
-  return ((UnitInParty and UnitInParty(n)) or (UnitInRaid and UnitInRaid(n))) and true or false
+  if UnitIsUnit and ns.Api.U(UnitIsUnit, n, "player") then return true end
+  return ((UnitInParty and ns.Api.U(UnitInParty, n)) or (UnitInRaid and ns.Api.U(UnitInRaid, n))) and true or false
 end
 
 -- verschicken, gebremst. Sagt das Spiel "zu viele Nachrichten", bleibt die Nachricht vorne und es geht spaeter weiter.
@@ -258,7 +258,7 @@ function ns.GroupSendPorts(full)
     for portal in pairs(ns.PORTAL_TELE) do if KnownSpell(portal) then ids[#ids + 1] = portal end end
   end
   table.sort(ids)
-  local runes = (GetItemCount and GetItemCount(RUNE_PORTALS)) or 0
+  local runes = (ns.Api.GetItemCount and ns.Api.GetItemCount(RUNE_PORTALS)) or 0
   local msg = "TP|" .. table.concat(ids, ",") .. "|" .. runes
   -- Nicht Magier schicken nichts (ausser bei full einmal leer, damit alte Angaben beim Partner verschwinden)
   if #ids == 0 and not full then return end

@@ -1,6 +1,6 @@
 -- Mein Weg: kleine Figur vom eigenen Charakter, die den Weg bis 60 entlang laeuft (17.4, Wunsch Sascha).
 -- Das 3D Modell zeichnet WoW selbst (wie im Charakterfenster), mit der Ausruestung, die man gerade traegt.
--- Alle 5 Level merkt sich das Addon die Ausruestung (pro Charakter, db.wegGear). Der Knopf Rueckblick auf der
+-- Jedes Level (1.1, vorher alle 5) merkt sich das Addon die Ausruestung (pro Charakter, db.wegGear). Der Knopf Rueckblick auf der
 -- Karte Level 60 laesst die Figur den Weg nochmal ablaufen, mit dem, was man damals anhatte.
 local ADDON, ns = ...
 local TR = ns.TR
@@ -32,11 +32,14 @@ local function GearNow()
   return n > 0 and t or nil
 end
 
+-- 1.1 (S Log L9.8 "Mein Weg: Ausruestung bei den Level Schritten speichern, der Avatar veraendert sich dann"): jetzt bei
+-- jedem Level und jedem Wechsel der Ausruestung (Stand am Ende des Levels), nicht mehr nur alle 5 Level
+local UPGRADE_STOP_S = 1.4          -- Figur bleibt bei einem Ausruestungs Wechsel so lange stehen
 local function Snap(L)
   local db = ns.db
   if not db then return end
   L = tonumber(L) or UnitLevel("player")
-  if not L or L < 5 or L % 5 ~= 0 then return end
+  if not L or L < 1 then return end
   local g = GearNow()
   if not g then return end
   if type(db.wegGear) ~= "table" then db.wegGear = {} end
@@ -50,12 +53,18 @@ local function GearFor(L)
   local g = ns.db and ns.db.wegGear
   if type(g) ~= "table" then return nil end
   local cur = UnitLevel("player") or 60
-  local b = math.max(5, math.floor(L / 5) * 5)
-  while b <= cur and b <= 60 do
-    if type(g[b]) == "table" then return g[b], b end
-    b = b + 5
+  L = math.floor(L or cur)
+  if L >= cur then return nil end
+  -- 1.1: Stand vom hoechsten gemerkten Level bis L, sonst der naechste hoehere (bis zu deinem Level)
+  local best, bl
+  for lv, t in pairs(g) do
+    if type(lv) == "number" and type(t) == "table" and lv <= L and (not bl or lv > bl) then best, bl = t, lv end
   end
-  return nil
+  if best then return best, bl end
+  for lv, t in pairs(g) do
+    if type(lv) == "number" and type(t) == "table" and lv > L and lv <= cur and (not bl or lv < bl) then best, bl = t, lv end
+  end
+  return best, bl
 end
 
 local ev = CreateFrame("Frame")
@@ -69,10 +78,10 @@ ev:SetScript("OnEvent", function(_, e, a1)
   elseif e == "PLAYER_EQUIPMENT_CHANGED" then
     pcall(Snap)
   else
-    -- beim Einloggen: auf einer 5er Stufe und noch nichts gemerkt
+    -- beim Einloggen: fuer dieses Level noch nichts gemerkt
     local L = UnitLevel("player")
     local g = ns.db and ns.db.wegGear
-    if L and L % 5 == 0 and not (type(g) == "table" and g[L]) then pcall(Snap, L) end
+    if L and not (type(g) == "table" and g[L]) then pcall(Snap, L) end
   end
 end)
 
@@ -262,8 +271,14 @@ local function Arrive()
   if fig then fig:SetScript("OnUpdate", nil) end
 end
 
+local holdUntil, lastGearL
 local function OnUpdate(_, el)
   if not (path and cur and target) then return end
+  -- 1.1: bei einem Ausruestungs Wechsel kurz stehen bleiben (zum Betrachter gedreht)
+  if holdUntil then
+    if GetTime() < holdUntil then return end
+    holdUntil = nil
+  end
   AnimPace(el)
   el = math.min(el or 0, 0.1)
   local d = target - cur
@@ -279,12 +294,25 @@ local function OnUpdate(_, el)
   if d < 0 then dx, dy = -(dx or 0), -(dy or 0) end
   SetAnim(ANIM_WALK)
   if dx and math.abs(dx) > math.abs(dy or 0) then SetFace(dx > 0 and SIDE or -SIDE) else SetFace(0) end
-  -- Rueckblick: alle 5 Level die Ausruestung von damals
-  if replay then SetGear(GearFor(LOf(cur))) end
+  -- 1.1: unterwegs (und im Rueckblick) die Ausruestung von damals, bei einem Wechsel kurz stehen bleiben
+  local g, gl = GearFor(LOf(cur))
+  if (g and tostring(g) or "jetzt") ~= gearKey then
+    -- nur bei einem echten Upgrade unterwegs (spaeteres Level als bisher) stehen bleiben, nicht beim Start
+    local up = d > 0 and lastGearL ~= nil and (gl or 99) > lastGearL
+    lastGearL = gl or 99
+    SetGear(g)
+    if up then
+      holdUntil = GetTime() + UPGRADE_STOP_S / Tempo()
+      Call("SetPaused", false)
+      SetAnim(ANIM_STAND)
+      SetFace(FRONT)
+    end
+  end
 end
 
 local function Walk()
   if not (fig and path) then return end
+  lastGearL, holdUntil = nil, nil
   if not cur then cur = SOf((ns.db and tonumber(ns.db.wegSeen)) or 1) end
   target = SOf(LevelNow())
   Place()
@@ -345,7 +373,7 @@ local function ReplayButton(pg, b)
     r:SetScript("OnEnter", function(self)
       ns.TipOwner(self, "ANCHOR_TOP")
       GameTooltip:AddLine(TR"Rückblick")
-      GameTooltip:AddLine(TR"Dein Charakter läuft den ganzen Weg nochmal ab, in der Ausrüstung von damals (alle 5 Level).", 1, 1, 1, true)
+      GameTooltip:AddLine(TR"Dein Charakter läuft den ganzen Weg nochmal ab, in der Ausrüstung von damals (jedes Level).", 1, 1, 1, true)
       GameTooltip:Show()
     end)
     r:SetScript("OnLeave", function() GameTooltip:Hide() end)

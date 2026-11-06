@@ -15,15 +15,15 @@ local function Units()
   for i = 1, raid and n or math.max(0, n - 1) do
     local u = (raid and "raid" or "party") .. i
     local name = UnitName(u)
-    if name and not UnitIsUnit(u, "player") then out[(Ambiguate and Ambiguate(name, "short")) or name] = u end
+    if name and not ns.Api.U(UnitIsUnit, u, "player") then out[(Ambiguate and Ambiguate(name, "short")) or name] = u end
   end
   return out
 end
 
 local function InRange(u)
-  if not (UnitIsConnected and UnitIsConnected(u)) then return false end
+  if not (UnitIsConnected and ns.Api.U(UnitIsConnected, u)) then return false end
   if UnitInRange then
-    local inR, checked = UnitInRange(u)
+    local inR, checked = ns.Api.U(UnitInRange, u)
     inR, checked = ns.Plain(inR), ns.Plain(checked)
     if checked then return inR and true or false end
   end
@@ -111,7 +111,7 @@ local function Tick()
           if GetQuestLogPushable and not GetQuestLogPushable() then
             noShare[qid] = true
           else
-            QuestLogPushQuest()
+            ns.Api.Prot("QuestLogPushQuest", QuestLogPushQuest)
             lastPush = { qid = qid, at = now, who = targets }
             for _, who in ipairs(targets) do
               local t = tries[qid .. who] or { n = 0 }
@@ -285,7 +285,7 @@ function ns.PartySplit(d)
   if not d then return end
   if not (IsInGroup and IsInGroup()) then ns.Print(TR"Du bist in keiner Gruppe."); return end
   -- nur der Gruppenleiter teilt auf (er rechnet die Schritte aller Mitglieder, sonst gibt es zwei Aufteilungen)
-  if UnitIsGroupLeader and not UnitIsGroupLeader("player") then ns.Print(TR"Nur der Gruppenleiter kann die Dungeon Quests aufteilen."); return end
+  if UnitIsGroupLeader and not ns.Api.U(UnitIsGroupLeader, "player") then ns.Print(TR"Nur der Gruppenleiter kann die Dungeon Quests aufteilen."); return end
   -- zuerst bei allen mit Wegweiser den Stand der Dungeon Quests abfragen, dann aufteilen
   if ns.AskDungeonStatus then
     ns.AskDungeonStatus(d.key or d.name)
@@ -410,7 +410,7 @@ function ns.PartyOnMessage(kind, from, key, target, list)
   if target ~= UnitName("player") then return end
   -- nur vom Gruppenleiter annehmen (Mitglieder mit alter Version oder aus Versehen ueberschreiben sonst die Aufteilung)
   local n = type(from) == "string" and ((Ambiguate and Ambiguate(from, "none")) or from:gsub("%-.*$", "")) or nil
-  if not (n and UnitIsGroupLeader and UnitIsGroupLeader(n)) then
+  if not (n and UnitIsGroupLeader and ns.Api.U(UnitIsGroupLeader, n)) then
     if ns.MsgReject then ns.MsgReject("Dungeon Aufteilung: nicht vom Leiter") end
     return
   end

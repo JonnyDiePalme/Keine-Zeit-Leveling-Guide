@@ -407,6 +407,181 @@ end
 -- Schritte einer Quest bauen
 ------------------------------------------------------------
 local ACC_SEC, TURN_SEC = 8, 8
+-- 1.1: alle neuen Konstanten und Hilfen in einer Tabelle (Optimizer.lua ist nahe an 200 lokalen Namen)
+local V11 = {}
+-- 1.1 (P38, S 11:24): Rechnen sichtbar in Schritten. Stand in Prozent fuers Mini Fenster (nur steigend je Rechnung),
+-- Mini Fenster hoechstens alle STAGE_HUD_S neu. Ein Rechen Stueck ueber LONG_STEP_MS kommt mit Phase ins Test Log
+V11.STAGE_HUD_S = 0.5
+V11.LONG_STEP_MS = 60
+V11.LONG_STEP_LOG_MAX = 20
+V11.stage = { gen = nil, pct = 0, at = 0 }
+V11.longSteps = 0
+function V11.Stage(gen, p0, p1, k, n)
+  local st = V11.stage
+  if st.gen ~= gen then st.gen = gen; st.pct = 0 end
+  local p = p0 + (p1 - p0) * math.min(1, (k or 0) / math.max(1, n or 1))
+  if p > st.pct then st.pct = p end
+  ns.optPct = math.floor(st.pct)
+  local now = GetTime and GetTime() or 0
+  if ns.RefreshHud and now - st.at >= V11.STAGE_HUD_S then st.at = now; pcall(ns.RefreshHud) end
+end
+-- Gebiete fuer Grind Stellen einzeln analysieren (vorher alle auf einmal vor dem ersten Bild)
+function V11.GrindTodo(list)
+  while list and #list > 0 do
+    Tick()
+    ns.GrindList(table.remove(list))
+  end
+end
+-- 1.1 (S Log: Annehmen/Abgeben im Dorf 35 s geschaetzt, echt bis 3 Min; 24 Schritte ueber 2x, fast alle A/T in Doerfern
+-- und Staedten): Zuschlag fuer Questgeber in einer Stadt oder in einem Quest Hub (Daten ns.cityParent, ns.hubs), dort
+-- kosten Suchen, Gebaeude und Treppen Zeit. Allgemein aus den Daten, keine Orts Liste
+-- v11d (K 10:05, S 09:55): S Log Zeiten sind langsamer als normal (Berufe, Chat, volle Gebiete beim Start). Zuschlaege
+-- darum klein, aus bereinigtem Median (Median Zusatz pro A/T lag bei 17 s, Schaetzung bei 18 s), Ausreisser zaehlen nicht
+V11.HUB_EXTRA_SEC = 8        -- Questgeber in einem Quest Hub (Dorf)
+V11.CITY_EXTRA_SEC = 15      -- Questgeber in einer Stadt
+V11.HUB_RADIUS = 0.05        -- Kartenanteil, wie Quest.lua NearHub
+V11.INDOOR_EXTRA_SEC = 12     -- Questgeber in einem Gebaeude oder auf anderer Hoehe (Stadt.lua innen, grund g/h)
+V11.INDOOR_YD = 15            -- so nah an einem innen Punkt
+-- 1.1 (K Stufe B 11): Zeitlimit. Schaetzung am Stueck: Annehmen, dann die Ziele (je der erste Ort), dann Abgeben,
+-- Luftlinie mal Umweg Faktor plus die Zeiten der Knoten. Passt das nicht mit Reserve in das Limit, wird die Quest
+-- nicht vorgeschlagen (Grund "Zeitlimit nicht schaffbar")
+V11.REST_RETRY_MAX = 30         -- v11e: Nach 60 so oft ein leeres Stueck ueberspringen
+V11.AREA_MIN_PTS = 4           -- v11d: ab so vielen Spawn Punkten zeigt der Pfeil auf Gebiete (vorher ueber 6)
+V11.RUND_MIN_N = 8             -- 1.1: Gebiet mit so vielen Spawns ...
+V11.RUND_MIN_R = 60            -- ... und so weit verteilt (yd) wird eine Runde
+V11.RUND_MAX = 8               -- Punkte der Runde hoechstens
+V11.RUND_CELL_YD = 35          -- v11f (P37): Spawns so nah zusammen sind ein Haufen (ein Punkt der Runde)
+V11.AREA_STALE_S = 120         -- im Gebiet so lange kein Fortschritt: naechstes Gebiet
+V11.ARROW_HOLD_S = 6           -- 1.1: Pfeil Ziel bei Questzielen hoechstens so oft wechseln (ausser erreicht)
+-- 1.1 (P43, Pr Schluss 1.1f: Pfeil hin und her +25 %): Gebiet wechseln nur, wenn du gut drin bist (Anteil vom Radius) und
+-- das letzte Wechseln ARROW_HOLD_S her ist. Live "andere Stelle" (Spot) hoechstens alle SPOT_HOLD_S und nicht gleich zurueck
+V11.AREA_ENTER_F = 0.7
+V11.SPOT_HOLD_S = 90
+-- 1.1 (P42, Pr Schluss 1.1f: Nach 60 Neu rechnen 4771 und 3031 mal): auf Max Level ein neues Stueck nur, wenn die Route
+-- abgearbeitet ist, hoechstens alle REST_MIN_GAP_S. Ist nichts mehr da, erst wieder nach einer angenommenen oder
+-- abgegebenen Quest. Quests mit zu hohen Gegnern (gleiche Regel wie beim Ankommen) gar nicht ins Stueck
+V11.REST_MIN_GAP_S = 60
+V11.REST_FOE_UP = 3
+V11.REST_QL_UP = 4
+function V11.RestFoeHigh(q, L)
+  if q.mobMax and q.mobMax - L >= V11.REST_FOE_UP then return true end
+  if q.ql and q.ql - L >= V11.REST_QL_UP then return true end
+  if q.eliteMob and not (IsInGroup and IsInGroup()) and q.eliteMob + ((ns.EliteGap and ns.EliteGap()) or 2) > L then return true end
+  return false
+end
+V11.TIMER_SAFE = 0.75          -- hoechstens so viel vom Limit verplanen
+V11.TIMER_DETOUR = 1.3         -- Umweg Faktor auf die Luftlinie
+function V11.TimedTooLong(q)
+  local lim = ns.QuestTimer and ns.QuestTimer(q.id)
+  if not lim then return false end
+  local sp = (ns.PlanSpeed and ns.PlanSpeed()) or ns.speed or 7
+  local t, prev = 0, nil
+  local order = {}
+  if q.A then order[#order + 1] = q.A end
+  for _, n in ipairs(q.nodes or {}) do if n ~= q.A and n ~= q.T then order[#order + 1] = n end end
+  if q.T then order[#order + 1] = q.T end
+  local seen = {}
+  for _, n in ipairs(order) do
+    local key = n.kind == "O" and (n.obj or n.idx or n) or n
+    if not seen[key] then
+      seen[key] = true
+      if prev and prev.wx and n.wx and prev.cont == n.cont then
+        t = t + math.sqrt((prev.wx - n.wx) ^ 2 + (prev.wy - n.wy) ^ 2) * V11.TIMER_DETOUR / sp
+      end
+      t = t + (n.dur or 0)
+      prev = n
+    end
+  end
+  return t > lim * V11.TIMER_SAFE
+end
+-- v11f (K P37): Runde aus den Spawn Haufen: Spawns nach Naehe buendeln (V11.RUND_CELL_YD), die dichtesten V11.RUND_MAX Haufen,
+-- Reihenfolge als geschlossener Kreis (naechster Nachbar, dann 2 opt). Start beim Spieler macht Arrow.lua (RundNext)
+function V11.RundLoop(list, Dist)
+  local cl = {}
+  for _, p in ipairs(list or {}) do
+    local hit
+    for _, c in ipairs(cl) do
+      local d = Dist(c.x, c.y, p[1], p[2])
+      if d and d <= V11.RUND_CELL_YD then hit = c; break end
+    end
+    if not hit then hit = { x = p[1], y = p[2], sx = 0, sy = 0, n = 0 }; cl[#cl + 1] = hit end
+    hit.sx, hit.sy, hit.n = hit.sx + p[1], hit.sy + p[2], hit.n + 1
+    hit.x, hit.y = hit.sx / hit.n, hit.sy / hit.n
+  end
+  table.sort(cl, function(a, b) return a.n > b.n end)
+  local pts = {}
+  for i = 1, math.min(#cl, V11.RUND_MAX) do pts[i] = { cl[i].x, cl[i].y } end
+  local n = #pts
+  if n < 3 then return nil end
+  local D = {}
+  for i = 1, n do D[i] = {}; for j = 1, n do D[i][j] = (i == j) and 0 or (Dist(pts[i][1], pts[i][2], pts[j][1], pts[j][2]) or 1e6) end end
+  -- naechster Nachbar ab dem dichtesten Haufen
+  local order, used = { 1 }, { [1] = true }
+  for _ = 2, n do
+    local last, bj, bd = order[#order], nil, nil
+    for j = 1, n do if not used[j] and (not bd or D[last][j] < bd) then bj, bd = j, D[last][j] end end
+    order[#order + 1] = bj; used[bj] = true
+  end
+  -- 2 opt auf dem geschlossenen Kreis
+  local improved, guard = true, 0
+  while improved and guard < 50 do
+    improved, guard = false, guard + 1
+    for i = 1, n - 1 do
+      for k = i + 1, n do
+        local a, b = order[i], order[i % n + 1]
+        local c, d = order[k], order[k % n + 1]
+        if b ~= c and a ~= d and D[a][c] + D[b][d] < D[a][b] + D[c][d] - 0.01 then
+          local lo, hi = i + 1, k
+          while lo < hi do order[lo], order[hi] = order[hi], order[lo]; lo, hi = lo + 1, hi - 1 end
+          improved = true
+        end
+      end
+    end
+  end
+  local loop = {}
+  for _, i in ipairs(order) do loop[#loop + 1] = pts[i] end
+  return loop
+end
+-- Staedte aus Stadt.lua (Ka): Rechteck in Welt Koordinaten und innen Punkte, einmal gesammelt
+function V11.Cities()
+  if V11.cityList then return V11.cityList end
+  local cityList = {}
+  V11.cityList = cityList
+  local A = _G.FWW_AUTO_STADT
+  local st = A and A.forever and A.forever.staedte
+  for _, c in pairs(type(st) == "table" and st or {}) do
+    if type(c) == "table" and type(c.rect) == "table" and #c.rect == 4 then cityList[#cityList + 1] = c end
+  end
+  return cityList
+end
+-- n: Knoten mit map, x, y, wx, wy
+function V11.PlaceExtra(n)
+  if not n then return 0 end
+  if n.wx and n.wy then
+    for _, c in ipairs(V11.Cities()) do
+      local r = c.rect
+      -- Stadt.lua hat Welt X Norden, Y Westen; je nach Karte sind die Achsen gegenueber MapWorld getauscht (wie Path torFlip)
+      local wx, wy = n.wx, n.wy
+      local inR = wx >= r[1] and wx <= r[3] and wy >= r[2] and wy <= r[4]
+      if not inR and n.wy >= r[1] and n.wy <= r[3] and n.wx >= r[2] and n.wx <= r[4] then inR, wx, wy = true, n.wy, n.wx end
+      if inR then
+        for _, p in ipairs(c.innen or {}) do
+          local dx, dy = wx - (p[1] or 1e9), wy - (p[2] or 1e9)
+          if dx * dx + dy * dy <= V11.INDOOR_YD * V11.INDOOR_YD then return V11.CITY_EXTRA_SEC + V11.INDOOR_EXTRA_SEC end
+        end
+        return V11.CITY_EXTRA_SEC
+      end
+    end
+  end
+  local map, x, y = n.map, n.x, n.y
+  if not (map and x and y) then return 0 end
+  if ns.cityParent and ns.cityParent[map] then return V11.CITY_EXTRA_SEC end
+  for _, h in ipairs(ns.hubs and ns.hubs[map] or {}) do
+    local dx, dy = x - (h[1] or -9), y - (h[2] or -9)
+    if dx * dx + dy * dy < V11.HUB_RADIUS * V11.HUB_RADIUS then return V11.HUB_EXTRA_SEC end
+  end
+  return 0
+end
 
 local function CountFromLog(prog, name)
   if not (prog and name) then return nil end
@@ -568,6 +743,7 @@ local function BuildQuest(qid, allowed, cont, inLog, prog)
     if not p then return nil end
     local n = Node("A", p[1], p[2], p[3], ACC_SEC, { who = who or "?", npc = npc })
     if not n then return nil end
+    n.dur = n.dur + V11.PlaceExtra(n)
     q.A = n
     densePrefer = n.map
     table.insert(q.nodes, n)
@@ -699,7 +875,7 @@ local function BuildQuest(qid, allowed, cont, inLog, prog)
       -- 19.31: Item von einem Mob mit nur 1 bis 2 Fundorten (Kopf eines Anfuehrers) und keine Zahl im Text: 1 Stueck
       if guess[nm or "?"] and not fromObj and nSpawn > 0 and nSpawn <= 2 then cnt = 1 end
       -- schon in der Tasche? dann weniger sammeln
-      local have = (not SIMLATE and GetItemCount and GetItemCount(c[1])) or 0
+      local have = (not SIMLATE and ns.Api.GetItemCount and ns.Api.GetItemCount(c[1])) or 0
       if not prog and have > 0 then cnt = math.max(0, cnt - have) end
       if #pts > 0 then
         -- 19.32 (418 Thelsamar Blutwurst: Spinnensekret bei Level 20 Taranteln im Rotkamm statt bei den Lauerern im Loch
@@ -778,7 +954,7 @@ local function BuildQuest(qid, allowed, cont, inLog, prog)
         table.insert(q.buy, { item = c[1], name = nm, count = cnt, vendors = vend })
         -- Haendler mit Ort: ein eigener Halt "kaufen", sonst wird abgegeben, bevor du das Item hast.
         -- Der naechste Haendler zum Questgeber (oder zum ersten Ziel), nicht irgendeiner.
-        local have = (not SIMLATE and GetItemCount and GetItemCount(c[1])) or 0
+        local have = (not SIMLATE and ns.Api.GetItemCount and ns.Api.GetItemCount(c[1])) or 0
         if type(vend) == "table" and #vend > 0 and (prog == nil or not prog.complete) and have < cnt then
           local ref = q.A or q.nodes[1]
           local bestP, bestD, bestV
@@ -858,7 +1034,7 @@ local function BuildQuest(qid, allowed, cont, inLog, prog)
       local nm2 = c[2] or O(c[1], "name"); if nm2 then srcFor[#srcFor + 1] = nm2 end
     end
     for _, id in ipairs(src) do
-      local have = (not SIMLATE and GetItemCount and GetItemCount(id)) or 0
+      local have = (not SIMLATE and ns.Api.GetItemCount and ns.Api.GetItemCount(id)) or 0
       if id and not isObj[id] and have == 0 then
         local nm = I(id, "name") or (TR"Item " .. id)
         local pts, npcs, fromObj, who = {}, {}, false, nil
@@ -941,6 +1117,7 @@ local function BuildQuest(qid, allowed, cont, inLog, prog)
   local p = pts[1]
   if not p then return nil end
   local t = Node("T", p[1], p[2], p[3], TURN_SEC, { who = who or "?", npc = npc })
+  if t then t.dur = t.dur + V11.PlaceExtra(t) end
   if not t then return nil end
   q.T = t
   table.insert(q.nodes, t)
@@ -1022,6 +1199,11 @@ local GRP_END_L = 55
 local GRIND_UP_SAFE = 0.5
 -- 20.3z4: Nach 60 Route in Stuecken von so vielen Quests (die naechsten ab dir), sonst rechnet sie mit allen Quests der Welt ewig
 local REST_CHUNK = 40
+-- 1.1 (S Log 06.11., Rechnen bis 120 s, CPU 92 s): Nachrechnen Stufe 2 und 3 im Fahrplan nahm bis 594 Quests (auch alle
+-- tieferen) in einen Abschnitt, daraus 905 Schritte. Jetzt hoechstens so viele Quests, die naechsten ab dem Abschnitts Start
+-- (angenommene und Vorquests immer dazu), wie bei "Nach 60 in Stuecken". Pr misst 120 gegen 160 gegen 200.
+V11.STUFE_MAX_CANDS = 160
+V11.STUFE_CAP_FROM = 2        -- ab dieser Nachrechnen Stufe gilt die Grenze
 -- 19.28 (Sascha: Quests und Gegner nur eigenes Level bis plus 2, in der Gruppe bis plus 2 ueber dem Gruppen Schnitt):
 -- wie viele Level du ueber dem Schnitt deiner Gruppe bist (0 allein oder wenn du nicht drueber bist). Die Grenzen rechnen
 -- dann ab deinem Level minus diesem Abstand, also nie ueber deinem eigenen plus 2 und nie ueber dem Gruppen Schnitt plus 2
@@ -1175,6 +1357,13 @@ local function CoRun(fn, onErr)
       if not e then e = { n = 0, max = 0, sum = 0 }; ns.coPerf[site] = e end
       e.n, e.sum = e.n + 1, e.sum + d
       if d > e.max then e.max = d end
+    end
+    if debugprofilestop and ns.TestLog and V11.longSteps < V11.LONG_STEP_LOG_MAX then
+      local d = debugprofilestop() - coFrame
+      if d > V11.LONG_STEP_MS then
+        V11.longSteps = V11.longSteps + 1
+        ns.TestLog("RECHNEN", ("Langes Rechen Stueck %d ms, Phase Zeile %s"):format(math.floor(d + 0.5), tostring(coPhase)))
+      end
     end
     if not ok then onErr(err); return end
     if coroutine.status(co) ~= "dead" then C_Timer.After(0, Step) end
@@ -1467,12 +1656,15 @@ function ns.Optimize(targetLevel, done, opts)
   -- Dungeon in der Gruppe: XP pro Stunde etwas besser als allein grinden
   local DUNG_F = 1.3
   -- Speed Leveling: Grind Spots der Zonen schon mal analysieren lassen
-  if (opts.speed or (fillGap and grindOK)) and ns.GrindList then for ui in pairs(allowed) do ns.GrindList(ui) end end
+  -- 1.1 (P38): nicht mehr alle Gebiete im ersten Bild, sondern in Phase1 je Gebiet mit Tick
+  local grindTodo = {}
+  if (opts.speed or (fillGap and grindOK)) and ns.GrindList then for ui in pairs(allowed) do grindTodo[#grindTodo + 1] = ui end end
   busy = true
   -- eigene Generation auch im selben Bild (Abbruch und Neustart gleichzeitig): kleiner Zaehler dazu
   ns.calcGen = (ns.calcGen or 0) + 1
   busyAt = (GetTime and GetTime() or 0) + (ns.calcGen % 1000) * 1e-6
   ns.calcSpecial = special and true or nil
+  V11.stage.gen, V11.stage.pct, ns.optPct = busyAt, 0, 0
   -- 20.3z (P11): Mini Fenster zeigt die Sanduhr gleich beim Start
   if not opts.sim and ns.RefreshHud and C_Timer then C_Timer.After(0, function() pcall(ns.RefreshHud) end) end
   calc.t0, calc.cpu, calc.frames, calc.max = busyAt, 0, 0, 0
@@ -1730,6 +1922,7 @@ function ns.Optimize(targetLevel, done, opts)
 
   local preExtra, preRound = {}, false
   local function Phase1()
+    if #grindTodo > 0 then V11.GrindTodo(grindTodo) end
     local n = 0
     local more = Budget(20)
     while i < #ids and more(n) do
@@ -1871,11 +2064,14 @@ function ns.Optimize(targetLevel, done, opts)
               local zf = zm and (zoneFrom[zm] or (ns.cityParent and ns.cityParent[zm] and zoneFrom[ns.cityParent[zm]]))
               if zf and zf - 1 > L0 + 0.5 then q.zoneL = math.floor(zf) - 1 end
             end
+            -- 1.1 (K Stufe B 11): Quest mit Zeitlimit nur, wenn Annehmen, Ziele und Abgeben am Stueck in der Zeit gehen
+            if q and not q.inLog and V11.TimedTooLong(q) then Why(TR"Zeitlimit nicht schaffbar"); q = nil end
             if q then table.insert(cands, q) end
           end
         end
       end
     end
+    V11.Stage(myGen, 0, 30, i, #ids)
     if i < #ids then Later(Phase1); return end
     -- Vorquests von Questreihen, die unter dem Level Fenster liegen und noch fehlen: nochmal pruefen
     if not preRound and not (opts.gold or opts.rep or opts.logOnly or opts.gearQ) then
@@ -1980,7 +2176,9 @@ function ns.Optimize(targetLevel, done, opts)
     -- 20.3z4 (S Test 20.3z3, K 19:06/19:09: Nach 60 Route wurde nie fertig, "rechnet alle Quests bis Level 60" mit allen
     -- Quests der Welt): auf Max Level in Stuecken. Nur die naechsten REST_CHUNK Quests ab dir (angenommene immer, Vorquests
     -- dazu), der Rest kommt mit dem naechsten Stueck, wenn dieses fertig ist
-    if opts.rest and not (ns.db and ns.db.allesBisFertig) and #cands > REST_CHUNK then
+    local chunkMax = (opts.rest and not (ns.db and ns.db.allesBisFertig) and REST_CHUNK)
+      or (opts.sim and (opts.stufe or 0) >= V11.STUFE_CAP_FROM and V11.STUFE_MAX_CANDS) or nil
+    if chunkMax and #cands > chunkMax then
       local function D(q)
         local n = q.nodes and q.nodes[1]
         if not (n and n.wx and n.cont and start.wx) then return math.huge end
@@ -1988,11 +2186,29 @@ function ns.Optimize(targetLevel, done, opts)
         if n.cont ~= start.cont then d = d + 100000 end
         return d
       end
-      local list = {}
-      for _, q in ipairs(cands) do list[#list + 1] = { q = q, d = (q.inLog or q.forced or q.classQ) and -1 or D(q) } end
-      table.sort(list, function(a, b) return a.d < b.d end)
       local byId2, keepSet = {}, {}
       for _, q in ipairs(cands) do byId2[q.id] = q end
+      -- v11e (Pr P26, Nach 60 leer in Durotar und Dun Morogh): ein Stueck aus lauter Folgequests, deren Vorquest weder
+      -- erledigt noch unter den Kandidaten ist, gibt 0 Schritte und die Route war fertig. Solche Quests jetzt nicht ins
+      -- Stueck (sie kommen, wenn die Vorquest erledigt ist), und schon versuchte Quests eines leeren Stuecks auch nicht
+      local function Have(id) return complete[id] or byId2[id] ~= nil end
+      local function Blocked(q)
+        if q.inLog or q.forced or q.classQ then return false end
+        if opts.rest and ns.restTried and ns.restTried[q.id] then return true end
+        if opts.rest and V11.RestFoeHigh(q, L0) then return true end
+        if q.preSingle and #q.preSingle > 0 then
+          local any = false
+          for _, id in ipairs(q.preSingle) do if Have(id) then any = true; break end end
+          if not any then return true end
+        end
+        for _, id in ipairs(q.preGroup or {}) do if not Have(id) then return true end end
+        return false
+      end
+      local list = {}
+      for _, q in ipairs(cands) do
+        if not Blocked(q) then list[#list + 1] = { q = q, d = (q.inLog or q.forced or q.classQ) and -1 or D(q) } end
+      end
+      table.sort(list, function(a, b) return a.d < b.d end)
       local function Keep(q, depth)
         if not q or keepSet[q.id] or depth > 8 then return end
         keepSet[q.id] = true
@@ -2001,15 +2217,22 @@ function ns.Optimize(targetLevel, done, opts)
       end
       local n = 0
       for _, e in ipairs(list) do
-        if e.d < 0 or n < REST_CHUNK then Keep(e.q, 0); if e.d >= 0 then n = n + 1 end end
+        if e.d < 0 or n < chunkMax then Keep(e.q, 0); if e.d >= 0 then n = n + 1 end end
       end
       local keep = {}
       for _, q in ipairs(cands) do if keepSet[q.id] then keep[#keep + 1] = q end end
       local n0 = #cands
       for k = 1, #keep do cands[k] = keep[k] end
       for k = #keep + 1, n0 do cands[k] = nil end
-      ns.optRestMore = n0 - #keep
-      if ns.TestLog then ns.TestLog("RECHNEN", ("Nach 60 in Stuecken: %d von %d Quests in diesem Stueck (die naechsten ab dir), %d spaeter"):format(#keep, n0, n0 - #keep)) end
+      if opts.rest then
+        ns.optRestMore = n0 - #keep
+        ns.optRestChunk = {}
+        for _, q in ipairs(keep) do ns.optRestChunk[q.id] = true end
+        if ns.TestLog then ns.TestLog("RECHNEN", ("Nach 60 in Stuecken: %d von %d Quests in diesem Stueck (die naechsten ab dir), %d spaeter"):format(#keep, n0, n0 - #keep)) end
+      else
+        ns.optRestMore = nil
+        if ns.TestLog then ns.TestLog("RECHNEN", ("Stufe %d begrenzt: %d von %d Quests (die naechsten ab Abschnitts Start)"):format(opts.stufe or 0, #keep, n0)) end
+      end
     else
       ns.optRestMore = nil
     end
@@ -2543,6 +2766,7 @@ function ns.Optimize(targetLevel, done, opts)
   end
 
   Blocks = function()
+    V11.Stage(myGen, 30, 30, 1, 1)
     if (opts.gold and not opts.goldAll) or opts.rep then
       -- Grenzwert fuer Gold und Ruf: halb so gut wie die mittlere Quest
       local r = {}
@@ -2738,6 +2962,7 @@ function ns.Optimize(targetLevel, done, opts)
         q.why = q.why or TR"Vorquest fehlt noch"
       end
     end
+    V11.Stage(myGen, 30, 75, qi, #order)
     if qi < #order then Later(Phase3); return end
     -- weitere Durchgaenge: freigeschaltete Folgequests
     pass = pass + 1
@@ -3162,6 +3387,7 @@ function ns.Optimize(targetLevel, done, opts)
   local zmPass, zmIter, zmMoves = 1, 0, 0
   local ZoneMergeStep
   ZoneMergeStep = function()
+    V11.Stage(myGen, 90, 90, 1, 1)
     -- erst Kontinente, dann Zonen (Staedte zaehlen zu ihrer Zone); ein Versuch pro Frame
     local keyOf = (zmPass == 1) and function(nd) return nd.cont end or function(nd) return Region(nd) end
     local maxI = (zmPass == 1) and (ns.FLOW.contMergeN or 6) or 25
@@ -3223,6 +3449,7 @@ function ns.Optimize(targetLevel, done, opts)
         table.insert(route, ni, node)
       end
     end
+    V11.Stage(myGen, 75, 90, ni, #route)
     if ni < #route then Later(Improve); return end
     improveRound = improveRound + 1
     if changed and improveRound < 12 then ni = 0; Later(Improve); return end
@@ -3431,6 +3658,7 @@ function ns.Optimize(targetLevel, done, opts)
   local fills = 0
   local hintGap = 0
   GrindFill = function()
+    V11.Stage(myGen, 92, 92, 1, 1)
     -- Gruppe: keine Grind Pausen (XP geteilt), der Rest wird ein Dungeon Vorschlag
     if grpDung then Later(fillGap and GapHint or HearthPlan); return end
     if fills == 0 and #spots == 0 then BuildSpots(fillGap) end
@@ -3552,6 +3780,7 @@ function ns.Optimize(targetLevel, done, opts)
   -- Quests (und Grind Pausen) reichen nicht bis zum Ziel: am Ende ein Schritt "dir fehlen noch X Level,
   -- grinden oder Dungeons". Er ist erledigt, sobald du die XP hast (bist du schon voraus, faellt er weg).
   GapHint = function()
+    V11.Stage(myGen, 94, 94, 1, 1)
     local cum = CumXP()
     local have = cum[#route + 1] or 0
     local gap = xpNeed - have
@@ -3584,10 +3813,11 @@ function ns.Optimize(targetLevel, done, opts)
   -- (Abklingzeit beachtet). Ein neuer Wirt muss den Umweg zum Binden wieder reinholen.
   ------------------------------------------------------------
   HearthPlan = function()
+    V11.Stage(myGen, 96, 96, 1, 1)
     local HS = 6948
     if not ns.Inns or #route < 3
-      or (GetItemCount and GetItemCount(HS) == 0 and not (IsSpellKnown and IsSpellKnown(556))) then Later(VendorPlan); return end
-    local cdLeft = (GetItemCount and GetItemCount(HS) == 0) and math.huge or 0
+      or (ns.Api.GetItemCount and ns.Api.GetItemCount(HS) == 0 and not (IsSpellKnown and IsSpellKnown(556))) then Later(VendorPlan); return end
+    local cdLeft = (ns.Api.GetItemCount and ns.Api.GetItemCount(HS) == 0) and math.huge or 0
     if cdLeft == 0 and ns.HearthLeft then cdLeft = ns.HearthLeft() end
     -- spaetere Abschnitte vom Fahrplan: Rest vom Abschnitt davor (dort zuletzt benutzt)
     if SIMLATE and cdLeft ~= math.huge then cdLeft = (sim and sim.hcd) or 0 end
@@ -3597,8 +3827,8 @@ function ns.Optimize(targetLevel, done, opts)
     local RECALL = 556
     local hasRecall = IsSpellKnown and IsSpellKnown(RECALL)
     local rcLeft = 0
-    if hasRecall and GetSpellCooldown then
-      local st, dur = GetSpellCooldown(RECALL)
+    if hasRecall and ns.Api.GetSpellCooldown then
+      local st, dur = ns.Api.GetSpellCooldown(RECALL)
       if st and st > 0 and dur and dur > 1.5 then rcLeft = math.max(0, st + dur - GetTime()) end
     end
     if SIMLATE then rcLeft = 0 end
@@ -4672,16 +4902,21 @@ function ns.Optimize(targetLevel, done, opts)
     if gained < xpNeed and not opts.all and not opts.speed and not opts.gold and not opts.logOnly and not opts.endInn and not opts.rep and not opts.gearQ then
       Report((TR"Mit Quests allein fehlen noch ca %d XP bis Level %d. Danach rechnet die Route den nächsten Abschnitt."):format(xpNeed - gained, targetLevel))
     end
-    if ns.Draw then ns.Draw() end
-    if ns.RefreshUI then ns.RefreshUI() end
+    -- 1.1 (P38): Karte und Fenster erst im naechsten Bild zeichnen, nicht im selben Bild wie das letzte Rechen Stueck
+    if sim or not C_Timer then
+      if ns.Draw then ns.Draw() end
+      if ns.RefreshUI then ns.RefreshUI() end
+    else
+      C_Timer.After(0, function()
+        if ns.Draw then ns.Draw() end
+        C_Timer.After(0, function() if ns.RefreshUI then ns.RefreshUI() end end)
+      end)
+    end
     if done then done(opt) end
   end
 
-  -- erster Teil gleich (ohne Coroutine, Tick gibt hier nichts frei), der Rest laeuft als Coroutine weiter
-  local p0 = debugprofilestop and debugprofilestop()
-  local okP, errP = pcall(Phase1)
-  if p0 then calc.cpu = calc.cpu + (debugprofilestop() - p0); calc.frames = calc.frames + 1 end
-  if not okP then Fail(errP) end
+  -- 1.1 (P38, S 11:24): auch der erste Teil laeuft als Coroutine (vorher ohne, im selben Bild wie der Klick)
+  Later(Phase1)
   return true
 end
 
@@ -4847,7 +5082,7 @@ local function ActDone(a)
     local c, map = PlayerCont()
     if a.link == "fly" then
       -- Flug: erst fertig, wenn wir am Ziel Flugpunkt gelandet sind
-      if UnitOnTaxi and UnitOnTaxi("player") then return false end
+      if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then return false end
       if map and a.toX and ns.WorldDist then
         local pos = C_Map.GetPlayerMapPosition(map, "player")
         if pos then
@@ -4973,7 +5208,7 @@ local function ActDone(a)
     if (not a.noQ or a.more or (a.hint and a.grp)) then
       local t = time and time() or 0
       local lim = ((a.hint and a.grp) and (ns.DUNG_RUN_MIN or 60) or (ns.GRIND_BLOCK_MIN or 15)) * 60
-      if not a.gStart and UnitAffectingCombat and UnitAffectingCombat("player") then a.gStart = t; a.gLv = L end
+      if not a.gStart and UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player") then a.gStart = t; a.gLv = L end
       -- 19.41 (AUF K 12:46, teilP skyborne 07: 176 Min am Stueck am Routen Ende): keine Quests mehr in der Route, aber im selben
       -- Fahrplan kommt noch ein Grind Stueck. Nach GRIND_BLOCK_MIN weiter zum naechsten Stueck, ohne Neu rechnen
       if a.more and a.gStart and t - a.gStart >= lim and not RouteHasQuests() then
@@ -5063,10 +5298,10 @@ local function ActDone(a)
         local items = type(sb) == "table" and sb[3]
         if type(items) == "table" then
           for _, it in ipairs(items) do
-            if GetItemCount and (GetItemCount(it) or 0) > 0 then
+            if ns.Api.GetItemCount and (ns.Api.GetItemCount(it) or 0) > 0 then
               if not a.itemHint then
                 a.itemHint = true
-                local iname = GetItemInfo and GetItemInfo(it)
+                local iname = ns.Api.GetItemInfo and ns.Api.GetItemInfo(it)
                 ns.Print((TR"Die Quest %s startet über %s in deiner Tasche: einmal anklicken, dann geht es weiter."):format(tostring(a.quest or a.qid), tostring(iname or TR"einen Gegenstand")))
               end
               return false
@@ -5087,7 +5322,7 @@ local function ActDone(a)
   -- Quest im Log: nur das zaehlt, was das Spiel meldet (die geplante Zahl kann falsch sein)
   if not inLog then
     -- vorab gesammelt, bevor die Quest angenommen ist (bei geschaetzter Zahl reicht eins)
-    if a.item and GetItemCount and GetItemCount(a.item) >= math.max(1, (not a.guess and a.count) or 1) then return true end
+    if a.item and ns.Api.GetItemCount and ns.Api.GetItemCount(a.item) >= math.max(1, (not a.guess and a.count) or 1) then return true end
     return false
   end
   if inLog.complete then return true end
@@ -5096,7 +5331,7 @@ local function ActDone(a)
     if o then return o.done and true or false end
   end
   -- Hilfs Item, das nicht als Ziel im Questlog steht (zb ein Schluessel): erledigt, wenn es in der Tasche ist
-  if a.item and GetItemCount and GetItemCount(a.item) >= math.max(1, (not a.guess and a.count) or 1) then return true end
+  if a.item and ns.Api.GetItemCount and ns.Api.GetItemCount(a.item) >= math.max(1, (not a.guess and a.count) or 1) then return true end
   -- schon benutzt: das Ziel, das daraus entsteht, ist im Log weiter (Kette geoeffnet, Ueberreste begraben)
   if a.srcFor then
     for _, nm in ipairs(a.srcFor) do
@@ -5244,8 +5479,8 @@ local function Sync()
         -- 18.6: Astraler Rueckruf noch auf Abklingzeit (der Plan rechnet mit der Abklingzeit, du warst schneller). Ist der
         -- Ruhestein bereit, bringt der dich an den gleichen Ort, sonst faellt der Schritt weg wie beim Ruhestein (Sim Teil A)
         local rl = 0
-        if GetSpellCooldown then
-          local st, dur = GetSpellCooldown(556)
+        if ns.Api.GetSpellCooldown then
+          local st, dur = ns.Api.GetSpellCooldown(556)
           if st and st > 0 and dur and dur > 1.5 then rl = math.max(0, st + dur - GetTime()) end
         end
         if rl > 60 then
@@ -5453,6 +5688,9 @@ local function Sync()
   end
   if i ~= opt.idx then
     opt.idx = i
+    -- v11e (Pr P29, PLAN_TURNIN_INCOMPLETE Westfall Eintopf; S L8.4): Abgabe ist dran, die Quest ist im Log aber nicht fertig
+    -- (vorab gesammelt wurde zu wenig, zb Zahl aus dem Text falsch). Dann die offenen Ziele dieser Quest wieder davor
+    pcall(V11.ReopenObjectives, opt, i)
     -- 20.3f (REGEL K 16:42): auch beim Spielen die Vorquest Pruefung fuer den Rest der Route, mit dem echten Stand
     -- (wurde eine Abgabe uebersprungen, kommt die Folgequest hinter die naechste Abgabe der Vorquest oder raus)
     if not opt.mirror then
@@ -5603,6 +5841,13 @@ function ns.OptStepText(s)
         local names = {}
         for _, b in ipairs(a.buy) do table.insert(names, b.name or "?") end
         extra = TR" |cffffd100(kaufen: " .. table.concat(names, ", ") .. ")|r"
+      end
+      -- 1.1 (S Log L9.4 "im Mini Fenster zeigt es nicht an, wie viel EP es beim Abgeben gibt"): XP beim Abgeben dazu
+      if a.k == "T" and a.qid and not (ns.db and ns.db.hudXP == false) then
+        local L = UnitLevel and UnitLevel("player") or 1
+        local lp = ns.logProgress and ns.logProgress[a.qid]
+        local okX, xpv = pcall(QuestXPAt, a.qid, lp and lp.level or a.ql, L)
+        if okX and type(xpv) == "number" and xpv > 0 then extra = extra .. (" |cff9d9d9d(+%d XP)|r"):format(math.floor(xpv)) end
       end
       table.insert(parts, ("%s%s|r %s%s"):format(KC[a.k], KN[a.k], a.quest or "?", extra))
     end
@@ -5775,7 +6020,8 @@ OptTargetRaw = function()
     local function Dist(x1, y1, x2, y2)
       return ns.WorldDist and ns.WorldDist({ s.map, x1, y1 }, { s.map, x2, y2 }) or nil
     end
-    if #first.pts > 6 then
+    -- v11d (Ka 10:36 L12.5 Zhevra: Pfeil nahm einen einzelnen Spawn statt des naechsten Haufens): Gebiete ab V11.AREA_MIN_PTS
+    if #first.pts >= V11.AREA_MIN_PTS then
       -- Gebiete einmal bilden: Punkte, die nah beieinander liegen (ca 150 Yards), gehoeren zusammen
       if not first.areas then
         local areas = {}
@@ -5794,6 +6040,12 @@ OptTargetRaw = function()
           local r = 0
           for _, p in ipairs(ar.list) do local d = Dist(ar.x, ar.y, p[1], p[2]); if d and d > r then r = d end end
           ar.r = math.max(40, math.min(80, r))
+          -- 1.1 (K Stufe C 23): grosses Gebiet (weit verteilte Spawns) als Runde: Punkte nach Winkel um die Mitte, hoechstens
+          -- V11.RUND_MAX, Pfeil und Karte gehen sie reihum ab (Arrow.lua Feld rund)
+          if ar.n >= V11.RUND_MIN_N and r >= V11.RUND_MIN_R then
+            local loop = V11.RundLoop(ar.list, Dist)
+            if loop and #loop >= 3 then ar.loop = loop end
+          end
           ar.list = nil
         end
         first.areas = areas
@@ -5801,24 +6053,52 @@ OptTargetRaw = function()
       local areas = first.areas
       local cur = areas[first.area or 0]
       -- im Gebiet eines anderen? dann ist das jetzt das Ziel
-      if px then
+      -- 1.1 (S L1.5 "Pfeil schwabbelt hin und her"): Gebiete ueberlappen (Radius bis 80, Abstand ab 150 yd Mitte). Stand
+      -- man in beiden, sprang das Ziel jede Pruefung hin und her. Jetzt bleibt es, solange du im aktuellen Gebiet bist
+      local inCur = false
+      if px and cur then local dc = Dist(px, py, cur.x, cur.y); inCur = dc and dc <= cur.r end
+      if px and not inCur and (not cur or (GetTime and GetTime() or 0) - (first.areaSwAt or 0) >= V11.ARROW_HOLD_S) then
         for k, ar in ipairs(areas) do
           local d = Dist(px, py, ar.x, ar.y)
-          if d and d <= ar.r and k ~= first.area then first.area, cur = k, ar; break end
+          -- 1.1 (P43): nur wenn du gut im anderen Gebiet bist (nicht am Rand, wo sich zwei Gebiete beruehren)
+          if d and d <= ar.r * V11.AREA_ENTER_F and k ~= first.area then
+            first.area, cur = k, ar
+            first.areaSwAt = GetTime and GetTime() or 0
+            break
+          end
+        end
+      end
+      -- 1.1 (K Stufe C 23, mehr Alternativen): im Gebiet, aber V11.AREA_STALE_S lang kein Fortschritt (leer gefarmt, andere
+      -- Spieler): dieses Gebiet als versucht merken und das naechstbeste nehmen
+      if cur and inCur then
+        local prog = ns.OptCountText and ns.OptCountText(first) or ""
+        local nowS = GetTime and GetTime() or 0
+        if first.areaProg ~= prog or first.areaIdx ~= first.area then first.areaProg, first.areaIdx, first.areaAt = prog, first.area, nowS
+        elseif nowS - (first.areaAt or nowS) >= V11.AREA_STALE_S and #areas > 1 then
+          first.areaTried = first.areaTried or {}
+          first.areaTried[first.area] = true
+          local n0 = 0
+          for k in ipairs(areas) do if not first.areaTried[k] then n0 = n0 + 1 end end
+          if n0 == 0 then first.areaTried = { [first.area] = true } end
+          first.area, cur, first.areaAt = nil, nil, nowS
+          if ns.TestLog then ns.TestLog("PFEIL", ("Gebiet ohne Fortschritt, naechstes: %s"):format(tostring(first.quest))) end
         end
       end
       -- noch keins gewaehlt: das mit den meisten Spawns, bei aehnlich vielen das naehere
       if not cur then
         local best, bs
         for k, ar in ipairs(areas) do
+          if not (first.areaTried and first.areaTried[k]) then
           local d = px and Dist(px, py, ar.x, ar.y) or 0
           local score = ar.n / (1 + (d or 0) / 400)
           if not bs or score > bs then best, bs = k, score end
+          end
         end
         first.area, cur = best, areas[best]
       end
+      if not cur then cur = areas[1]; first.area = 1 end
       first.radius = cur.r
-      local proxy = setmetatable({ x = cur.x, y = cur.y }, { __index = s })
+      local proxy = setmetatable({ x = cur.x, y = cur.y, rund = cur.loop }, { __index = s })
       return proxy, { cur.x, cur.y, name, tags = tags }, name
     end
     if px then
@@ -5839,7 +6119,12 @@ OptTargetRaw = function()
         if d and not first.vis[k] and d >= 15 and (not bd or d < bd) then best, bd = k, d end
       end
       -- nur wechseln, wenn das neue Ziel deutlich naeher ist (sonst schwankt der Pfeil)
-      if best and (not cur or not cd or bd < cd * 0.6) then cur = best end
+      -- 1.1 (S L1.5): und hoechstens alle V11.ARROW_HOLD_S Sekunden, ausser das alte Ziel ist erreicht (besucht)
+      local nowA = GetTime and GetTime() or 0
+      if best and (not cur or not cd or (bd < cd * 0.6 and nowA - (first.curAt or 0) >= V11.ARROW_HOLD_S)) then
+        if cur ~= best then first.curAt = nowA end
+        cur = best
+      end
       first.cur = cur
       local p = cur and first.pts[cur]
       if p then
@@ -6421,7 +6706,7 @@ local wasDead = false
 df:SetScript("OnEvent", function(_, event)
   if event == "PLAYER_DEAD" then wasDead = true; return end
   if not wasDead then return end
-  if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return end -- nur Geist geworden, noch nicht lebendig
+  if UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, "player") then return end -- nur Geist geworden, noch nicht lebendig
   wasDead = false
   C_Timer.After(3, function()
     local db = ns.db
@@ -6524,19 +6809,35 @@ do
   end)
 end
 
--- 17.9: aus dem Dungeon raus: was drin nicht gerechnet wurde (Level, Quests), jetzt einmal nachholen
-local icf = CreateFrame("Frame")
-icf:RegisterEvent("PLAYER_ENTERING_WORLD")
-icf:SetScript("OnEvent", function()
-  -- 20.4a6 (K 21:30, Wunsch Si 21:10): Test Log Zeile INSTANZ bei Pause an und aus, damit die Sim "kein RECHNEN drin" belegen kann
-  if ns.InInstance and ns.InInstance() then
-    if not ns.instWasIn and ns.TestLog then
+-- v11d (K P31): Test Log Zeile INSTANZ bei Pause an und aus. Eigener Zustand, ausgeloest bei Ladebild UND Zonenwechsel
+-- (Sim und manche Eingaenge ohne Ladebild), damit die Sim "kein RECHNEN drin" sicher belegen kann
+do
+  local lf = CreateFrame("Frame")
+  lf:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+  -- 1.1 (P55): nach dem Ladebild erst entscheiden, wenn die Welt bereit ist (ns.WorldReadyHooks aus Route.lua)
+  local function Check()
+    local inI = (ns.InInstance and ns.InInstance()) and true or false
+    if inI == (V11.instLogged or false) then return end
+    V11.instLogged = inI
+    if not ns.TestLog then return end
+    if inI then
       local _, typ = IsInInstance()
       ns.TestLog("INSTANZ", ("Pause an (%s, %s): kein Rechnen, kein Pfeil, kein Navi"):format(tostring(typ), tostring(GetRealZoneText and GetRealZoneText() or "?")))
+    else
+      ns.TestLog("INSTANZ", "Pause aus: draussen, Route geht weiter")
     end
+  end
+  lf:SetScript("OnEvent", function() if ns.worldReady then Check() end end)
+  if ns.WorldReadyHooks then table.insert(ns.WorldReadyHooks, Check) end
+end
+-- 17.9: aus dem Dungeon raus: was drin nicht gerechnet wurde (Level, Quests), jetzt einmal nachholen
+local icf = CreateFrame("Frame")
+-- 1.1 (P55): nicht beim Ladebild selbst, sondern wenn die Welt bereit ist (ns.WorldReadyHooks)
+local function AfterWorld()
+  -- (Log Zeile INSTANZ steht seit v11d im eigenen Frame unten, auch bei Zonenwechsel ohne Ladebild)
+  if ns.InInstance and ns.InInstance() then
     ns.instWasIn = true; return
   end
-  if ns.instWasIn and ns.TestLog then ns.TestLog("INSTANZ", "Pause aus: draussen, Route geht weiter") end
   ns.instSaid = nil
   local wasIn = ns.instWasIn
   ns.instWasIn = nil
@@ -6564,18 +6865,23 @@ icf:SetScript("OnEvent", function()
     if ns.ProfileOf and ns.ProfileOf(db.opt) ~= "level" then return end
     if ns.PlanActive and ns.PlanActive() then ns.PlanSectionLive() else ns.AutoOpt("auto") end
   end)
-end)
+end
+if ns.WorldReadyHooks then table.insert(ns.WorldReadyHooks, AfterWorld) end
 local ccf = CreateFrame("Frame")
 ccf:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 ccf:RegisterEvent("PLAYER_ENTERING_WORLD")
 ccf:RegisterEvent("QUEST_ACCEPTED")
 ccf:RegisterEvent("QUEST_TURNED_IN")
 ccf:SetScript("OnEvent", function(_, ev)
+  -- 1.1 (P42): neue oder abgegebene Quest: auf Max Level darf wieder ein Stueck gerechnet werden (Vorquests evtl erledigt)
+  if ev == "QUEST_ACCEPTED" or ev == "QUEST_TURNED_IN" then
+    if V11.restEmpty then V11.restEmpty = nil; ns.restRetry = nil; ns.restTried = nil end
+  end
   C_Timer.After((ev == "QUEST_ACCEPTED" or ev == "QUEST_TURNED_IN") and 2 or 4, function()
     local db = ns.db
     if not db or db.paused or busy or ns.planBuilding then return end
-    if UnitOnTaxi and UnitOnTaxi("player") then return end
-    if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return end
+    if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then return end
+    if UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, "player") then return end
     local c = PlayerCont()
     if not c then
       -- Instanz oder keine Position: alten Stand behalten, im Dungeon draussen einmal nachrechnen (17.9)
@@ -6746,6 +7052,8 @@ function ns.AutoOpt(force)
   if force == true and ns.ProfileOf(db.opt) == "extra" and (db.opt.idx or 1) <= #(db.opt.steps or {}) then
     local o = db.opt
     if o.tour and ns[o.tour] then ns[o.tour](); return end
+    -- 1.1 (S Log L14.5: "Neu rechnen sollte nur die aktuelle Route berechnen"): Dungeon oder Zugang Route ab hier neu
+    if o.dungeonRoute and ns.RedoCurrentRoute and ns.RedoCurrentRoute("hand") then return end
     -- 20.3y (S Test 17:05): "Neu rechnen" von Hand rechnet die offene Zusatz Route neu, nicht die Leveling Route
     if hand then
       if o.prof and ns.ProfPlan and ns.ProfStart and type(db.profLastOpt) == "table" and next(db.profLastOpt) then
@@ -6815,6 +7123,9 @@ function ns.AutoOpt(force)
       if auto then if fin then ns.PlanNext() else ns.PlanSectionLive() end return end
       -- 20.1 (P7): von Hand neu, waehrend eine Zusatz Route lief: der Plan wird neu gerechnet (vorher ging es hier
       -- einen Abschnitt weiter, die Leveling Route war dann nicht mehr da, wo du warst)
+      -- 1.1 (S Log L14.5): von Hand nur den laufenden Abschnitt ab hier neu, der Plan bis 60 bleibt (so steht es auch in
+      -- der Hilfe). Den ganzen Plan neu gibt es weiter ueber Einstellungen (Plan neu) und nach einer Zusatz Route
+      if hand and not fin and not fromExtra and ns.PlanSectionLive then ns.PlanSectionLive(); return end
       if force and (not fin or fromExtra) then ns.PlanBuild(TR"Neu berechnet"); return end
       -- ohne Anlass (zB Questie meldet sich nach dem Einloggen): der laufende Abschnitt bleibt.
       -- Vorher ging es hier jedes Mal einen Abschnitt weiter (Tester: nach 5 mal Einloggen Abschnitt 6, Zeppelin auf Level 4)
@@ -6844,6 +7155,22 @@ function ns.AutoOpt(force)
   -- Gruppen Route vom Leiter: nicht selbst neu rechnen, solange sie laeuft
   if (not force or auto) and ns.groupFollow and opt and opt.group and not finished then return end
   if force or not opt or finished or stale then
+    -- 1.1 (P42): Max Level, nicht von Hand: nur wenn die Route abgearbeitet ist, hoechstens alle REST_MIN_GAP_S
+    if L >= maxL and not hand then
+      if opt and not finished then return end
+      if V11.restEmpty then return end
+      local nowR = GetTime and GetTime() or 0
+      local wait = (V11.restLastAt or -999) + V11.REST_MIN_GAP_S - nowR
+      if wait > 0 and not V11.restRetryNow then
+        if not V11.restWaitOn then
+          V11.restWaitOn = true
+          C_Timer.After(wait + 0.1, function() V11.restWaitOn = nil; if ns.AutoOpt then ns.AutoOpt(true) end end)
+        end
+        return
+      end
+      V11.restRetryNow = nil
+      V11.restLastAt = nowR
+    end
     local t = ns.SectionTarget and ns.SectionTarget() or (L + 5)
     -- Spielweise aus der Einrichtung (oder aus dem Menue oben im Fenster)
     -- Spielweise aus dem Regler (Einrichtung, Menue oben im Fenster, Einstellungen)
@@ -6852,6 +7179,27 @@ function ns.AutoOpt(force)
     ns.Optimize(t, function()
       if ns.RefreshBig then ns.RefreshBig() end
       -- 20.4a (K 19:09): Nach 60 in Stuecken, der Rest wird im Hintergrund hinten angehaengt
+      -- v11e (Pr P26): erstes Stueck ohne Schritte, aber noch Quests offen: diese Quests merken und gleich das naechste
+      local o2 = ns.db and ns.db.opt
+      if mode.rest and #(o2 and o2.steps or {}) == 0 and (ns.optRestMore or 0) > 0 and ns.optRestChunk
+        and (ns.restRetry or 0) < V11.REST_RETRY_MAX then
+        ns.restRetry = (ns.restRetry or 0) + 1
+        ns.restTried = ns.restTried or {}
+        for qid in pairs(ns.optRestChunk) do ns.restTried[qid] = true end
+        ns.optRestChunk = nil
+        if ns.TestLog then ns.TestLog("RECHNEN", ("Nach 60 Stueck ohne Schritte, naechstes Stueck (Versuch %d)"):format(ns.restRetry)) end
+        V11.restRetryNow = true
+        C_Timer.After(1, function() if ns.AutoOpt then ns.AutoOpt(true) end end)
+        return
+      end
+      -- 1.1 (P42): Stueck ohne Schritte und nichts mehr offen, oder alle Versuche aufgebraucht: Ruhe bis zur naechsten Quest
+      -- (vorher wurde ns.restRetry hier zurueck gesetzt und das Ganze fing von vorne an)
+      if mode.rest and #(o2 and o2.steps or {}) == 0 then
+        V11.restEmpty = true
+        if ns.TestLog then ns.TestLog("RECHNEN", ("Nach 60: keine machbare Quest mehr (Versuche %d), wartet auf neue Quest"):format(ns.restRetry or 0)) end
+        return
+      end
+      ns.restRetry = nil
       if mode.rest and (ns.optRestMore or 0) > 0 and ns.RestChunkNext then ns.restChunkN = 0; C_Timer.After(2, ns.RestChunkNext) end
     end, mode)
   end
@@ -6974,7 +7322,13 @@ function ns.RestChunkNext()
     end
     if ns.TestLog then ns.TestLog("RECHNEN", ("Nach 60 Stueck %d im Hintergrund: %d Schritte angehaengt (vorher %d), noch %d Quests offen"):format(ns.restChunkN or 0, n, before, ns.optRestMore or 0)) end
     if ns.Draw then ns.Draw() end
-    if n > 0 and (ns.optRestMore or 0) > 0 then
+    -- v11e (Pr P26): Stueck ohne Schritte, aber es gibt noch Quests: diese Quests merken (nicht wieder nehmen), gleich weiter
+    if n == 0 and (ns.optRestMore or 0) > 0 and ns.optRestChunk then
+      ns.restTried = ns.restTried or {}
+      for qid in pairs(ns.optRestChunk) do ns.restTried[qid] = true end
+      ns.optRestChunk = nil
+      C_Timer.After(1, ns.RestChunkNext)
+    elseif n > 0 and (ns.optRestMore or 0) > 0 then
       C_Timer.After(REST_GAP_S, ns.RestChunkNext)
     else
       ns.restDoneMsg = { t = (GetTime and GetTime() or 0) + 15, text = (TR"Route fertig gerechnet, %d Schritte"):format(#o.steps) }
@@ -7279,9 +7633,9 @@ function ns.PlanBuild(reason, onDone)
     -- im Abschnitt, auch graue weit weg). Jetzt nur so viele Quests wie fuer das Ziel noetig (cap wie Normal), die besten
     -- zuerst, keine Mindest XP gegen Grinden (thr 0, ohne Grinden gibt es keinen Vergleich)
     if lv >= 3 then
-      mode = { fillGap = mode.fillGap, noGrind = mode.noGrind, step = mode.step, emergency = true, scope = "all", qlDown = math.max(mode.qlDown or 5, (ns.LEVEL_STEPS and ns.LEVEL_STEPS[1] and ns.LEVEL_STEPS[1].qlDown) or 60), eliteLater = true, thrF = 0, capF = mode.capF or 1.5, gapUp = 1 }
+      mode = { stufe = 3, fillGap = mode.fillGap, noGrind = mode.noGrind, step = mode.step, emergency = true, scope = "all", qlDown = math.max(mode.qlDown or 5, (ns.LEVEL_STEPS and ns.LEVEL_STEPS[1] and ns.LEVEL_STEPS[1].qlDown) or 60), eliteLater = true, thrF = 0, capF = mode.capF or 1.5, gapUp = 1 }
     elseif lv == 2 then
-      mode = { fillGap = mode.fillGap, noGrind = mode.noGrind, step = mode.step, emergency = true, scope = "all", qlDown = mode.qlDown, eliteLater = true, thrF = 0, capF = mode.capF or 1.5, gapUp = 1 }
+      mode = { stufe = 2, fillGap = mode.fillGap, noGrind = mode.noGrind, step = mode.step, emergency = true, scope = "all", qlDown = mode.qlDown, eliteLater = true, thrF = 0, capF = mode.capF or 1.5, gapUp = 1 }
     elseif lv == 1 then
       mode = { all = true, fillGap = mode.fillGap, noGrind = mode.noGrind, step = mode.step, emergency = true, scope = "wide", qlDown = mode.qlDown, gapFill = true, gapUp = 1 }
     end
@@ -8449,6 +8803,96 @@ function ns.ProfileBackToLevel(finished)
     ns.AutoOpt(true)
   end
 end
+-- 1.1 (S Log L14.5: Ruhestein benutzt, Plan blieb alt, auch bei Neu rechnen): die laufende Route ab hier neu.
+-- Dungeon oder Zugang Route: neu aus den Dungeon Daten (gleicher Dungeon). Leveling Route mit Fahrplan: der Abschnitt.
+-- Rueckgabe true, wenn neu gerechnet wurde
+function ns.RedoCurrentRoute(why)
+  local db = ns.db
+  local o = db and db.opt
+  if not o then return false end
+  if ns.TestLog then ns.TestLog("RECHNEN", "Route ab hier neu: " .. tostring(why)) end
+  if o.dungeonRoute then
+    local name = o.dungeonName
+    if not (name and ns.DungeonRoute) then return false end
+    for _, d in ipairs(ns.dungeons or {}) do
+      if d.name == name then
+        local steps, info = ns.DungeonRoute(d)
+        if not steps then return false end
+        info.dungeonRoute = true
+        ns.OptLoad(steps, info)
+        ns.db.opt.dungeonRoute, ns.db.opt.dungeonName = true, name
+        ns.Print((TR"Route %s ab hier neu gerechnet."):format(tostring(info.title or name)))
+        return true
+      end
+    end
+    return false
+  end
+  if ns.ProfileOf(o) == "level" and ns.PlanActive and ns.PlanActive() and ns.PlanSectionLive then
+    ns.PlanSectionLive()
+    return true
+  end
+  return false
+end
+-- 1.1 (K Stufe B 14): Dungeon Route nachfuehren. Nach jedem Schritt und sonst alle DUNG_EVERY_S Sekunden aus den Daten
+-- neu bauen, was noch fehlt; nur laden, wenn sich etwas geaendert hat (andere Quests oder Reihenfolge)
+V11.DUNG_EVERY_S = 20
+function V11.DungSig(steps, from)
+  local t = {}
+  for i = from or 1, #(steps or {}) do
+    -- Reise Schritte zaehlen nicht (die haengen nur davon ab, wo du gerade stehst)
+    for _, a in ipairs(steps[i].acts or {}) do if a.k ~= "R" then t[#t + 1] = tostring(a.k) .. (a.qid or a.quest or "") end end
+  end
+  return table.concat(t, ",")
+end
+V11.dungAt, V11.dungIdx = 0, nil
+function V11.DungTick()
+  local db = ns.db
+  local o = db and db.opt
+  if not (o and o.dungeonRoute and o.dungeonName and o.steps and ns.DungeonRoute) or db.paused then V11.dungIdx = nil; return end
+  if ns.InInstance and ns.InInstance() then return end
+  local now = GetTime()
+  local idx = o.idx or 1
+  if V11.dungIdx == idx and now - V11.dungAt < V11.DUNG_EVERY_S then return end
+  V11.dungIdx, V11.dungAt = idx, now
+  if idx > #o.steps then return end
+  for _, d in ipairs(ns.dungeons or {}) do
+    if d.name == o.dungeonName then
+      local ok, steps, info = pcall(ns.DungeonRoute, d)
+      if ok and steps and #steps > 0 and V11.DungSig(steps, 1) ~= V11.DungSig(o.steps, idx) then
+        info.dungeonRoute = true
+        ns.OptLoad(steps, info)
+        ns.db.opt.dungeonRoute, ns.db.opt.dungeonName = true, d.name
+        V11.dungIdx = 1
+        if ns.TestLog then ns.TestLog("RECHNEN", ("Dungeon Route nachgefuehrt: %s, %d Schritte"):format(d.name, #steps)) end
+      end
+      return
+    end
+  end
+end
+if ns.Ticker then ns.Ticker(1, function() pcall(V11.DungTick) end) end
+-- nach dem Ruhestein (oder Rueckruf): ist der aktuelle Schritt weit weg, die Route ab hier neu, sonst nur Live pruefen
+V11.HEARTH_REDO_YD = 400
+function ns.AfterHearth()
+  local db = ns.db
+  local o = db and db.opt
+  if not (o and o.steps) then return end
+  local s = o.steps[o.idx or 1]
+  if not s then return end
+  -- der Schritt war der Ruhestein selbst: der wird von allein fertig
+  for _, a in ipairs(s.acts or {}) do if a.k == "H" or a.k == "B" then return end end
+  local pm = ns.PlayerMap and ns.PlayerMap()
+  local pos = pm and C_Map.GetPlayerMapPosition(pm, "player")
+  local d
+  if pos and s.map and s.x and ns.WorldDistXY then
+    local px, py = pos:GetXY()
+    d = ns.WorldDistXY(pm, px, py, s.map, s.x, s.y)
+  end
+  if d == nil or d > V11.HEARTH_REDO_YD then
+    if not ns.RedoCurrentRoute("Ruhestein") and ns.LiveFire then pcall(ns.LiveFire, "ruhestein") end
+  elseif ns.LiveFire then
+    pcall(ns.LiveFire, "ruhestein")
+  end
+end
 -- alte Profile (Berufe, Gold, Ruf einzeln) auf das eine zusaetzliche Profil: das zuletzt benutzte bleibt
 function ns.ProfileMigrate(db)
   local pr = db and db.profiles
@@ -8472,8 +8916,66 @@ end
 -- Die Hysterese (lohnt es sich, 30 s oder 10 Prozent) und das Mini Fenster sind bei Na. Schalter db.liveCalc = false.
 ------------------------------------------------------------
 local LIVE_WIN_MIN = 2          -- so viele Schritte muessen mindestens umstellbar sein
-local LIVE_WIN_MAX = 5          -- hoechstens so viele Schritte ab dem aktuellen
-local LIVE_MAX_PERMS = 120      -- hoechstens so viele Reihenfolgen pruefen (5! = 120)
+-- 1.1 (K Stufe B 13): Fenster bis 10 Schritte (vorher 5), nur Schritte nahe bei dir, gerechnet in Stuecken ueber mehrere
+-- Bilder (ns.LiveReplanAsync). Pr misst 5 gegen 10 ueber LIVE_WIN_MAX
+local LIVE_WIN_MAX = 10         -- hoechstens so viele Schritte ab dem aktuellen
+-- v11e (P29): offene Ziele einer Quest vor ihre Abgabe holen, wenn sie im Log nicht fertig ist
+function V11.ReopenObjectives(opt, i)
+  local s = opt.steps[i]
+  if not (s and ns.logProgress) then return end
+  for _, a in ipairs(s.acts or {}) do
+    local lp = a.k == "T" and a.qid and ns.logProgress[a.qid]
+    if lp and not lp.complete then
+      local later = false
+      for j = i, #opt.steps do
+        for _, b in ipairs(opt.steps[j].acts or {}) do
+          if b.k == "O" and b.qid == a.qid and not ActDone(b) then later = true; break end
+        end
+        if later or opt.steps[j] == s then break end
+      end
+      if not later then
+        local add = {}
+        for j = 1, i - 1 do
+          local sj = opt.steps[j]
+          for _, b in ipairs(sj.acts or {}) do
+            if b.k == "O" and b.qid == a.qid and not ActDone(b) then
+              local c = {}
+              for k, v in pairs(b) do c[k] = v end
+              c.pre, c.reopen = nil, true
+              add[#add + 1] = { map = sj.map, x = sj.x, y = sj.y, lvl = s.lvl, t = s.t, acts = { c } }
+            end
+          end
+        end
+        for k = #add, 1, -1 do table.insert(opt.steps, i, add[k]) end
+        if #add > 0 and ns.TestLog then
+          ns.TestLog("SCHRITT", ("Abgabe vor fertig: %d Ziele von %s wieder davor"):format(#add, tostring(a.quest or a.qid)))
+        end
+      end
+    end
+  end
+end
+-- Schritt st gibt eine Vorquest von qid ab?
+function V11.NeedsTurnIn(qid, st)
+  local ids = {}
+  local ps, pg = Q(qid, "preQuestSingle"), Q(qid, "preQuestGroup")
+  for _, id in ipairs(type(ps) == "table" and ps or {}) do ids[id] = true end
+  for _, id in ipairs(type(pg) == "table" and pg or {}) do if type(id) == "number" then ids[math.abs(id)] = true end end
+  for _, b in ipairs(st.acts or {}) do if b.k == "T" and b.qid and ids[b.qid] then return true end end
+  return false
+end
+V11.LIVE_WIN_STD = 7           -- v11d: Fenster Standard (Sim: V11.LIVE_WIN_STD oder db.liveWin setzen)
+V11.LIVE_NEAR_YD = 600        -- nur Schritte, die so nah bei dir liegen (Luftlinie)
+local LIVE_MAX_PERMS = 5000     -- hoechstens so viele fertige Reihenfolgen pruefen
+V11.LIVE_MAX_NODES = 40000    -- hoechstens so viele Teil Reihenfolgen (Suche mit Schranke)
+V11.LIVE_FRAME_MS = 2         -- Rechenzeit pro Bild beim Nachrechnen in Stuecken
+V11.LIVE_YIELD_EVERY = 150    -- so oft (Teil Reihenfolgen) die Zeit pruefen
+V11.liveT0 = 0
+function V11.LiveYield()
+  if V11.liveCo and coroutine.running() == V11.liveCo and debugprofilestop and debugprofilestop() - V11.liveT0 > V11.LIVE_FRAME_MS then
+    coroutine.yield()
+    V11.liveT0 = debugprofilestop()
+  end
+end
 local LIVE_KINDS = { A = true, T = true, O = true } -- nur Annehmen, Ziel, Abgeben wird umgestellt
 local LIVE_CACHE_YD = 25        -- gleiche Frage aus fast derselben Position: Antwort aus dem Speicher
 local LIVE_CHANCE_YD = 150      -- Gelegenheit: Questgeber hoechstens so weit weg (wie Na Abweichung)
@@ -8511,7 +9013,10 @@ local function LiveRef(st)
     local far = sc == c and math.sqrt((wx - sx) ^ 2 + (wy - sy) ^ 2) or nil
     for i = 1, 4 do
       local u = "party" .. i
-      if UnitExists and UnitExists(u) and not (UnitIsDeadOrGhost and UnitIsDeadOrGhost(u)) then
+      -- v11d (K P33): nur Mitglieder mit dem Addon (ns.group), ein Partner ohne Addon zieht die Reihenfolge nicht mit
+      local un = UnitName and UnitName(u)
+      local hasAddon = un and ns.group and (ns.group[un] or ns.group[(ns.Plain and ns.Plain(un)) or un])
+      if hasAddon and UnitExists and ns.Api.U(UnitExists, u) and not (UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, u)) then
         local p = C_Map.GetPlayerMapPosition(here, u)
         if p then
           local ux, uy = p:GetXY()
@@ -8565,18 +9070,27 @@ local function LiveSpot(opt, ctx, c, wx, wy, speed)
       elseif a.cur and a.pts[a.cur] then curX, curY = a.pts[a.cur][1], a.pts[a.cur][2] end
       local old = Cost(curX, curY)
       if not old then return end
+      -- 1.1 (P43): nicht dauernd die Stelle wechseln und nicht gleich wieder zurueck
+      local nowSp = GetTime and GetTime() or 0
+      if a.spotAt and nowSp - a.spotAt < V11.SPOT_HOLD_S then return end
+      local noBack = (a.spotPrev and nowSp - (a.spotAt or 0) < V11.SPOT_HOLD_S * 2) and a.spotPrev or nil
       local best, bc
       if a.areas then
-        for k, ar in ipairs(a.areas) do local v = Cost(ar.x, ar.y); if v and (not bc or v < bc) then best, bc = k, v end end
+        for k, ar in ipairs(a.areas) do
+          local v = Cost(ar.x, ar.y)
+          if v and k ~= noBack and (not bc or v < bc) then best, bc = k, v end
+        end
       else
         for k, p in ipairs(a.pts) do
-          if not (a.vis and a.vis[k]) then local v = Cost(p[1], p[2]); if v and (not bc or v < bc) then best, bc = k, v end end
+          if not (a.vis and a.vis[k]) and k ~= noBack then local v = Cost(p[1], p[2]); if v and (not bc or v < bc) then best, bc = k, v end end
         end
       end
       if best and bc < old then
         return { oldSec = math.floor(old / speed), newSec = math.floor(bc / speed), kind = "spot",
           apply = function()
-            if a.areas then a.area = best else a.cur = best end
+            a.spotPrev = a.areas and a.area or a.cur
+            a.spotAt = GetTime and GetTime() or 0
+            if a.areas then a.area = best; a.areaSwAt = a.spotAt else a.cur = best; a.curAt = a.spotAt end
             LiveLog(("Stelle gewechselt: %s, Ziel %d"):format(tostring(a.quest), best))
           end }
       end
@@ -8600,11 +9114,14 @@ function ns.LiveReplan(reason, ctx)
   if not res then
     -- Fenster: zusammenhaengende umstellbare Schritte auf deinem Kontinent
     local win = {}
-    for i = i0, math.min(#opt.steps, i0 + LIVE_WIN_MAX - 1) do
+    -- v11d (K P30, Pr: 10 gegen 5 kein Vorteil, 10 bis 20 ms): Standard 7, hoechstens LIVE_WIN_MAX (db.liveWin aendert)
+    local winN = math.min(LIVE_WIN_MAX, tonumber(ns.db and ns.db.liveWin) or V11.LIVE_WIN_STD)
+    for i = i0, math.min(#opt.steps, i0 + winN - 1) do
       local st = opt.steps[i]
       if not LiveMovable(st) then break end
       local sc, sx, sy = LiveW(st.map, st.x, st.y)
       if sc ~= c then break end
+      if #win >= LIVE_WIN_MIN and math.sqrt((sx - wx) ^ 2 + (sy - wy) ^ 2) > V11.LIVE_NEAR_YD then break end
       win[#win + 1] = { st = st, x = sx, y = sy, q = LiveQids(st) }
     end
     local n = #win
@@ -8615,11 +9132,18 @@ function ns.LiveReplan(reason, ctx)
       if after and after.map then ac, ax, ay = LiveW(after.map, after.x, after.y) end
       if ac ~= c then ax = nil end
       -- Vorgaenger: frueherer Schritt mit gleicher Quest muss frueher bleiben
+      -- v11d (Pr P28, ACCEPT_FAIL 6385): und Annehmen einer Quest erst nach der Abgabe ihrer Vorquest (Feld 13 und 12 mit
+      -- Daten Korrektur, wie die Planung)
       local pre = {}
       for k = 1, n do
         pre[k] = {}
         for j = 1, k - 1 do
           for q in pairs(win[k].q) do if win[j].q[q] then pre[k][j] = true; break end end
+          if not pre[k][j] then
+            for _, a in ipairs(win[k].st.acts or {}) do
+              if a.k == "A" and a.qid and V11.NeedsTurnIn(a.qid, win[j].st) then pre[k][j] = true; break end
+            end
+          end
         end
       end
       local function D(x1, y1, x2, y2) return math.sqrt((x1 - x2) ^ 2 + (y1 - y2) ^ 2) end
@@ -8634,8 +9158,31 @@ function ns.LiveReplan(reason, ctx)
       local oldC = Cost(orig)
       local bestO, bestC, perms = nil, oldC, 0
       local used, cur = {}, {}
+      -- 1.1: erst eine schnelle Reihenfolge (immer der naechste erlaubte Schritt), das gibt der Suche eine gute Schranke
+      do
+        local gUsed, gOrd, gx, gy, gs = {}, {}, wx, wy, 0
+        for _ = 1, n do
+          local bk, bd
+          for k = 1, n do
+            if not gUsed[k] then
+              local ok = true
+              for j in pairs(pre[k]) do if not gUsed[j] then ok = false; break end end
+              if ok then local d = D(gx, gy, win[k].x, win[k].y); if not bd or d < bd then bk, bd = k, d end end
+            end
+          end
+          if not bk then break end
+          gUsed[bk] = true; gOrd[#gOrd + 1] = bk; gs = gs + bd; gx, gy = win[bk].x, win[bk].y
+        end
+        if #gOrd == n then
+          gs = gs + (ax and D(gx, gy, ax, ay) or 0)
+          if gs < bestC then bestC, bestO = gs, gOrd end
+        end
+      end
+      local nodes = 0
       local function Rec(depth, acc, x, y)
-        if perms >= LIVE_MAX_PERMS or acc >= bestC then return end
+        if perms >= LIVE_MAX_PERMS or nodes >= V11.LIVE_MAX_NODES or acc >= bestC then return end
+        nodes = nodes + 1
+        if nodes % V11.LIVE_YIELD_EVERY == 0 then V11.LiveYield() end
         if depth > n then
           perms = perms + 1
           local total = acc + (ax and D(x, y, ax, ay) or 0)
@@ -8661,6 +9208,7 @@ function ns.LiveReplan(reason, ctx)
         if changed then
           local order = bestO
           res = { oldSec = math.floor(oldC / speed), newSec = math.floor(bestC / speed), kind = "order",
+            oldFirst = win[1].st, newFirst = win[order[1]].st,
             apply = function()
               -- nur wenn die Route noch dieselbe ist
               if ns.db.opt ~= opt or (opt.idx or 1) ~= i0 then return end
@@ -8684,6 +9232,25 @@ function ns.LiveReplan(reason, ctx)
   end
   liveCache.key, liveCache.opt, liveCache.res = key, opt, res
   return res
+end
+
+-- 1.1: dasselbe in Stuecken ueber mehrere Bilder (LIVE_FRAME_MS pro Bild), Ergebnis kommt an cb(res, err).
+-- Laeuft schon eine, wird die alte verworfen (die neue Lage zaehlt)
+V11.liveGen = 0
+function ns.LiveReplanAsync(reason, ctx, cb)
+  V11.liveGen = V11.liveGen + 1
+  local myGen = V11.liveGen
+  local co = coroutine.create(function() return ns.LiveReplan(reason, ctx) end)
+  local function Step()
+    if myGen ~= V11.liveGen then return end
+    V11.liveCo, V11.liveT0 = co, debugprofilestop and debugprofilestop() or 0
+    local ok, res = coroutine.resume(co)
+    V11.liveCo = nil
+    if not ok then if cb then cb(nil, res) end return end
+    if coroutine.status(co) ~= "dead" then C_Timer.After(0, Step); return end
+    if cb then cb(res) end
+  end
+  Step()
 end
 
 -- D: Gelegenheit am Weg. Quest annehmen, die spaeter in der Route kommt, Geber gerade nah
@@ -8712,6 +9279,8 @@ function ns.LiveChance()
       local onlyA = #(st.acts or {}) > 0
       for _, a in ipairs(st.acts or {}) do
         if a.k ~= "A" or a.pre or not a.qid or (ns.logProgress and ns.logProgress[a.qid]) or Completed1(a.qid) then onlyA = false; break end
+        -- v11d (Pr P28, Log "Gelegenheit: Doras der Windreitermeister"): nur wenn alle Vorquests schon abgegeben sind
+        if PreMissing and #PreMissing(a.qid, Completed1) > 0 then onlyA = false; break end
       end
       if onlyA then
         local sc, sx, sy = LiveW(st.map, st.x, st.y)
@@ -8723,6 +9292,15 @@ function ns.LiveChance()
       end
     end
   end
+  -- 1.1 (K Stufe B 12): fertige Reserve Quest im Log, Abgabe nah: als Gelegenheit (Klick macht einen Schritt daraus)
+  do
+    local rs, rsec = V11.ReserveTurnIn(c, wx, wy, speed)
+    if rs and (not bs or rsec < bs) then
+      liveChance = { opt = opt, st = rs, idx = i0, new = true }
+      liveChanceRes = { text = (TR"Reserve abgeben: %s"):format(tostring(rs.acts[1].quest)), sec = rsec }
+      return liveChanceRes
+    end
+  end
   if not best then return end
   local st = opt.steps[best]
   local names = {}
@@ -8732,12 +9310,151 @@ function ns.LiveChance()
   return liveChanceRes
 end
 
+------------------------------------------------------------
+-- 1.1 (K Stufe B 12) Reserve Quests: Quests, die nicht in der Route stehen, aber ganz nah an den naechsten Schritten
+-- liegen (Annehmen hier, Ziele und Abgabe nahe der Route). Auto Quest nimmt sie mit, solange im Log genug Platz bleibt.
+-- Fertig (zb Glueck beim Droppen): Gelegenheit "Reserve abgeben". Liegt die Route nicht mehr in ihrer Naehe: Hinweis
+-- "kann abgebrochen werden". Alles aus den Quest Daten, keine Liste
+------------------------------------------------------------
+V11.RESERVE_YD = 80            -- Ziele und Abgabe hoechstens so weit von einem der naechsten Schritte
+V11.RESERVE_AHEAD = 30         -- so viele Schritte voraus zaehlen
+V11.RESERVE_LOG_FREE = 4       -- so viele Plaetze im Log bleiben fuer die Route frei
+V11.RESERVE_MAX = 5            -- hoechstens so viele Reserve Quests gleichzeitig im Log
+V11.RESERVE_LVL_UP = 2         -- Questlevel hoechstens so viel ueber dir
+V11.reserveCache = {}
+local function ReserveSteps(opt)
+  local pts, i0 = {}, opt.idx or 1
+  for i = i0, math.min(#opt.steps, i0 + V11.RESERVE_AHEAD) do
+    local st = opt.steps[i]
+    if st and st.map and st.x and not st.travel then
+      local c, x, y = LiveW(st.map, st.x, st.y)
+      if c then pts[#pts + 1] = { c, x, y } end
+    end
+  end
+  return pts
+end
+local function NearAny(pts, n, lim)
+  if not (n and n.wx and n.cont) then return false end
+  for _, p in ipairs(pts) do
+    if p[1] == n.cont and (p[2] - n.wx) ^ 2 + (p[3] - n.wy) ^ 2 <= lim * lim then return true end
+  end
+  return false
+end
+-- v11d (Pr P5): gebaute Quests merken (je Quest und Route), sonst baute jeder Aufbau des Mini Fensters neu
+V11.reserveBuilt = {}
+local function ReserveBuild(qid)
+  local o = ns.db and ns.db.opt
+  local key = qid .. ":" .. tostring(o and o.created)
+  local c = V11.reserveBuilt[key]
+  if c ~= nil then return c or nil end
+  local tools = ns.OptTools and ns.OptTools()
+  if not tools then return nil end
+  local any = setmetatable({}, { __index = function() return true end })
+  local ok, q = pcall(tools.BuildQuest, qid, any, nil, false, nil)
+  q = ok and type(q) == "table" and q or nil
+  V11.reserveBuilt[key] = q or false
+  return q
+end
+function ns.IsReserveQuest(qid)
+  local db = ns.db
+  if not (qid and db and db.liveCalc ~= false and db.reserveQuests ~= false and LiveOn()) then return false end
+  local opt = db.opt
+  -- Platz im Log
+  local nLog, nRes = 0, 0
+  for id in pairs(ns.logProgress or {}) do
+    nLog = nLog + 1
+    if db.reserveQ and db.reserveQ[id] then nRes = nRes + 1 end
+  end
+  if ns.LogMax and nLog > ns.LogMax() - V11.RESERVE_LOG_FREE then return false end
+  if nRes >= V11.RESERVE_MAX then return false end
+  if ns.IsDungeonQuest and ns.IsDungeonQuest(qid) then return false end
+  if ns.IsEliteQuest and ns.IsEliteQuest(qid) and not (IsInGroup and IsInGroup()) then return false end
+  local key = tostring(opt.created or opt.title) .. ":" .. tostring(math.floor((opt.idx or 1) / 5)) .. ":" .. qid
+  local hit = V11.reserveCache[key]
+  if hit == nil then
+    hit = false
+    local q = ReserveBuild(qid)
+    local myL = (UnitLevel and UnitLevel("player")) or 1
+    if q and (q.ql or 0) <= myL + V11.RESERVE_LVL_UP and q.T and not q.eliteMob then
+      local pts = ReserveSteps(opt)
+      hit = #pts > 0
+      for _, n in ipairs(q.nodes or {}) do
+        if n ~= q.A and not NearAny(pts, n, V11.RESERVE_YD) then hit = false; break end
+      end
+      if hit and V11.TimedTooLong(q) then hit = false end
+    end
+    V11.reserveCache[key] = hit
+  end
+  -- v11d (Pr P6): erst beim Annehmen (QUEST_ACCEPTED, ns.ReserveAccepted) als Reserve merken
+  if hit then V11.reservePending = V11.reservePending or {}; V11.reservePending[qid] = GetTime() end
+  return hit
+end
+function ns.ReserveAccepted(qid)
+  local p = V11.reservePending and qid and V11.reservePending[qid]
+  if not (p and GetTime() - p < 120 and ns.db) then return end
+  V11.reservePending[qid] = nil
+  ns.db.reserveQ = ns.db.reserveQ or {}
+  ns.db.reserveQ[qid] = true
+  if ns.TestLog then ns.TestLog("LIVE", ("Reserve Quest mitgenommen: %s"):format(tostring(qid))) end
+end
+-- fertige Reserve Quest: Abgabe Schritt, wenn nah bei dir
+function V11.ReserveTurnIn(c, wx, wy, speed)
+  local db = ns.db
+  if not (db and db.reserveQ) then return end
+  for qid in pairs(db.reserveQ) do
+    local lp = ns.logProgress and ns.logProgress[qid]
+    if not lp then
+      if not (ns.logProgress and next(ns.logProgress)) then return end
+      db.reserveQ[qid] = nil   -- nicht mehr im Log (abgegeben oder abgebrochen)
+    elseif lp.complete then
+      local q = ReserveBuild(qid)
+      local t = q and q.T
+      if t and t.cont == c and t.wx then
+        local d = math.sqrt((wx - t.wx) ^ 2 + (wy - t.wy) ^ 2)
+        local sec = math.floor(2 * d / speed)
+        if d <= LIVE_CHANCE_YD and sec <= LIVE_CHANCE_MAX_S then
+          return { map = t.map, x = t.x, y = t.y, acts = { { k = "T", qid = qid, quest = lp.title or q.name, who = t.who, npc = t.npc } } }, sec
+        end
+      end
+    end
+  end
+end
+-- Reserve Quest im Log, die Route ist nicht mehr in der Naehe: Hinweis Text (oder nil)
+function ns.ReserveDropHint()
+  local db = ns.db
+  if not (db and db.reserveQ and db.opt and db.opt.steps and LiveOn()) then return end
+  local pts
+  for qid in pairs(db.reserveQ) do
+    local lp = ns.logProgress and ns.logProgress[qid]
+    if lp and not lp.complete then
+      local q = ReserveBuild(qid)
+      if q then
+        pts = pts or ReserveSteps(db.opt)
+        local near = false
+        for _, n in ipairs(q.nodes or {}) do if n ~= q.A and NearAny(pts, n, V11.RESERVE_YD * 2) then near = true; break end end
+        if not near then return (TR"Reserve Quest %s liegt nicht mehr am Weg, kann abgebrochen werden."):format(tostring(lp.title or q.name)), qid end
+      end
+    end
+  end
+end
+
 -- Klick auf die Gelegenheit: der Schritt kommt jetzt dran (vor den aktuellen)
 function ns.LiveChanceTake()
   local ch = liveChance
   liveChance, liveChanceRes = nil, nil
   local opt = ns.db and ns.db.opt
   if not ch or ch.opt ~= opt or (opt.idx or 1) ~= ch.idx then return end
+  -- 1.1: Reserve Abgabe ist ein neuer Schritt (steht noch nicht in der Route)
+  if ch.new then
+    local cur = opt.steps[ch.idx]
+    ch.st.lvl, ch.st.t = cur and cur.lvl or 0, cur and cur.t or 0
+    table.insert(opt.steps, ch.idx, ch.st)
+    liveCache.key = nil
+    LiveLog(("Reserve Abgabe als Schritt %d: %s"):format(ch.idx, tostring(ch.st.acts[1].quest)))
+    if ns.Draw then ns.Draw() end
+    if ns.RefreshHud then ns.RefreshHud() end
+    return
+  end
   local from
   for i = ch.idx, #opt.steps do if opt.steps[i] == ch.st then from = i; break end end
   if not from then return end

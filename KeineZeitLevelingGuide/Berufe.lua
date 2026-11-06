@@ -160,7 +160,7 @@ function ns.ProfItem(id) return BYID[id] end
 local asked = {}
 function ns.ProfItemName(it)
   if type(it) == "number" then it = BYID[it] or { id = it } end
-  local n = GetItemInfo and GetItemInfo(it.id)
+  local n = ns.Api.GetItemInfo and ns.Api.GetItemInfo(it.id)
   if n then return n end
   if not asked[it.id] then
     asked[it.id] = true
@@ -169,9 +169,9 @@ function ns.ProfItemName(it)
   return it.name or (TR"Item " .. it.id)
 end
 function ns.ProfItemIcon(id)
-  local ic = GetItemIcon and GetItemIcon(id)
+  local ic = ns.Api.GetItemIcon and ns.Api.GetItemIcon(id)
   if ic then return ic end
-  return select(10, GetItemInfo(id)) or (ICON .. "INV_Misc_QuestionMark")
+  return select(10, ns.Api.GetItemInfo(id)) or (ICON .. "INV_Misc_QuestionMark")
 end
 
 -- Skill aus dem Spiel: Stufe und Maximum, nil wenn nicht gelernt
@@ -862,7 +862,7 @@ function ns.ProfRecipes(id)
     return who, mine
   end
   for _, r in ipairs(recipeIdx and recipeIdx[id] or {}) do
-    local name = (GetSpellInfo and GetSpellInfo(r.spell)) or (r.created and GetItemInfo(r.created)) or (TR"Rezept " .. r.spell)
+    local name = (ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(r.spell)) or (r.created and ns.Api.GetItemInfo(r.created)) or (TR"Rezept " .. r.spell)
     local who, mine = Who(r.created, name)
     local e = { name = name, prof = r.prof, skill = r.skill, count = r.count, who = who, known = mine, created = r.created }
     byKey[r.created or name] = e
@@ -931,7 +931,7 @@ local function NpcFromGUID(g)
   if t == "Creature" then return tonumber(id) end
 end
 local function LearnType(unit)
-  if not (UnitExists and UnitExists(unit)) or (UnitIsPlayer and UnitIsPlayer(unit)) then return end
+  if not (UnitExists and ns.Api.U(UnitExists, unit)) or (UnitIsPlayer and ns.Api.U(UnitIsPlayer, unit)) then return end
   local npc = NpcFromGUID(Plain(UnitGUID(unit)))
   if not npc then return end
   local db = DB()
@@ -1687,7 +1687,7 @@ end
 ------------------------------------------------------------
 -- Farmroute laufen lassen
 ------------------------------------------------------------
-local function Count(id) return GetItemCount and (Plain(GetItemCount(id)) or 0) or 0 end
+local function Count(id) return ns.Api.GetItemCount and (Plain(ns.Api.GetItemCount(id)) or 0) or 0 end
 local function SessCount(s)
   local n = 0
   for id, c0 in pairs(s.start or {}) do n = n + math.max(0, Count(id) - c0) end

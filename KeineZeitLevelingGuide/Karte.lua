@@ -848,6 +848,10 @@ end
 local function W() return ns.Ways end
 local function HasBit(v, b) return floor(v / 2 ^ b) % 2 == 1 end
 local function Up(down, d) local x = (d - (down + 4)) % 8; return x == 0 or x == 1 or x == 7 end
+-- v11e (Ka 10:58, S Log L3.7 Galgar und L5.1 Zureetha: Pfeil Luftlinie ueber Klippen Baender, im Spiel Sackgasse): fuer die
+-- Luftlinie zaehlt eine Klippe nur noch als frei, wenn du genau bergab gehst (Richtung hoechstens 45 Grad neben "runter").
+-- Seitlich oder schraeg ueber das Band ist nicht mehr frei, dann rechnet der Pfeil den Weg ueber das Netz. db.klippeStreng=false: alt
+local function DownOk(down, d) local x = (d - down) % 8; return x == 0 or x == 1 or x == 7 end
 local function DirOf(dx, dy)
   if dx == 0 and dy == 0 then return nil end
   return floor(math.atan2(dy, dx) / (math.pi / 4) + 0.5) % 8
@@ -905,7 +909,9 @@ local function LineFree(ui, x1, y1, x2, y2, F)
       end
       if dir then
         local c1, c2 = C[k], C[pk]
-        if (c1 and Up(c1, dir)) or (c2 and Up(c2, dir)) then
+        local strict = not (db and db.klippeStreng == false)
+        if (c1 and Up(c1, dir)) or (c2 and Up(c2, dir))
+          or (strict and ((c1 and not DownOk(c1, dir)) or (c2 and not DownOk(c2, dir)))) then
           local m = own[k]
           if not (m and HasBit(m, dir)) then return false end
         end
@@ -1119,7 +1125,7 @@ local function PlayerLevel()
   return tonumber(L) or 1
 end
 local function HasMount()
-  if IsMounted and IsMounted() then return true end
+  if IsMounted and ns.Api.U(IsMounted) then return true end
   local db = ns.db
   return db and (db.mountSpeed or 0) > 8 and true or false
 end
@@ -1135,7 +1141,7 @@ function K.JumpMax()
     local ok, hc = pcall(C_GameRules.IsHardcoreActive)
     if ok and hc then return nil end
   end
-  if UnitIsGhost and UnitIsGhost("player") then return 99 end
+  if UnitIsGhost and ns.Api.U(UnitIsGhost, "player") then return 99 end
   local hp = UnitHealth and Num(UnitHealth("player"))
   local mx = UnitHealthMax and Num(UnitHealthMax("player"))
   if not (hp and mx and mx > 0) then return 99 end

@@ -21,7 +21,7 @@ local function HasBit(mask, i) return math.floor(mask / 2 ^ i) % 2 == 1 end
 
 local function RequestItem(id)
   if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id) end
-  return GetItemInfo(id)
+  return ns.Api.GetItemInfo(id)
 end
 
 function ns.GearScan(done)
@@ -111,7 +111,7 @@ function ns.GearScan(done)
     for qid, e in pairs(byQuest) do
       local items, best, bestPct = {}, nil, nil
       for _, id in ipairs(e.items) do
-        local name, link = GetItemInfo(id)
+        local name, link = ns.Api.GetItemInfo(id)
         if not link then
           missing = missing + 1
         else

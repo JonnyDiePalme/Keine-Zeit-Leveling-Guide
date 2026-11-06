@@ -127,6 +127,13 @@ local NAMES = {
   -- 20.2 (P11): gesperrt sind nur die Raid Symbole, die eigenen Marker laufen weiter
   SetRaidTarget = { TR"Raid Symbole beim Markieren", "raidIcons" },
   SetCVar = { TR"Namensplaketten oder Glitzern umschalten" },
+  -- 1.1 (S Log 06.11., 126x "UNKNOWN()"): Namen kommen jetzt auch aus ns.Api.Prot / ns.Api.Mark (Compat.lua)
+  TakeTaxiNode = { TR"Automatisch fliegen", "autoFly" },
+  Zielknopf = { TR"Ziel Knopf am Pfeil", "targetBtn" },
+  ["Questitem Knopf"] = { TR"Quest Item Knöpfe", "questItems" },
+  ["C_GossipInfo.SelectOption"] = { TR"Ruhestein automatisch binden" },
+  SelectGossipOption = { TR"Ruhestein automatisch binden" },
+  UseContainerItem = { TR"Plunder verkaufen" },
   RegisterEvent = { TR"Kampflog Abfrage (alte Version, ist entfernt)" },
   -- Auto Quest: auf Forever darf das evtl. nur die Blizzard Oberflaeche
   AcceptQuest = { TR"Auto Quest", "autoQuest" },
@@ -145,6 +152,10 @@ function ns.OnBlocked(ev, addon, func)
   if not db then table.insert(ns.blockedQueue, { ev, addon, func }); return end
   func = tostring(func or "?")
   local short = func:gsub("%(%)$", ""):match("([%w_%.:]+)$") or func
+  -- 1.1: Blizzard nennt die Funktion oft nur "UNKNOWN()". War gerade eben eine unserer geschuetzten Aktionen, ist sie es
+  local guess = (short == "UNKNOWN" or short == "?") and ns.Api and ns.Api.LastProt and ns.Api.LastProt()
+  if guess then short, func = guess, guess .. TR"() (vermutet)" end
+  if ns.Api and ns.Api.ForbiddenVerReset then ns.Api.ForbiddenVerReset(db) end
   -- alles mitschreiben, auch fremde Addons (hilft beim Suchen)
   db.blockedLog = db.blockedLog or {}
   -- wobei es passiert ist, hilft bei "UNKNOWN"
@@ -158,12 +169,18 @@ function ns.OnBlocked(ev, addon, func)
   if S(MerchantFrame) then table.insert(ctx, TR"Händler") end
   if S(LootFrame) then table.insert(ctx, TR"Beute") end
   if S(_G.TaurenRouteBig) then table.insert(ctx, TR"Vollbild") end
-  if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then table.insert(ctx, TR"tot") end
-  if UnitOnTaxi and UnitOnTaxi("player") then table.insert(ctx, TR"Flug") end
+  if UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, "player") then table.insert(ctx, TR"tot") end
+  if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then table.insert(ctx, TR"Flug") end
   local key = tostring(addon) .. ": " .. short .. (#ctx > 0 and (" [" .. table.concat(ctx, ", ") .. "]") or TR" [nichts offen]")
   db.blockedLog[key] = (db.blockedLog[key] or 0) + 1
   if addon ~= ADDON then return end
   local n = NAMES[short] or NAMES[short:match("([%w_]+)$") or ""]
+  -- v11d (Pr P2): Vermutung (UNKNOWN im selben Bild) nur zaehlen, nichts abschalten
+  if guess then
+    db.forbiddenGuess = db.forbiddenGuess or {}
+    db.forbiddenGuess[short] = (db.forbiddenGuess[short] or 0) + 1
+    return
+  end
   db.forbidden = db.forbidden or {}
   db.forbidden[short] = (db.forbidden[short] or 0) + 1
   if n and n[2] then db[n[2]] = false end

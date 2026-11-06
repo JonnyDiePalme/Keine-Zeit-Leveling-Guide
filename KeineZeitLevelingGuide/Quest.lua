@@ -76,6 +76,49 @@ local function OkForAll(qid)
   end
   return true
 end
+-- 1.1 (S Log L6.2 und L8.4: "Quest abgeben oder annehmen nur die, die es betrifft"): Auto Quest nimmt nur noch Quests,
+-- die im aktuellen Schritt stehen oder in den naechsten Schritten an derselben Stelle (Buendel beim selben NPC oder Hub),
+-- dazu die Schritte bei dir in der Naehe. Vorher galt die ganze Route (auch Quests, die erst Stunden spaeter dran sind)
+local STEP_NEAR_YD = 40     -- Schritte so nah am aktuellen Schritt oder an dir gehoeren zum Buendel
+local STEP_NEAR_MAX = 8     -- so viele Schritte voraus hoechstens
+local function PlainQ(t) return (tostring(t):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub(" %(.-%)$", "")) end
+function ns.StepWindowQuests()
+  local opt = ns.db and ns.db.opt
+  if not (opt and opt.steps and #opt.steps > 0) then return nil end
+  local i0 = opt.idx or 1
+  local s0 = opt.steps[i0]
+  if not s0 then return nil end
+  local ids, names = {}, {}
+  local function Add(s)
+    for _, a in ipairs(s.acts or {}) do
+      if a.qid then ids[a.qid] = ids[a.qid] or a.k or true end
+      if type(a.quest) == "string" then names[PlainQ(a.quest)] = true end
+    end
+  end
+  Add(s0)
+  local pm = ns.PlayerMap and ns.PlayerMap()
+  local pos = pm and C_Map and C_Map.GetPlayerMapPosition and C_Map.GetPlayerMapPosition(pm, "player")
+  local px, py
+  if pos then px, py = pos:GetXY() end
+  local D = ns.WorldDistXY
+  local chain = true
+  for i = i0 + 1, math.min(#opt.steps, i0 + STEP_NEAR_MAX) do
+    local s = opt.steps[i]
+    if not (s and s.map and s.x and s.y and D) then break end
+    local near = false
+    if chain and s0.map and s0.x and s0.y then
+      local d = D(s0.map, s0.x, s0.y, s.map, s.x, s.y)
+      if d and d <= STEP_NEAR_YD then near = true else chain = false end
+    end
+    if not near and px then
+      local d = D(pm, px, py, s.map, s.x, s.y)
+      if d and d <= STEP_NEAR_YD then near = true end
+    end
+    if near then Add(s) end
+  end
+  return ids, names
+end
+
 function ns.WantQuest(qid, title)
   if not ns.db then return true end
   if ns.db.autoQuestAll then return OkForAll(qid) end
@@ -83,11 +126,32 @@ function ns.WantQuest(qid, title)
   -- noch keine Route (Questie laedt noch): nicht blockieren
   local opt = ns.db.opt
   if not (opt and opt.steps and #opt.steps > 0) and not (ns.db.plan60 and ns.db.plan60.secs) then return true end
+  local ids, names = ns.StepWindowQuests()
+  if ids then
+    if qid and ids[qid] then return true end
+    if title and names[PlainQ(title)] then return true end
+    -- Reserve Quests (nahe der Route, siehe Optimizer ns.ReserveQuests): duerfen mit, solange Platz im Log ist
+    if qid and ns.IsReserveQuest and ns.IsReserveQuest(qid) then return true end
+    return false
+  end
   local r = RouteQuests()
   if qid and r.ids[qid] then return true end
   if title and r.names[title] then return true end
   return false
 end
+-- Abgeben: nur fertige Quests, und nur solche aus dem aktuellen Buendel oder ohne geplante Abgabe in der Route
+local function WantTurnIn(qid, title)
+  if not ns.db then return true end
+  if ns.db.autoQuestAll then return true end
+  local ids, names = ns.StepWindowQuests()
+  if not ids then return true end
+  if qid and ids[qid] then return true end
+  if title and names[PlainQ(title)] then return true end
+  local r = RouteQuests()
+  if (qid and r.ids[qid]) or (title and r.names[PlainQ(title)]) then return false end
+  return true
+end
+ns.WantTurnIn = WantTurnIn
 
 local function GoodLevel(level, trivial)
   if trivial then return false end
@@ -156,24 +220,24 @@ local function HandleGossip()
   if not Enabled() then return end
   if C_GossipInfo and C_GossipInfo.GetActiveQuests then
     for _, q in ipairs(C_GossipInfo.GetActiveQuests() or {}) do
-      if q.isComplete then C_GossipInfo.SelectActiveQuest(q.questID); return end
+      if q.isComplete and WantTurnIn(q.questID, q.title) then ns.Api.Prot("C_GossipInfo.SelectActiveQuest", C_GossipInfo.SelectActiveQuest, q.questID); return end
     end
     if LogFull() then return end
     for _, q in ipairs(C_GossipInfo.GetAvailableQuests() or {}) do
       if GoodLevel(q.questLevel, q.isTrivial) and not q.repeatable and ns.WantQuest(q.questID, q.title) then
-        C_GossipInfo.SelectAvailableQuest(q.questID); return
+        ns.Api.Prot("C_GossipInfo.SelectAvailableQuest", C_GossipInfo.SelectAvailableQuest, q.questID); return
       end
     end
   elseif GetGossipActiveQuests then
     local a = { GetGossipActiveQuests() }
     for i = 1, #a / 6 do
-      if a[(i - 1) * 6 + 4] then SelectGossipActiveQuest(i); return end
+      if a[(i - 1) * 6 + 4] and WantTurnIn(nil, a[(i - 1) * 6 + 1]) then ns.Api.Prot("SelectGossipActiveQuest", SelectGossipActiveQuest, i); return end
     end
     if LogFull() then return end
     local v = { GetGossipAvailableQuests() }
     for i = 1, #v / 7 do
       local lvl, triv, rep = v[(i - 1) * 7 + 2], v[(i - 1) * 7 + 3], v[(i - 1) * 7 + 5]
-      if GoodLevel(lvl, triv) and not rep and ns.WantQuest(nil, v[(i - 1) * 7 + 1]) then SelectGossipAvailableQuest(i); return end
+      if GoodLevel(lvl, triv) and not rep and ns.WantQuest(nil, v[(i - 1) * 7 + 1]) then ns.Api.Prot("SelectGossipAvailableQuest", SelectGossipAvailableQuest, i); return end
     end
   end
 end
@@ -183,10 +247,15 @@ local function HandleGreeting()
   if not Enabled() then return end
   local now = GetTime()
   for i = 1, GetNumActiveQuests() do
-    local title = GetActiveTitle(i)
-    if title and (not tried[title] or now - tried[title] > 10) then
+    -- 1.1 (S L8.4 "probiert Quests abzugeben, die noch nicht fertig sind"): nur fertige (zweiter Wert von GetActiveTitle,
+    -- sonst laut Questlog) und nur die aus dem aktuellen Buendel
+    local title, isDone = GetActiveTitle(i)
+    if isDone == nil and title and ns.logProgress then
+      for _, lp in pairs(ns.logProgress) do if lp.title == title then isDone = lp.complete end end
+    end
+    if title and isDone and WantTurnIn(nil, title) and (not tried[title] or now - tried[title] > 10) then
       tried[title] = now
-      SelectActiveQuest(i)
+      ns.Api.Prot("SelectActiveQuest", SelectActiveQuest, i)
       return
     end
   end
@@ -195,7 +264,7 @@ local function HandleGreeting()
     local triv, _, rep = false, nil, false
     if GetAvailableQuestInfo then triv, _, rep = GetAvailableQuestInfo(i) end
     local lvl = GetAvailableLevel and GetAvailableLevel(i)
-    if GoodLevel(lvl, triv) and not rep and ns.WantQuest(nil, GetAvailableTitle and GetAvailableTitle(i)) then SelectAvailableQuest(i); return end
+    if GoodLevel(lvl, triv) and not rep and ns.WantQuest(nil, GetAvailableTitle and GetAvailableTitle(i)) then ns.Api.Prot("SelectAvailableQuest", SelectAvailableQuest, i); return end
   end
 end
 
@@ -217,16 +286,16 @@ f:SetScript("OnEvent", function(_, event, ...)
     -- Gold der Quest merken
     local qid, m = GetQuestID and GetQuestID(), GetRewardMoney and GetRewardMoney()
     if qid and qid > 0 and m then ns.db.questMoney = ns.db.questMoney or {}; ns.db.questMoney[qid] = m end
-    if Enabled() and not LogFull() and ns.WantQuest(qid, GetTitleText and GetTitleText()) then AcceptQuest() end
+    if Enabled() and not LogFull() and ns.WantQuest(qid, GetTitleText and GetTitleText()) then ns.Api.Prot("AcceptQuest", AcceptQuest) end
   elseif event == "QUEST_PROGRESS" then
-    if Enabled() and IsQuestCompletable() then CompleteQuest() end
+    if Enabled() and IsQuestCompletable() then ns.Api.Prot("CompleteQuest", CompleteQuest) end
   elseif event == "QUEST_COMPLETE" then
     local qid, m = GetQuestID and GetQuestID(), GetRewardMoney and GetRewardMoney()
     if qid and qid > 0 and m then ns.db.questMoney = ns.db.questMoney or {}; ns.db.questMoney[qid] = m end
     if not Enabled() then return end
     local n = GetNumQuestChoices()
     if n <= 1 then
-      GetQuestReward(n)
+      ns.Api.Prot("GetQuestReward", GetQuestReward, n)
     else
       ns.Print(TR"Mehrere Belohnungen, bitte selber auswählen")
       if SOUNDKIT and SOUNDKIT.IG_QUEST_LIST_OPEN then PlaySound(SOUNDKIT.IG_QUEST_LIST_OPEN) end
@@ -251,6 +320,29 @@ f:SetScript("OnEvent", function(_, event, ...)
       title = C_QuestLog.GetTitleForQuestID(qid)
     end
     if title then RememberQuest(title) end
+    if qid and ns.ReserveAccepted then pcall(ns.ReserveAccepted, qid) end
+    -- 1.1 (K Stufe B 11): Zeitlimit lernen (Sekunden), damit die Route die Quest nur nimmt, wenn sie in der Zeit geht
+    if qid and C_Timer then
+      C_Timer.After(1, function()
+        local lim
+        if C_QuestLog and C_QuestLog.GetTimeAllowed then
+          local ok, total = pcall(C_QuestLog.GetTimeAllowed, qid)
+          if ok and type(total) == "number" and total > 0 then lim = total end
+        end
+        if not lim and GetQuestTimers and idx then
+          -- alte Schnittstelle: Restzeit je Quest mit Zeitlimit, direkt nach dem Annehmen = ganzes Limit
+          local ok, t1 = pcall(GetQuestTimers)
+          if ok and type(t1) == "number" and t1 > 0 and GetQuestIndexForTimer then
+            local ok2, li = pcall(GetQuestIndexForTimer, 1)
+            if ok2 and li == idx then lim = t1 end
+          end
+        end
+        if lim and ns.db then
+          ns.db.questTimer = ns.db.questTimer or {}
+          ns.db.questTimer[qid] = math.floor(lim + 0.5)
+        end
+      end)
+    end
   end
 end)
 
@@ -513,6 +605,14 @@ end
 ------------------------------------------------------------
 ns.logProgress = {}
 
+-- 1.1 (S Log L9.7 "Questziel nicht erkannt": Marinesoldat 8/8, Schritt blieb stehen): manche Clients melden das Ziel bei
+-- voller Zahl nicht als fertig. Fertig ist es auch, wenn der Text x/y mit x >= y zeigt
+local function ObjDone(text, finished)
+  if finished and finished ~= 0 then return true end
+  local x, y = tostring(text or ""):match("(%d+)%s*/%s*(%d+)")
+  x, y = tonumber(x), tonumber(y)
+  return (x and y and y > 0 and x >= y) and true or false
+end
 function ns.ReadLog()
   local out = {}
   local n = NumEntries() or 0
@@ -526,8 +626,9 @@ function ns.ReadLog()
         local objs = {}
         local nb = GetNumQuestLeaderBoards and GetNumQuestLeaderBoards(i) or 0
         for j = 1, nb do
-          local text, _, finished = GetQuestLogLeaderBoard(j, i)
-          if text then table.insert(objs, { text = text, done = finished and true or false }) end
+          local text, typ, finished = GetQuestLogLeaderBoard(j, i)
+          -- 1.1 (P40): Art vom Ziel (monster, item, object, event ...) fuer die Farbe im Mini Fenster
+          if text then table.insert(objs, { text = text, done = ObjDone(text, finished), typ = typ }) end
         end
         local link, icon = nil, nil
         if GetQuestLogSpecialItemInfo then link, icon = GetQuestLogSpecialItemInfo(i) end
@@ -541,7 +642,7 @@ function ns.ReadLog()
       elseif info and info.questID then
         local objs = {}
         for _, o in ipairs((C_QuestLog.GetQuestObjectives and C_QuestLog.GetQuestObjectives(info.questID)) or {}) do
-          table.insert(objs, { text = o.text, done = o.finished and true or false })
+          table.insert(objs, { text = o.text, done = ObjDone(o.text, o.finished), typ = o.type })
         end
         local link, icon = nil, nil
         if GetQuestLogSpecialItemInfo then link, icon = GetQuestLogSpecialItemInfo(i) end

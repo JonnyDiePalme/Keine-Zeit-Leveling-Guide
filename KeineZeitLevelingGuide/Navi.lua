@@ -367,7 +367,7 @@ function ns.NaviPlan(dmap, dx, dy, dname)
   end
   local H, recall
   local bi = ns.db and ns.db.bindInn
-  local hasStone = not GetItemCount or GetItemCount(6948) > 0
+  local hasStone = not ns.Api.GetItemCount or ns.Api.GetItemCount(6948) > 0
   -- 19.39 (Navi Chat, Saschas Log 31.10. 13:20, K AUF 13:56): Ruhestein Ort noch unbekannt, dann einmal nachfragen
   -- (Bindeort Name, Gastwirt Orte), sonst fuer Hinweis und Log merken, warum der Ruhestein nicht dabei ist
   if not bi and ns.NaviBindGuess then pcall(ns.NaviBindGuess); bi = ns.db and ns.db.bindInn end
@@ -662,7 +662,7 @@ local function SetTarget()
   -- Landeort (weit weg, in anderer Zone). Solange du nicht fliegst, zeigt der Pfeil zum Flugmeister, von dem der Flug startet
   -- (lg.from), waehrend des Flugs auf den Landeort. nv.st.fm = true: Arrow rechnet den Weg dorthin wie bei Laufen.
   local at, fm = lg.at, nil
-  if lg.kind == "fly" and lg.from and lg.from.map and lg.from.x and lg.from.y and not (UnitOnTaxi and UnitOnTaxi("player")) then
+  if lg.kind == "fly" and lg.from and lg.from.map and lg.from.x and lg.from.y and not (UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")) then
     at, fm = lg.from, true
   end
   nv.st = { map = at.map, x = at.x, y = at.y, name = LegText(nv, nv.cur), kind = "navi", fm = fm }
@@ -913,7 +913,7 @@ local function Tick()
   end
   nv.wartet = nil
   local P = Here()
-  local onTaxi = UnitOnTaxi and UnitOnTaxi("player")
+  local onTaxi = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")
   if not P then return end
   -- 19.9 (Code Pruefung): beim Planen rechnete der Zonen Graph noch (zb gemerktes Navi nach dem Einloggen), der Plan
   -- ist nur vorlaeufig. Sobald der Graph fertig ist, einmal still neu planen
@@ -1117,7 +1117,7 @@ function ns.NaviHearthWanted()
   if not lg then return nil end
   local known = IsSpellKnown or IsPlayerSpell
   -- Pruefer 09:08 LEICHT 2: zuerst C_Item.GetItemCount, dann das globale (wie QuestItems.lua)
-  local gic = (C_Item and C_Item.GetItemCount) or GetItemCount
+  local gic = (C_Item and C_Item.GetItemCount) or ns.Api.GetItemCount
   local function Has(id)
     if not gic then return false end
     local ok, n = pcall(gic, id)
@@ -1133,7 +1133,7 @@ function ns.NaviHearthWanted()
     end
   -- Pruefer 09:08 LEICHT 1: Teleport nur mit Rune der Teleportation (17031, wie RUNE in NaviFlug.lua), sonst Fehler beim Klick
   elseif lg.kind == "portal" and lg.spell and known and known(lg.spell) and Has(17031) then
-    local icon = (GetSpellTexture and GetSpellTexture(lg.spell)) or "Interface\\Icons\\Spell_Arcane_TeleportOrgrimmar"
+    local icon = (ns.Api.GetSpellTexture and ns.Api.GetSpellTexture(lg.spell)) or "Interface\\Icons\\Spell_Arcane_TeleportOrgrimmar"
     return { spell = lg.spell, icon = icon, quest = lg.text, hearth = true, key = "NP" .. lg.spell }
   end
   return nil
@@ -1200,7 +1200,7 @@ function ns.NaviHudInfo()
     -- Flugmeister. Flug: erst ab dem Abflug (auf dem Taxi). Teleport/Ruhestein: erst ab dem Zaubern.
     local nowT, t0 = GetTime(), nil
     if lg.kind == "fly" then
-      if UnitOnTaxi and UnitOnTaxi("player") then
+      if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then
         if not nv.flyT0 then nv.flyT0 = nowT end
         t0 = nv.flyT0
       end
@@ -1211,7 +1211,7 @@ function ns.NaviHudInfo()
       t0 = nv.castT0
     end
     left = math.max(0, (lg.sec or 0) - (t0 and (nowT - t0) or 0))
-    if lg.kind == "fly" and UnitOnTaxi and not UnitOnTaxi("player") then i.objs = { TR"Beim Flugmeister den Flug nehmen" } end
+    if lg.kind == "fly" and UnitOnTaxi and not ns.Api.U(UnitOnTaxi, "player") then i.objs = { TR"Beim Flugmeister den Flug nehmen" } end
   end
   i.time = ns.Clock and ns.Clock(left) or tostring(math.floor(left))
   local rest = left

@@ -120,7 +120,7 @@ function ns.HintList()
   local h = not (db.svcSnooze and db.svcSnooze.hearthSave and time() < db.svcSnooze.hearthSave) and HearthSoon()
   if h then
     local ready = true
-    if not h.recall and GetItemCooldown then local _, dur = GetItemCooldown(6948); ready = not dur or dur == 0 end
+    if not h.recall and ns.Api.GetItemCooldown then local _, dur = ns.Api.GetItemCooldown(6948); ready = not dur or dur == 0 end
     if ready then
       -- 19.31 (Sascha: "aufheben" las sich wie "jetzt benutzen", er hat ihn zu frueh benutzt)
       Add({ kind = "hearth", text = (TR"%s noch nicht benutzen, kommt gleich dran"):format(h.recall and TR"Astraler Rückruf" or TR"Ruhestein"),
@@ -178,8 +178,8 @@ function ns.HintList()
   -- 6c Schlafsack (Forever, 17.5): Buff abgelaufen und Schlafsack wieder bereit. Nicht im Kampf, nicht auf Level 60.
   -- Am besten beim naechsten Essen oder Trinken hinlegen, dann kostet das Liegen keine Zeit.
   local maxL = (GetMaxPlayerLevel and GetMaxPlayerLevel()) or 60
-  if (UnitLevel("player") or 1) < maxL and not (UnitAffectingCombat and UnitAffectingCombat("player"))
-    and not (UnitOnTaxi and UnitOnTaxi("player"))
+  if (UnitLevel("player") or 1) < maxL and not (UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player"))
+    and not (UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player"))
     and not (db.svcSnooze and db.svcSnooze.bag and time() < db.svcSnooze.bag)
     and ns.SleepingBagReady and ns.SleepingBagReady() then
     Add({ kind = "bag", text = TR"Schlafsack bereit: beim nächsten Essen oder Trinken hinlegen",

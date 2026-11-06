@@ -106,7 +106,7 @@ local function Update()
   if not (db and db.show and db.miniShow) then HideAll(); last.map = nil; return end
   -- 20.3z3 (Ad AN Na P7, fps 6 bis 7 beim Navi Flug 16:59:48): im Taxi bewegt sich die Position dauernd, jede 0,1 s wurde alles neu
   -- aufgebaut. Im Taxi hoechstens alle 0,5 s.
-  if UnitOnTaxi and UnitOnTaxi("player") then
+  if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then
     local tn = GetTime()
     if tn - (last.taxiAt or 0) < 0.5 then return end
     last.taxiAt = tn
@@ -146,7 +146,7 @@ local function Update()
   HideAll()
 
   local zoom = zoomNow
-  local diameter = (IsIndoors and IsIndoors() and INDOOR[zoom] or OUTDOOR[zoom]) or 466
+  local diameter = (IsIndoors and ns.Api.U(IsIndoors) and INDOOR[zoom] or OUTDOOR[zoom]) or 466
   local half = Minimap:GetWidth() / 2
   local scale = half / (diameter / 2) -- Pixel pro Yard
   local rotate = rot
@@ -306,10 +306,23 @@ local function Update()
   -- 20.3l (Release Punkt 23): auch Berufe Routen (db.opt.prof) zeigen die Runde, nicht nur der Endlos Modus (opt.loop). Die Schritte
   -- wiederholen die Runde mehrfach, der Ring endet vor der ersten Wiederholung des ersten Punkts.
   -- 20.3y (K 17:22 P5, S 17:04/17:06): der Kreislauf bleibt auch sichtbar, solange das Navi den Weg dorthin (Anweg) fuehrt
-  if useOpt and (opt.loop or opt.prof) and type(opt.steps) == "table" and #opt.steps >= 3 then
+  -- v11f (K P37): Runde in einem grossen Gegner Gebiet (Feld rund am Ziel, Arrow.lua NaviRundPts) wie die Farm Runde zeichnen
+  local rundPts = useOpt and ns.NaviRundPts and ns.NaviRundPts(mapID)
+  if rundPts and #rundPts >= 4 then
     local LC = { 0.35, 0.95, 0.5 }
     local ring = {}
-    for i = 1, math.min(#opt.steps, db.slowPC and 12 or 40) do
+    for i = 1, #rundPts - 1 do
+      local ex, ey, ins = ToMini(rundPts[i][1], rundPts[i][2])
+      ring[#ring + 1] = { ex, ey, ins }
+    end
+    rundPts = ring
+  else
+    rundPts = nil
+  end
+  if rundPts or (useOpt and (opt.loop or opt.prof) and type(opt.steps) == "table" and #opt.steps >= 3) then
+    local LC = { 0.35, 0.95, 0.5 }
+    local ring = rundPts or {}
+    for i = 1, (rundPts and 0) or math.min(#opt.steps, db.slowPC and 12 or 40) do
       local st = opt.steps[i]
       local s1 = opt.steps[1]
       if i > 1 and s1 and st.map == s1.map and st.x and s1.x and math.abs(st.x - s1.x) < 0.0005 and math.abs(st.y - s1.y) < 0.0005 then break end

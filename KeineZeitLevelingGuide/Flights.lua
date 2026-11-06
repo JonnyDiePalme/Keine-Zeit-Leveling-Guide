@@ -186,12 +186,40 @@ ef:SetScript("OnEvent", function(_, e)
     taking, startT = nil, nil
     if hooksecurefunc and TakeTaxiNode and not ef.hooked then
       ef.hooked = true
-      hooksecurefunc("TakeTaxiNode", function()
-        if fromId then taking = { from = fromId, t = GetTime() } end
+      hooksecurefunc("TakeTaxiNode", function(slot)
+        if fromId then
+          taking = { from = fromId, t = GetTime() }
+          -- 1.1 (S Wunsch: Flugzeit unter dem Pfeil): Ziel Flugmeister aus dem Knopf (Slot) ueber die Flug Daten (ns.TAXI)
+          local okD, toNpc = pcall(function()
+            local mapID = GetTaxiMapID and GetTaxiMapID()
+            local nodes = C_TaxiMap and C_TaxiMap.GetAllTaxiNodes and mapID and C_TaxiMap.GetAllTaxiNodes(mapID)
+            for _, n in ipairs(nodes or {}) do
+              if n.slotIndex == slot and n.nodeID and ns.TAXI and ns.TAXI.knoten then
+                local k = ns.TAXI.knoten[n.nodeID]
+                return type(k) == "table" and k[11] or nil
+              end
+            end
+          end)
+          taking.to = okD and toNpc or nil
+        end
       end)
     end
   end
 end)
+
+-- 1.1: laufender Flug: Rest Sekunden, ganze Zeit, Quelle ("eigen" oder "geteilt"), oder nil wenn unbekannt
+-- 1.1 (P61, K 14:36): im Flug? UnitOnTaxi, wenn der Wert nicht geheim ist, sonst ob ein Flug von uns laeuft
+function ns.InFlight()
+  local t = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")
+  if t ~= nil then return t and true or false end
+  return ns.FlightNow and ns.FlightNow() ~= nil or false
+end
+function ns.FlightNow()
+  if not (taking and startT and taking.to and taking.from) then return nil end
+  local total, src = ns.FlightTime(taking.from, taking.to)
+  if not total then return nil end
+  return math.max(0, total - (GetTime() - startT)), total, src
+end
 
 local function Landed()
   local map = ns.PlayerMap and ns.PlayerMap()
@@ -206,7 +234,7 @@ end
 
 local function Tick()
   if not taking then return end
-  local onTaxi = UnitOnTaxi and UnitOnTaxi("player")
+  local onTaxi = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")
   if not startT then
     if onTaxi then startT = GetTime()
     elseif GetTime() - taking.t > 30 then taking = nil end

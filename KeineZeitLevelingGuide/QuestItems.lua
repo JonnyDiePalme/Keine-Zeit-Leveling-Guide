@@ -17,20 +17,20 @@ local function Cooldown(btn)
   local start, dur, enable
   if C_Container and C_Container.GetItemCooldown then
     start, dur, enable = C_Container.GetItemCooldown(btn.itemID)
-  elseif GetItemCooldown then
-    start, dur, enable = GetItemCooldown(btn.itemID)
+  elseif ns.Api.GetItemCooldown then
+    start, dur, enable = ns.Api.GetItemCooldown(btn.itemID)
   end
   if start and dur and CooldownFrame_Set then CooldownFrame_Set(btn.cd, start, dur, enable) end
 end
 local function SpellCooldown(btn)
-  if not (btn.spellID and GetSpellCooldown) then return end
-  local start, dur, enable = GetSpellCooldown(btn.spellID)
+  if not (btn.spellID and ns.Api.GetSpellCooldown) then return end
+  local start, dur, enable = ns.Api.GetSpellCooldown(btn.spellID)
   if start and dur and CooldownFrame_Set then CooldownFrame_Set(btn.cd, start, dur, enable) end
 end
 
 local function Count(id)
   if C_Item and C_Item.GetItemCount then return C_Item.GetItemCount(id) end
-  if GetItemCount then return GetItemCount(id) end
+  if ns.Api.GetItemCount then return ns.Api.GetItemCount(id) end
   return 0
 end
 
@@ -79,7 +79,7 @@ local function HearthWanted()
   local a = ns.db and ns.db.optMode and ns.OptCurrentAct and ns.OptCurrentAct()
   -- 20.3o (Log 20.3m M4, S 22:57 "Button fuer Teleport fehlt"): Reise Schritt Teleport (Magier, Travel.lua) als Knopf
   if a and a.k == "R" and a.link == "tele" and a.spell and ((IsPlayerSpell and IsPlayerSpell(a.spell)) or (IsSpellKnown and IsSpellKnown(a.spell))) then
-    local icon = (GetSpellTexture and GetSpellTexture(a.spell)) or "Interface\\Icons\\Spell_Arcane_TeleportOrgrimmar"
+    local icon = (ns.Api.GetSpellTexture and ns.Api.GetSpellTexture(a.spell)) or "Interface\\Icons\\Spell_Arcane_TeleportOrgrimmar"
     return { spell = a.spell, icon = icon, quest = TR"Teleport nach " .. tostring(a.dest or "?"), hearth = true, key = "P" .. a.spell }
   end
   if not (a and a.k == "H") then return nil end
@@ -104,7 +104,12 @@ local function Collect()
   local seen = {}
   -- feste Reihenfolge (nach Quest ID), sonst tauschen die Knoepfe beim Neuaufbau die Plaetze
   local qs = {}
-  for qid, q in pairs(ns.logProgress or {}) do qs[#qs + 1] = { qid, q } end
+  -- 1.1 (S Log L14.3 "Quest Items zum Benutzen nur zeigen, wenn die Quest gerade gemacht wird"): mit Route nur Quests aus
+  -- dem aktuellen Schritt (und dem Buendel an derselben Stelle, Quest.lua StepWindowQuests). Ohne Route wie bisher alle
+  local cur = ns.StepWindowQuests and ns.StepWindowQuests()
+  for qid, q in pairs(ns.logProgress or {}) do
+    if not cur or cur[qid] then qs[#qs + 1] = { qid, q } end
+  end
   table.sort(qs, function(a, b) return a[1] < b[1] end)
   for pass = 1, 2 do
     for _, e in ipairs(qs) do
@@ -148,6 +153,7 @@ local function Update()
   for i = 1, MAX do
     local it = list[i]
     local b = buttons[i] or MakeButton(i)
+    ns.Api.Mark("Questitem Knopf")
     b:ClearAllPoints()
     b:SetPoint("LEFT", bar, "LEFT", (i - 1) * 36, 0)
     if it and it.spell then
@@ -207,11 +213,14 @@ function ns.InitQuestItems()
   end)
   C_Timer.After(3, Update)
   -- Ruhestein Knopf: auftauchen und verschwinden, sobald die Route ihn will oder nicht mehr
-  local lastWant
+  local lastWant, lastStep
   ns.Ticker(1, function()
     local h = HearthWanted()
     local k = h and h.key or false
-    if k ~= lastWant then lastWant = k; Update() end
+    -- 1.1: neuer Schritt, dann passen die Quest Items vielleicht nicht mehr
+    local o = ns.db and ns.db.opt
+    local st = o and o.steps and o.steps[o.idx or 1]
+    if k ~= lastWant or st ~= lastStep then lastWant, lastStep = k, st; Update() end
   end)
 end
 

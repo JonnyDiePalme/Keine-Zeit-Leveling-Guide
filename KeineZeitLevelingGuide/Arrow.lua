@@ -101,6 +101,7 @@ local resolveFinal -- Pfeil zeigt auf einen Zwischenpunkt (Weg ums Gelaende, Zon
 -- st.map, kommt von Optimizer/Farm), fuehrt der Pfeil zum naechsten Rundpunkt und dann reihum (unter 25 yd = Punkt erledigt, am Ende
 -- wieder vorne). Ohne Feld rund aendert sich nichts. ns.NaviRundPts(mapID) gibt die Runde als geschlossene Linie fuer die Minimap/Weltkarte.
 local RUND_NAH = 25
+local RUND_SKIP_S = 90    -- v11f: Punkt ohne Fortschritt so lange auslassen
 local rundState = { key = nil, i = 1, n = 0 }
 local function RundOf(stp, mapID)
   local r = stp and stp.rund
@@ -119,13 +120,24 @@ local function RundNext(stp, mapID, px, py)
       local d = ns.WorldDist and ns.WorldDist({ mapID, px, py }, { mapID, p[1], p[2] }) or math.huge
       if d < bd then bi, bd = i, d end
     end
-    rundState.key, rundState.i, rundState.n = key, bi, 0
+    rundState.key, rundState.i, rundState.n, rundState.skip, rundState.prog = key, bi, 0, {}, nil
   end
   local p = r[rundState.i]
   local d = ns.WorldDist and ns.WorldDist({ mapID, px, py }, { mapID, p[1], p[2] })
   if d and d < RUND_NAH then
-    rundState.i = rundState.i % #r + 1
-    if rundState.i == 1 then rundState.n = rundState.n + 1 end
+    -- v11f (K P37): kein Fortschritt seit dem letzten Punkt (abgeraeumt, andere Spieler): diesen Punkt eine Weile auslassen
+    local now = GetTime()
+    local act = ns.OptCurrentAct and ns.OptCurrentAct()
+    local prog = act and ns.OptCountText and ns.OptCountText(act) or ""
+    rundState.skip = rundState.skip or {}
+    if rundState.prog ~= nil and rundState.prog == prog then rundState.skip[rundState.i] = now + RUND_SKIP_S end
+    rundState.prog = prog
+    local tries = 0
+    repeat
+      rundState.i = rundState.i % #r + 1
+      if rundState.i == 1 then rundState.n = rundState.n + 1 end
+      tries = tries + 1
+    until tries >= #r or not ((rundState.skip[rundState.i] or 0) > now)
     p = r[rundState.i]
   end
   return p[1], p[2], rundState.n + 1, #r, rundState.i
@@ -150,7 +162,7 @@ local function ResolveRaw(db)
   local px, py = pos:GetXY()
 
   -- tot als Geist: zur Leiche
-  if UnitIsGhost and UnitIsGhost("player") and C_DeathInfo and C_DeathInfo.GetCorpseMapPosition then
+  if UnitIsGhost and ns.Api.U(UnitIsGhost, "player") and C_DeathInfo and C_DeathInfo.GetCorpseMapPosition then
     local ok, v = pcall(C_DeathInfo.GetCorpseMapPosition, mapID)
     if ok and v then
       local cx, cy = v:GetXY()
@@ -193,7 +205,7 @@ local function ResolveRaw(db)
   local okKind = lgA and (lgA.kind == "walk" or st.fm or (lgA.kind == "ride" and lgA.at and ns.WorldDist
     and (ns.WorldDist({ mapID, px, py }, { lgA.at.map, lgA.at.x, lgA.at.y }) or math.huge) < 150))
   if okKind and st.map and st.x and st.y and ns.WalkNext
-    and not (UnitOnTaxi and UnitOnTaxi("player")) then
+    and not (UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")) then
     local gx, gy, gmap = st.x, st.y, st.map
     local via, viaX
     -- m0, x0, y0: Karte, auf der gerechnet wird (deine Karte, oder die Zone deiner Stadt, siehe CityToParent)
@@ -462,7 +474,7 @@ local function ResolveTarget(db)
   if resolveSrc == "opt" or resolveFinal then return m, px, py, tx, ty, name, tpt end
   local st = ns.serviceTarget
   if resolveSrc == "svc" and st and st.kind == "navi" then return m, px, py, tx, ty, name, tpt end -- Flug, Schiff, Portal
-  if UnitOnTaxi and UnitOnTaxi("player") then return m, px, py, tx, ty, name, tpt end
+  if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then return m, px, py, tx, ty, name, tpt end
   if not (ns.WalkNext and m == ns.PlayerMap()) then return m, px, py, tx, ty, name, tpt end -- Kontinent Karte: so lassen
   if math.abs(tx - px) < 1e-6 and math.abs(ty - py) < 1e-6 then return m, px, py, tx, ty, name, tpt end -- Ruhestein hier
   if fx and fy then tx, ty = fx, fy; name = (name or "") .. TR"\n|cff9d9d9dZiel abseits des Wegs, bis zum naechsten Weg Punkt" end
@@ -699,6 +711,13 @@ local function BuildArrow()
     -- 19.31: klar sagen, dass jetzt der Moment ist, und wo der Knopf ist
     if hearthNow then info = "|cffffd100" .. TR"Jetzt" .. "|r " .. label .. "\n" .. TR"jetzt benutzen, wo du stehst" .. "\n" .. TR"Knopf darunter klicken" end
     if hearthNow then self.tex:Hide(); cm = nil end
+    -- 1.1 (S Wunsch): im Flug die Flugzeit, wenn sie bekannt ist (eigene Messung oder von anderen geteilt)
+    if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") and ns.FlightNow then
+      local okF, left, total, src = pcall(ns.FlightNow)
+      if okF and left then
+        info = info .. "\n|cff66ccff" .. (TR"Flug: noch %s von %s%s"):format(ns.Clock(left), ns.Clock(total), src == "geteilt" and TR" (geteilt)" or "") .. "|r"
+      end
+    end
     self.text:SetText(info)
     if not docked and not following and not hearthNow then Rotate(self, m, px, py, tx, ty) end
   end)
@@ -760,7 +779,14 @@ local function ObjLine(o)
   local name, prog = txt:match("^(.-):%s*(%d+%s*/%s*%d+)%s*$")
   if name then
     name = name:gsub(" getötet$", ""):gsub(" slain$", ""):gsub(" killed$", "")
-    return Short(name, 26) .. " " .. prog:gsub("%s", "")
+    -- 1.1 (P40): Zaehler gruen, wenn fast voll (gleiche Regel wie im Mini Fenster)
+    local h, nd = prog:match("(%d+)%s*/%s*(%d+)")
+    h, nd = tonumber(h), tonumber(nd)
+    local p2 = prog:gsub("%s", "")
+    if h and nd and nd > 0 and ns.HUD_NEAR_DONE and (h / nd >= ns.HUD_NEAR_DONE or nd - h <= ns.HUD_NEAR_LEFT) then
+      p2 = "|cff" .. ns.HUD_NEAR_COL .. p2 .. "|r"
+    end
+    return Short(name, 26) .. " " .. p2
   end
   return Short(txt, 32)
 end
@@ -1093,10 +1119,19 @@ do
   local LIVE_EVERY   = 10     -- Sekunden zwischen Positions Pruefungen
   local DEV_YARDS    = 150    -- Abweichung vom geplanten Weg
   local NEAR_RATIO   = 0.875  -- 7/8 gilt als fast fertig
-  local MIN_GAIN_SEC = 30     -- Hysterese: mindestens 30 s ...
-  local MIN_GAIN_PCT = 0.10   -- ... oder 10 Prozent schneller
+  -- 1.1 (S Notiz L6.7 "neu rechnen scheint nicht zu gehen", Log: 198 Rechnungen, 104 mal nur wegen der Hysterese nicht
+  -- gewechselt, meist 8 bis 20 s Gewinn bei 300 bis 480 s): Schwelle tiefer, dazu ein Ausloeser alle LIVE_PERIOD_S
+  -- Sekunden (vorher nur bei Abweichung, erledigt, fast fertig, Tod, Zone) und eine kurze Meldung, wenn umgestellt wurde
+  local MIN_GAIN_SEC = 15     -- Hysterese: mindestens 15 s ...
+  local MIN_GAIN_PCT = 0.04   -- ... oder 4 Prozent schneller
+  local LIVE_PERIOD_S = 60    -- spaetestens so oft neu pruefen, auch ohne anderen Ausloeser
+  local LIVE_SAY_S = 300      -- v11d: Chat Zeile "Route angepasst" hoechstens so oft
   local LOCK_SEC     = 60     -- nach einem Wechsel oder Wegklicken keine Gelegenheit
   local MIN_GAP      = 20     -- gleicher Ausloeser frueher nicht nochmal
+  -- 1.1 (P43, Pr Schluss 1.1f: Pfeil hin und her +25 %): wieder zurueck zum Schritt, den eine Umstellung gerade nach hinten
+  -- geschoben hat, nur mit BACK_F mal so viel Gewinn und erst nach BACK_S Sekunden ganz normal
+  local BACK_S       = 180
+  local BACK_F       = 3
   local L = { acc = 0, fired = {}, lastReason = {}, lockUntil = 0, devHits = 0 }
   ns.liveState = L
 
@@ -1148,22 +1183,40 @@ do
     local now = GetTime()
     if L.lastReason[reason] and now - L.lastReason[reason] < MIN_GAP then return end
     L.lastReason[reason] = now
+    L.periodAt = now
     if not ns.LiveReplan then
       Log("LIVE", ("Ausloeser %s (ns.LiveReplan fehlt, nichts gerechnet)"):format(reason))
       return
     end
     -- nach einem Wechsel bleibt es fest, bis der Schritt erledigt ist (Tod und Zonenwechsel duerfen trotzdem)
     local idx = ns.db.opt.idx
-    if L.fixed and L.fixed == idx and reason ~= "tod" and reason ~= "zone" then
+    if L.fixed and L.fixed == idx and reason ~= "tod" and reason ~= "zone" and reason ~= "ruhestein" then
       Log("LIVE", ("Ausloeser %s ignoriert: Schritt %s steht fest"):format(reason, tostring(idx)))
+      return
+    end
+    -- 1.1: in Stuecken ueber mehrere Bilder rechnen (bis 10 Schritte), Entscheid danach in Decide
+    if ns.LiveReplanAsync then
+      ns.LiveReplanAsync(reason, ctx, function(r, err)
+        if err then Log("LIVE", ("Ausloeser %s: Fehler %s"):format(reason, tostring(err))); return end
+        local okD, eD = pcall(L.Decide, reason, r)
+        if not okD then Log("LIVE", ("Ausloeser %s: Fehler %s"):format(reason, tostring(eD))) end
+      end)
       return
     end
     local ok, r = pcall(ns.LiveReplan, reason, ctx)
     if not ok then Log("LIVE", ("Ausloeser %s: Fehler %s"):format(reason, tostring(r))); return end
+    L.Decide(reason, r)
+  end
+  -- Ergebnis einer Rechnung: wechseln, wenn es sich lohnt
+  function L.Decide(reason, r)
+    local now = GetTime()
     if not r then Log("LIVE", ("Ausloeser %s: Reihenfolge bleibt"):format(reason)); return end
     local old, new = tonumber(r.oldSec) or 0, tonumber(r.newSec) or 0
     local gain = old - new
-    if gain >= MIN_GAIN_SEC or (old > 0 and gain / old >= MIN_GAIN_PCT) then
+    local f = 1
+    if r.newFirst and r.newFirst == L.leftStep and now - (L.leftAt or -999) < BACK_S then f = BACK_F end
+    if gain >= MIN_GAIN_SEC * f or (old > 0 and gain / old >= MIN_GAIN_PCT * f) then
+      if r.oldFirst and r.newFirst and r.oldFirst ~= r.newFirst then L.leftStep, L.leftAt = r.oldFirst, now end
       local ok2, err = pcall(r.apply or function() end)
       Log("LIVE", ("Ausloeser %s: neue Reihenfolge, %d s schneller (vorher %d s, jetzt %d s)%s"):format(
         reason, gain, old, new, ok2 and "" or (" Fehler " .. tostring(err))))
@@ -1173,8 +1226,13 @@ do
       L.chance = nil
       if ns.Draw then ns.Draw() end
       if ns.RefreshHud then ns.RefreshHud() end
+      -- v11d (Pr P4): hoechstens alle LIVE_SAY_S eine Chat Zeile
+      if ok2 and ns.Print and ns.db and ns.db.liveSay ~= false and now - (L.saidAt or -999) > LIVE_SAY_S then
+        L.saidAt = now
+        ns.Print((TR"Route angepasst: neue Reihenfolge, ca %d s schneller."):format(gain))
+      end
     else
-      Log("LIVE", ("Ausloeser %s: nur %d s schneller (vorher %d s), Pfeil bleibt (Hysterese)"):format(reason, gain, old))
+      Log("LIVE", ("Ausloeser %s: nur %d s schneller (vorher %d s), Pfeil bleibt (Hysterese%s)"):format(reason, gain, old, f > 1 and ", waere zurueck" or ""))
     end
   end
   ns.LiveFire = Fire
@@ -1194,10 +1252,10 @@ do
   local function Check()
     if not Enabled() then return end
     if ns.navi and not ns.navi.hidden then return end   -- Navi fuehrt gerade, nicht die Route
-    if UnitOnTaxi and UnitOnTaxi("player") then return end
+    if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then return end
     if (ns.InInstance and ns.InInstance()) or (ns.InTram and ns.InTram()) then return end
-    if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return end
-    if UnitAffectingCombat and UnitAffectingCombat("player") then return end   -- im Kampf nicht rechnen
+    if UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, "player") then return end
+    if UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player") then return end   -- im Kampf nicht rechnen
     local opt = ns.db.opt
     local idx = opt.idx or 1
     local s = opt.steps[idx]
@@ -1229,6 +1287,14 @@ do
       end
     end
     if opt.steps[opt.idx or 1] ~= s then return end   -- ein Ausloeser hat umgeordnet: naechste Pruefung nimmt den neuen Schritt
+    -- 1.1: regelmaessig neu pruefen (auch wenn du genau auf dem Weg bist)
+    local nowP = GetTime()
+    if not L.periodAt then L.periodAt = nowP end
+    if nowP - L.periodAt >= LIVE_PERIOD_S then
+      L.periodAt = nowP
+      Fire("zeit")
+      if opt.steps[opt.idx or 1] ~= s then return end
+    end
     if not L.start then L.start = { pm, px, py } end
     -- Abweichung vom geplanten Weg: Spieler ist weit neben der Linie Start -> Ziel oder weiter weg als am Start (zwei Pruefungen hintereinander)
     if s.map and s.x and s.y and not s.travel then
@@ -1256,7 +1322,7 @@ do
   f:SetScript("OnEvent", function(_, ev)
     if ev == "PLAYER_DEAD" then L.dead = true
     elseif ev == "PLAYER_UNGHOST" or ev == "PLAYER_ALIVE" then
-      if L.dead and not (UnitIsDeadOrGhost and UnitIsDeadOrGhost("player")) then L.dead = false; L.pending = { "tod", GetTime() + 3 } end
+      if L.dead and not (UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, "player")) then L.dead = false; L.pending = { "tod", GetTime() + 3 } end
     elseif ev == "ZONE_CHANGED_NEW_AREA" then
       L.devHits = 0; L.start = nil; L.lastD = nil
       L.pending = { "zone", GetTime() + 2 }
@@ -1267,7 +1333,7 @@ do
     if L.acc < 1 then return end
     L.acc = 0
     local now = GetTime()
-    if L.pending and now >= L.pending[2] and not (UnitAffectingCombat and UnitAffectingCombat("player")) then
+    if L.pending and now >= L.pending[2] and not (UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player")) then
       local r = L.pending[1]; L.pending = nil
       if Enabled() and not (ns.navi and not ns.navi.hidden) then pcall(Fire, r) end
     end
@@ -1304,6 +1370,19 @@ do
               if ns.Draw then ns.Draw() end
               if ns.RefreshHud then ns.RefreshHud() end
             end })
+        end
+        -- 1.1 (K Stufe B 12): Reserve Quest liegt nicht mehr am Weg
+        if out and ns.ReserveDropHint and Enabled() then
+          local okR, txt, rq = pcall(ns.ReserveDropHint)
+          if okR and txt and not (L.reserveQuiet and L.reserveQuiet[rq]) then
+            table.insert(out, { kind = "reserve", text = txt,
+              tip = ns.EN and "Click: hide this hint for this quest." or "Klick: Hinweis für diese Quest ausblenden.",
+              onClick = function()
+                L.reserveQuiet = L.reserveQuiet or {}
+                L.reserveQuiet[rq] = true
+                if ns.RefreshHud then ns.RefreshHud() end
+              end })
+          end
         end
         return out
       end

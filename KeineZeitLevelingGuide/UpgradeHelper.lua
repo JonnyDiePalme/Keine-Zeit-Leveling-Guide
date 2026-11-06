@@ -194,7 +194,7 @@ local function ShowSlot(slot)
     r:SetPoint("TOPLEFT", strip, "TOPLEFT", 12, -60 - (i - 1) * 58); r:SetPoint("RIGHT", strip, "RIGHT", -10, 0)
     r.text:SetText(Short(e))
     r.link = e.it.link or (e.it.id and ("item:" .. e.it.id))
-    r.icon:SetTexture(e.it.id and GetItemIcon and GetItemIcon(e.it.id) or "Interface\\Icons\\INV_Misc_QuestionMark")
+    r.icon:SetTexture(e.it.id and ns.Api.GetItemIcon and ns.Api.GetItemIcon(e.it.id) or "Interface\\Icons\\INV_Misc_QuestionMark")
     r.btn:SetScript("OnClick", function() Plan(e.q) end)
     r:Show()
   end

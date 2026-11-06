@@ -77,7 +77,7 @@ end
 -- a) Landung: wo du landest, kennst du den Flugpunkt
 local wasTaxi, landAt = false, nil
 local function LandCheck()
-  local on = UnitOnTaxi and UnitOnTaxi("player") and true or false
+  local on = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") and true or false
   if on then wasTaxi = true; return end
   if not wasTaxi then return end
   wasTaxi = false
@@ -305,7 +305,7 @@ local function Known(spell)
   return false
 end
 local function SpellLeft(spell)
-  local gc = (C_Spell and C_Spell.GetSpellCooldown) or GetSpellCooldown
+  local gc = (C_Spell and C_Spell.GetSpellCooldown) or ns.Api.GetSpellCooldown
   if not gc then return 0 end
   local ok, a, b = pcall(gc, spell)
   if not ok then return 0 end
@@ -361,8 +361,8 @@ local function PartyJumps(out)
   for _, e in ipairs(list) do
     local g = ns.group[e.who]
     local gp = g and g.pos
-    if gp and gp[1] and gp[2] and gp[3] and not (UnitIsDeadOrGhost and UnitIsDeadOrGhost(e.who))
-      and not (UnitIsConnected and UnitIsConnected(e.who) == false) then
+    if gp and gp[1] and gp[2] and gp[3] and not (UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, e.who))
+      and not (UnitIsConnected and ns.Api.U(UnitIsConnected, e.who) == false) then
       local c, wx, wy = ns.MapWorld(gp[1], gp[2], gp[3])
       if c and c == mc then
         local d = math.sqrt((wx - mwx) ^ 2 + (wy - mwy) ^ 2)
@@ -391,7 +391,7 @@ function ns.NaviJumps()
   if ns.db and ns.db.naviPorts == false then return out end
   local _, cls
   if UnitClass then _, cls = UnitClass("player") end -- nicht "x and f()", das gibt nur den ersten Wert
-  if cls == "MAGE" and GetItemCount and (GetItemCount(RUNE) or 0) > 0 then
+  if cls == "MAGE" and ns.Api.GetItemCount and (ns.Api.GetItemCount(RUNE) or 0) > 0 then
     local fac = MyFac()
     for _, p in ipairs(PORTS) do
       if p.fac == fac and Known(p.spell) and SpellLeft(p.spell) <= 0 then
@@ -906,7 +906,7 @@ local function AutoFly()
   if not C_Timer then return end
   C_Timer.After(1.2, function()
     if not taxiOpen then Log("FLUG_AUTO", "Flugkarte inzwischen zu, kein Flug"); return end
-    if UnitOnTaxi and UnitOnTaxi("player") then return end
+    if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then return end
     if flewByHand then Log("FLUG_AUTO", "schon selbst geflogen, kein Auto Flug"); return end
     if IsShiftKeyDown and IsShiftKeyDown() then
       MarkNode(i, (TR"Ziel der Route: %s (%s)"):format(name, TR"Shift: kein Auto Flug"))
@@ -915,7 +915,7 @@ local function AutoFly()
     end
     local j = FindNode(lg.to)
     if j ~= i then Log("FLUG_AUTO", "Ziel hat sich auf der Karte geaendert, kein Flug"); return end
-    local ok, err = pcall(TakeTaxiNode, i)
+    local ok, err = ns.Api.Prot("TakeTaxiNode", TakeTaxiNode, i)
     Log("FLUG_AUTO", ("TakeTaxiNode %d (%s): %s"):format(i, tostring(name), ok and "ok" or ("Fehler " .. tostring(err))))
     GlowHide()
   end)

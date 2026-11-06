@@ -31,7 +31,7 @@ local function SpellNames(max)
   local list = ns.TrainerSpells and ns.TrainerSpells(L) or {}
   local out = {}
   for i = #list, 1, -1 do
-    local nm = GetSpellInfo and GetSpellInfo(list[i].id)
+    local nm = ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(list[i].id)
     if nm and #out < max then table.insert(out, nm) end
   end
   if #list > max then table.insert(out, (TR"... und %d mehr"):format(#list - max)) end
@@ -68,7 +68,8 @@ function ns.NoticeList()
 
   -- Warnung: starke Patrouille in der Naehe (90 Sekunden)
   local lw = ns.Ways and ns.Ways.lastWarn
-  if lw and GetTime() - lw.t < 90 then
+  -- 1.1 (P61): im Flug keine Patrouillen Karte, auch keine von vor dem Abflug
+  if lw and GetTime() - lw.t < 90 and not (ns.InFlight and ns.InFlight()) then
     Add({ kind = "patrol", text = lw.text, key = "pat" .. tostring(lw.id) .. ":" .. math.floor(lw.t),
       tip = TR"Ihr Weg ist rot auf der Karte. Abschalten unter Einstellungen, Reisen." })
   end

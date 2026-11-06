@@ -37,7 +37,7 @@ f:RegisterEvent("PLAYER_LEVEL_UP")
 f:SetScript("OnEvent", function(_, ev, msg)
   local db = DB()
   if ev == "PLAYER_LOGIN" then
-    sess.money = GetMoney and GetMoney() or 0
+    sess.money = GetMoney and ns.Api and ns.Api.Num(GetMoney()) or nil
     sess.at = GetTime()
     sess.deathAt = GetTime()
     sess.levelAt = GetTime()
@@ -124,53 +124,61 @@ function ns.StatTips()
 end
 
 -- Seite "Gold und Ruf"
+-- 1.1 (S Log L7.0 "Statistik Gold und Ruf zeigt nix an, Ruf raus, nur Gold"): nur noch Gold, und immer mit Zahlen:
+-- Gold jetzt, diese Session (auch in den ersten Minuten), gesamt nach Quelle (Ledger), Beute in den Taschen
 function ns.GoldRepLines()
   local out = {}
   local db = DB()
+  local Num = ns.Api and ns.Api.Num or function(v) return v end
+  local M = ns.Money or tostring
   local el = GetTime() - (sess.at or GetTime())
-  local money = GetMoney and GetMoney() or 0
-  local got = money - (sess.money or money)
-  table.insert(out, TR"|cffffd100Gold diese Session|r")
+  local money = GetMoney and Num(GetMoney()) or nil
+  if money and not sess.money then sess.money, sess.at, el = money, GetTime(), 0 end
+  table.insert(out, TR"|cffffd100Gold|r")
+  if money then table.insert(out, (TR"Jetzt: %s"):format(M(money))) end
+  local got = (money and sess.money) and (money - sess.money) or 0
   if el < 300 then
-    table.insert(out, TR"Spiel ein paar Minuten, dann kommen hier die Zahlen.")
+    table.insert(out, (TR"Diese Session: %s%s in %d Min (pro Stunde ab 5 Min)"):format(got >= 0 and "+" or "-", M(math.abs(got)), math.floor(el / 60)))
   else
     local gph = got / el * 3600
-    table.insert(out, (TR"Bargeld: %s, also ca %s pro Stunde"):format(ns.Money(math.max(0, got)), ns.Money(math.max(0, gph))))
-    if db and gph > (db.best.goldHour or 0) and el > 1800 then db.best.goldHour = gph end
-    -- Beute in den Taschen nach AH Preis
-    if ns.SellWorth and (GetContainerNumSlots or (C_Container and C_Container.GetContainerNumSlots)) then
-      local nslots = (C_Container and C_Container.GetContainerNumSlots) or GetContainerNumSlots
-      local info = (C_Container and C_Container.GetContainerItemInfo)
-      local ah, vend = 0, 0
-      for bag = 0, 4 do
-        for slot = 1, (nslots(bag) or 0) do
-          local link, cnt, id
-          if info then local i = info(bag, slot); if i then link, cnt, id = i.hyperlink, i.stackCount, i.itemID end
-          elseif GetContainerItemInfo then local _, c, _, _, _, _, l, _, _, i2 = GetContainerItemInfo(bag, slot); link, cnt, id = l, c, i2 end
-          if link and id then
-            local w, a, v = ns.SellWorth(id, link)
-            if w == "ah" and a then ah = ah + a * (cnt or 1) else vend = vend + (v or 0) * (cnt or 1) end
-          end
+    table.insert(out, (TR"Diese Session: %s%s, also ca %s pro Stunde"):format(got >= 0 and "+" or "-", M(math.abs(got)), M(math.max(0, gph))))
+    if db and db.best and gph > (db.best.goldHour or 0) and el > 1800 then db.best.goldHour = gph end
+  end
+  -- gesamt nach Quelle (seit das Addon mitschreibt)
+  local p = ns.PerfData and ns.PerfData()
+  local inn, outt = p and p.moneyIn or {}, p and p.moneyOut or {}
+  local list, sumIn, sumOut = {}, 0, 0
+  for k, v in pairs(inn) do list[#list + 1] = { k, v, true }; sumIn = sumIn + v end
+  for k, v in pairs(outt) do list[#list + 1] = { k, v, false }; sumOut = sumOut + v end
+  if #list > 0 then
+    table.sort(list, function(x, y) return x[2] > y[2] end)
+    table.insert(out, "")
+    table.insert(out, (TR"|cffffd100Gesamt|r: rein %s, raus %s"):format(M(sumIn), M(sumOut)))
+    for _, e in ipairs(list) do
+      table.insert(out, ("  %s%s: %s|r"):format(e[3] and "|cff40ff40" or "|cffff8060", (ns.MONEY_NAMES and ns.MONEY_NAMES[e[1]]) or e[1], M(e[2])))
+    end
+  end
+  -- Beute in den Taschen nach AH Preis
+  if ns.SellWorth and (GetContainerNumSlots or (C_Container and C_Container.GetContainerNumSlots)) then
+    local nslots = (C_Container and C_Container.GetContainerNumSlots) or GetContainerNumSlots
+    local ah, vend = 0, 0
+    for bag = 0, 4 do
+      for slot = 1, (nslots(bag) or 0) do
+        local _, cnt, _, _, _, _, link, _, _, id = ns.Api.GetContainerItemInfo(bag, slot)
+        if link and id then
+          local w, a, v = ns.SellWorth(id, link)
+          if w == "ah" and a then ah = ah + a * (cnt or 1) else vend = vend + (v or 0) * (cnt or 1) end
         end
       end
-      table.insert(out, (TR"Beute in den Taschen: ca %s im AH, %s beim Händler"):format(ns.Money(ah), ns.Money(vend)))
-      if ah > 400000 then table.insert(out, TR"|cff7fd1b9Tipp:|r die Beute ist im AH einiges wert. Verkaufen, bevor du weiter farmst?") end
     end
+    table.insert(out, "")
+    table.insert(out, (TR"Beute in den Taschen: ca %s im AH, %s beim Händler"):format(M(ah), M(vend)))
+    if ah > 400000 then table.insert(out, TR"|cff7fd1b9Tipp:|r die Beute ist im AH einiges wert. Verkaufen, bevor du weiter farmst?") end
   end
   local gl = ns.GoldTargetLine and ns.GoldTargetLine()
   if gl then table.insert(out, TR"Ziel: " .. gl) end
   table.insert(out, "")
-  table.insert(out, TR"|cffffd100Ruf diese Session|r")
-  local list = {}
-  for name, n in pairs(sess.rep) do table.insert(list, { name = name, n = n }) end
-  table.sort(list, function(a, b) return a.n > b.n end)
-  if #list == 0 then table.insert(out, TR"Noch kein Ruf dazugekommen.") end
-  for _, e in ipairs(list) do
-    local rate = el > 300 and e.n / el * 3600 or nil
-    table.insert(out, ("%s: +%d%s"):format(e.name, e.n, rate and (TR", ca %d pro Stunde"):format(math.floor(rate)) or ""))
-  end
-  table.insert(out, "")
-  local bl = ns.BestLine()
+  local bl = ns.BestLine and ns.BestLine() or ""
   if bl ~= "" then table.insert(out, bl) end
   return out
 end

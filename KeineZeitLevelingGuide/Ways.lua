@@ -979,7 +979,9 @@ local warned = {}
 function W.PatrolWarnTick()
   local db = ns.db
   if not db or db.patrolWarn == false then return end
-  if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return end
+  if UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, "player") then return end
+  -- 1.1 (P61, K 14:36, S Bild im Flug "Achtung: Elite Patrouille"): im Flug keine Patrouillen Hinweise, auch nichts Altes
+  if ns.InFlight and ns.InFlight() then W.lastWarn = nil; return end
   local pm = ns.PlayerMap and ns.PlayerMap()
   if not pm or not ns.Waypoints then return end
   local L = UnitLevel and UnitLevel("player") or 1
