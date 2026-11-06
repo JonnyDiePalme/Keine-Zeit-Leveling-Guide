@@ -500,6 +500,9 @@ local hf = CreateFrame("Frame")
 hf:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 hf:SetScript("OnEvent", function(_, _, unit, _, spellID)
   if unit ~= "player" then return end
+  spellID = ns.Api.Num(spellID)
+  -- 1.2i (P68): Ruhestein oder Rueckruf benutzt (fuer das Navi: erst dann ist der Ruhestein Schritt erledigt)
+  if spellID == 556 or spellID == 8690 then ns.portUsedAt = GetTime() end
   if spellID == 556 then
     -- Astraler Rueckruf (Schamane): eigene Abklingzeit messen
     C_Timer.After(1, function()
@@ -513,20 +516,19 @@ hf:SetScript("OnEvent", function(_, _, unit, _, spellID)
   -- selbst merken, wann er benutzt wurde: manche Clients melden die Abklingzeit nicht (Tester: Route wollte den Ruhestein auf Abklingzeit)
   if ns.db then ns.db.hearthUsedAt = time and time() or nil end
   C_Timer.After(1, function()
-    local gic = (C_Container and C_Container.GetItemCooldown) or ns.Api.GetItemCooldown
-    if not (ns.db and gic) then return end
-    local ok, _, dur = pcall(gic, 6948)
-    if ok and dur and dur > 60 then ns.db.hearthCD = dur end
+    if not (ns.db and ns.Api.GetItemCooldown) then return end
+    local _, dur = ns.Api.GetItemCooldown(6948)
+    if dur and dur > 60 then ns.db.hearthCD = dur end
   end)
 end)
 
 -- Ruhestein: wie lange noch Abklingzeit (Sekunden). Vom Spiel und selbst gemerkt, der laengere Wert zaehlt
 function ns.HearthLeft()
   local left = 0
-  local gic = (C_Container and C_Container.GetItemCooldown) or ns.Api.GetItemCooldown
-  if gic then
-    local ok, st, dur = pcall(gic, 6948)
-    if ok and st and st > 0 and dur and dur > 1.5 then left = math.max(0, st + dur - GetTime()) end
+  -- 1.2i (P68): Abklingzeit nur ueber ns.Api (geheime Werte werden 0, dann zaehlt die eigene Messung unten)
+  if ns.Api.GetItemCooldown then
+    local st, dur = ns.Api.GetItemCooldown(6948)
+    if st and st > 0 and dur and dur > 1.5 then left = math.max(0, st + dur - GetTime()) end
   end
   local db = ns.db
   local used = db and db.hearthUsedAt

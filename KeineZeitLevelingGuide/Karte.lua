@@ -67,7 +67,7 @@ K.OnZone = OnZone
 -- Oestlichen Pestlaendern nicht
 local function XLinkEnds(h)
   local ax, ay, bx, by = h[2], h[3], h[5], h[6]
-  if ns.EraXY then ax, ay = ns.EraXY(h[1], ax, ay); bx, by = ns.EraXY(h[4], bx, by) end
+  if ns.FixXY then ax, ay = ns.FixXY(h[1], ax, ay); bx, by = ns.FixXY(h[4], bx, by) end
   local za, xa, ya = OnZone(h[1], ax, ay)
   local zb, xb, yb = OnZone(h[4], bx, by)
   return za, xa, ya, zb, xb, yb
@@ -106,7 +106,7 @@ end
 ------------------------------------------------------------
 -- 1. Quelle: Daten Addon (FWW_AutoKarte), sonst FWW_AUTO_KARTE, sonst ns.AUTO_KARTE (Sim, alles in einer Datei)
 ------------------------------------------------------------
-local function Want() return ns.FOREVER and "forever" or "era" end
+local function Want() return "forever" end -- 1.2e (P47): nur Forever
 -- 19.4: Karten im Addon (Karte\Laden_*.lua legt den Teil vom eigenen Client nach ns.KARTE_RAW). Geht vor einem alten
 -- Daten Addon (KeineZeitLevelingGuide_Karte_*), das nur noch als Notbehelf gelesen wird.
 local ICACHE = {}
@@ -910,8 +910,20 @@ local function LineFree(ui, x1, y1, x2, y2, F)
       if dir then
         local c1, c2 = C[k], C[pk]
         local strict = not (db and db.klippeStreng == false)
-        if (c1 and Up(c1, dir)) or (c2 and Up(c2, dir))
-          or (strict and ((c1 and not DownOk(c1, dir)) or (c2 and not DownOk(c2, dir)))) then
+        -- 1.2j (P66, Ka 16:05 L3.7 Galgar und L5.1 Zureetha: Pfeil Luftlinie ueber Klippen Ringe, Sackgasse): eine Klippe ist
+        -- fuer die Luftlinie nur noch frei, wenn es bergab geht UND die Fallhoehe bekannt und hoechstens JumpMax ist
+        -- (F.cliffH je Feld, sobald Ka sie liefert). Ohne Hoehe: zu, der Pfeil nimmt den Weg ueber Netz und Karte.
+        -- Eigene Spur in diese Richtung hebt es wie bisher auf. db.klippeStreng=false = alt (nur Richtung)
+        local function CliffBad(c, kk)
+          if not c then return false end
+          if Up(c, dir) then return true end
+          if not strict then return false end
+          if not DownOk(c, dir) then return true end
+          local hh = F.cliffH and F.cliffH[kk]
+          local jm = K.JumpMax and K.JumpMax()
+          return not (hh and jm and hh <= jm)
+        end
+        if CliffBad(c1, k) or CliffBad(c2, pk) then
           local m = own[k]
           if not (m and HasBit(m, dir)) then return false end
         end
@@ -2924,7 +2936,7 @@ function K.OldAddon()
   if not IRaw() then return end
   local f = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
   if not f then return end
-  for _, n in ipairs({ "KeineZeitLevelingGuide_Karte_Forever", "KeineZeitLevelingGuide_Karte_Era" }) do
+  for _, n in ipairs({ "KeineZeitLevelingGuide_Karte_Forever" }) do
     local ok, l = pcall(f, n)
     if ok and l then return n end
   end

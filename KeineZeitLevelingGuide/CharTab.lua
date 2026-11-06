@@ -5018,7 +5018,7 @@ local function JPage(key)
     local steps = CreateFrame("Frame", nil, pg)
     steps:SetPoint("TOPLEFT", pg.tabTop, "BOTTOMLEFT", 0, -10); steps:SetPoint("BOTTOMRIGHT")
     pg.steps = steps
-    pg.list = JList(steps, 34, function(idx) pg.sel = idx; ns.RefreshBig() end, function(it) return Plain(ns.OptStepText and ns.OptStepText(it.st) or "?") end)
+    pg.list = JList(steps, 34, function(idx) if idx and idx > 0 then pg.sel = idx; ns.RefreshBig() end end, function(it) return Plain(ns.OptStepText and ns.OptStepText(it.st) or "?") end)
     pg.list:SetPoint("TOPLEFT"); pg.list:SetPoint("BOTTOMLEFT"); pg.list:SetWidth(390)
     local det = CreateFrame("Frame", nil, steps)
     det:SetPoint("TOPLEFT", pg.list, "TOPRIGHT", 14, 0); det:SetPoint("BOTTOMRIGHT")
@@ -5124,20 +5124,27 @@ local function JPage(key)
       -- Text erst fuer die sichtbaren Zeilen (JList textOf), die Liste selbst ist nur Nummer, Farbe und Schritt
       -- 1.0 (K 22:57 Punkt 1, S Bild): Reiter Schritte zeigt nur die Schritte der aktuellen Zone (Zone vom jetzigen Schritt),
       -- alle Schritte stehen im Reiter Zonenplan
+      -- 1.2q (P77, S 19:54 "es zeigt mir 1 an (Reise Zeppelin), kann da nicht die ganze aktuelle Route angezeigt werden?"):
+      -- die Liste zeigt jetzt die ganze laufende Route (Leveling, Dungeon oder Berufe Route, je nachdem was laeuft), nicht
+      -- mehr nur die Zone vom jetzigen Schritt (bei einem Reise Schritt war das nur er selbst). Fuehrt gerade das Navi,
+      -- stehen seine Weg Punkte oben (N1, N2 ...), darunter die Route
       local list = {}
-      local function ZoneOf(m) return m and ((ns.cityParent and ns.cityParent[m]) or m) or nil end
-      local curSt = opt and opt.steps and opt.steps[cur]
-      local curZone = curSt and ZoneOf(curSt.map)
       local curPos = 1
-      for idx, st in ipairs(opt and opt.steps or {}) do
-        if not curZone or idx == cur or ZoneOf(st.map) == curZone then
-          local a = st.acts and st.acts[1] or {}
-          list[#list + 1] = { idx = idx, num = tostring(idx), col = KCOL[a.k] or { 0.7, 0.7, 0.7 }, st = st, dim = idx < cur }
-          if idx == cur then curPos = #list end
+      local nv = ns.navi
+      if nv and not nv.hidden and nv.legs then
+        for i, lg in ipairs(nv.legs) do
+          list[#list + 1] = { idx = 0, num = "N" .. i, col = { 0.3, 0.8, 1 }, text = (TR"Navi: %s"):format(tostring(lg.text or "?")), dim = i < (nv.cur or 1) }
         end
       end
-      if curZone and ns.ZoneName then
-        pg.where:SetText((TR"Schritt %d von %d, hier in %s: %d"):format(cur, #opt.steps, ns.ZoneName(curZone) or "?", #list))
+      local nNavi = #list
+      for idx, st in ipairs(opt and opt.steps or {}) do
+        local a = st.acts and st.acts[1] or {}
+        list[#list + 1] = { idx = idx, num = tostring(idx), col = KCOL[a.k] or { 0.7, 0.7, 0.7 }, st = st, dim = idx < cur }
+        if idx == cur then curPos = #list end
+      end
+      if nNavi > 0 and nv.cur then curPos = math.max(1, nv.cur) end
+      if opt and opt.steps and #opt.steps > 0 then
+        pg.where:SetText(nNavi > 0 and (TR"Navi %d Punkte, Route Schritt %d von %d"):format(nNavi, cur, #opt.steps) or (TR"Schritt %d von %d"):format(cur, #opt.steps))
       end
       local jump = false
       if not pg.sel or pg.lastCur ~= cur or pg.lastOpt ~= opt then pg.sel = cur; pg.lastCur = cur; pg.lastOpt = opt; jump = true end

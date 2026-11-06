@@ -5,10 +5,8 @@
 -- nach ns.KARTE_RAW und wirft den anderen weg. Am Ende ist alles Globale wieder wie vorher (ein altes Daten Addon
 -- stoert so nicht). Kosten: beide Teile einmal lesen (etwa 0.2 s beim Einloggen), der falsche wird gleich frei.
 local ADDON, ns = ...
-do
-  local iface = GetBuildInfo and tonumber((select(4, GetBuildInfo()))) or 0
-  ns.KARTE_CLIENT = (iface >= 16000 and iface < 20000) and "forever" or "era"
-end
+-- 1.2e (P47): nur Forever, kein Era Teil mehr
+ns.KARTE_CLIENT = "forever"
 ns.KARTE_SAVE = { raw = FWW_AUTO_KARTE_RAW, tab = FWW_AUTO_KARTE, info = FWW_AUTO_KARTE_INFO, f = FWW_AutoKarte, fr = FWW_AutoKarteFrei,
   taxi = FWW_AUTO_TAXI, aus = FWW_AUTO_AUSLOESER, fh = FWW_AUTO_FRIEDHOF, srv = FWW_AUTO_SERVER, srvi = FWW_AUTO_SERVER_INFO, zb = FWW_AUTO_ZAUBER }
 FWW_AUTO_KARTE_RAW, FWW_AUTO_KARTE, FWW_AUTO_KARTE_INFO = {}, {}, nil

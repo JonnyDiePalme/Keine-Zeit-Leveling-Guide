@@ -588,6 +588,8 @@ end
 
 -- Taschen fast voll: nie neu rechnen. Liegt ein Haendler direkt am Weg zum naechsten Ziel (kaum Umweg), kommt er
 -- als Schritt dazu. Sonst nur ein Hinweis: jeder entscheidet selbst (Menue Haendler fuegt ihn ein).
+-- 1.2a (P44): ab so wenigen freien Plaetzen kommt der Haendler Hinweis
+ns.BAG_HINT_FREE = 3
 do
   local last = -1000
   local bf = CreateFrame("Frame")
@@ -598,7 +600,7 @@ do
     if InCombatLockdown and InCombatLockdown() then return end
     if GetTime() - last < 300 then return end
     local free = ns.FreeSlots()
-    if free > 3 then return end
+    if free > ns.BAG_HINT_FREE then return end
     -- kommt in den naechsten 3 Schritten schon ein Haendler?
     local opt = db.opt
     for i = opt.idx or 1, math.min(#opt.steps, (opt.idx or 1) + 3) do
@@ -617,7 +619,8 @@ do
         local direct = ns.WorldDist({ map, px, py }, { st.map, st.x, st.y })
         local via = ns.WorldDist({ v.map, v.x, v.y }, { st.map, st.x, st.y })
         if direct and via and dv and (dv + via - direct) <= 80 then
-          if ns.OptInsertService then ns.OptInsertService("vendor") end
+          -- 1.2a (P44): nur als Hinweis Schritt (Mini Fenster mit Knopf Ueberspringen), nicht fest in der Route
+          if ns.OptInsertService then ns.OptInsertService("vendor", TR"Taschen fast voll: Händler am Weg (nur Hinweis)") end
           return
         end
       end

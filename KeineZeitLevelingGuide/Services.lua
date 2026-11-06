@@ -517,6 +517,8 @@ end
 
 -- alle Service Hinweise, wichtigster zuerst
 local lastVendor
+local lastTrainer
+local TRAINER_KEEP_F, TRAINER_KEEP_YD = 2, 300 -- 1.2k (P74): gezeigter Lehrer bleibt bis so viel weiter weg als der naechste
 local function Hints()
   local out = {}
   local db = ns.db
@@ -561,6 +563,15 @@ local function Hints()
   local waiting = ns.TrainerSpells and #ns.TrainerSpells(L) or nil
   if not trainerDone and ((waiting and waiting > 0) or (not waiting and L >= 4 and L % 2 == 0)) and db.trainedAt < L and (db.trainerSkip or 0) < L then
     local t, d = ns.NearestSvc("trainer", mapID, px, py, true)
+    -- 1.2k (P74, K 17:35: Hinweis "7 neue Zauber lernen bei Lehrer ..." 6 Mal in 17 Min, jedes Mal ein anderer Lehrer): je
+    -- Level und Zahl der Zauber bleibt der einmal gezeigte Lehrer, solange er nicht klar weiter weg ist als der naechste
+    -- (TRAINER_KEEP_F mal plus TRAINER_KEEP_YD) oder auf einem anderen Kontinent liegt. So kommt der Hinweis einmal je Level
+    local lt = lastTrainer
+    if t and lt and lt.L == L and lt.w == waiting and (lt.t.name ~= t.name or lt.t.x ~= t.x) and ns.WorldDist then
+      local dl = ns.WorldDist({ mapID, px, py }, { lt.t.map or mapID, lt.t.x, lt.t.y })
+      if dl and d and dl <= d * TRAINER_KEEP_F + TRAINER_KEEP_YD then t = lt.t end
+    end
+    if t then lastTrainer = { t = t, L = L, w = waiting } end
     if t then
       local where = t.city and (TR" in " .. ns.ZoneName(t.city)) or (t.map ~= mapID and (TR" in " .. ns.ZoneName(t.map)) or "")
       local what = (waiting and waiting > 0) and (waiting == 1 and TR"1 neuen Zauber lernen" or (waiting .. TR" neue Zauber lernen")) or TR"Neue Zauber lernen"
@@ -946,7 +957,7 @@ local START_BIND = {
   Dwarf = { 1426, 0.299, 0.712 }, Gnome = { 1426, 0.299, 0.712 },
   NightElf = { 1438, 0.587, 0.443 },
 }
-for _, b in pairs(START_BIND) do if ns.EraXY then b[2], b[3] = ns.EraXY(b[1], b[2], b[3]) end end
+for _, b in pairs(START_BIND) do if ns.FixXY then b[2], b[3] = ns.FixXY(b[1], b[2], b[3]) end end
 ns.START_BIND = START_BIND
 local function HomeName() return GetBindLocation and GetBindLocation() or nil end
 

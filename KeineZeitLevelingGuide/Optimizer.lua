@@ -446,6 +446,8 @@ V11.INDOOR_YD = 15            -- so nah an einem innen Punkt
 -- Luftlinie mal Umweg Faktor plus die Zeiten der Knoten. Passt das nicht mit Reserve in das Limit, wird die Quest
 -- nicht vorgeschlagen (Grund "Zeitlimit nicht schaffbar")
 V11.REST_RETRY_MAX = 30         -- v11e: Nach 60 so oft ein leeres Stueck ueberspringen
+V11.STALE_START_S, V11.STALE_MAX_S = 3, 60 -- 1.2q (P79): alter Schritt nach Tour Ende bis die neue Route da ist nicht zeigen
+V11.REST_DIAG_N = 6 -- 1.2k (P67): so viele "Nach 60 leer" Zeilen mit fehlender Vorquest
 V11.AREA_MIN_PTS = 4           -- v11d: ab so vielen Spawn Punkten zeigt der Pfeil auf Gebiete (vorher ueber 6)
 V11.RUND_MIN_N = 8             -- 1.1: Gebiet mit so vielen Spawns ...
 V11.RUND_MIN_R = 60            -- ... und so weit verteilt (yd) wird eine Runde
@@ -456,11 +458,19 @@ V11.ARROW_HOLD_S = 6           -- 1.1: Pfeil Ziel bei Questzielen hoechstens so 
 -- 1.1 (P43, Pr Schluss 1.1f: Pfeil hin und her +25 %): Gebiet wechseln nur, wenn du gut drin bist (Anteil vom Radius) und
 -- das letzte Wechseln ARROW_HOLD_S her ist. Live "andere Stelle" (Spot) hoechstens alle SPOT_HOLD_S und nicht gleich zurueck
 V11.AREA_ENTER_F = 0.7
+V11.AREA_DIST_YD = 150        -- 1.2i (P69): so stark zaehlt die Entfernung bei der Gebiets Wahl (vorher 400)
+V11.AREA_NEAR_OTHER_YD = 150   -- andere offene Questziele so nah am Gebiet zaehlen als "auf dem Weg"
+V11.AREA_OTHER_BONUS = 0.5     -- Zuschlag je solchem Ziel
+V11.AREA_OTHER_STEPS = 10      -- so viele Schritte voraus schauen
 V11.SPOT_HOLD_S = 90
 -- 1.1 (P42, Pr Schluss 1.1f: Nach 60 Neu rechnen 4771 und 3031 mal): auf Max Level ein neues Stueck nur, wenn die Route
 -- abgearbeitet ist, hoechstens alle REST_MIN_GAP_S. Ist nichts mehr da, erst wieder nach einer angenommenen oder
 -- abgegebenen Quest. Quests mit zu hohen Gegnern (gleiche Regel wie beim Ankommen) gar nicht ins Stueck
 V11.REST_MIN_GAP_S = 60
+V11.CHAIN_MAX_DEPTH = 8          -- 1.2a: so tief wird eine Vorquest Kette geprueft
+-- 1.2a (P44, S 12:35/12:37): Haendler (verkaufen, reparieren, Essen) nie fest in die Route. Nur Kaufen fuer eine Quest ist
+-- ein echter Schritt (buyAt). Sonst Hinweis Schritt bei vollen Taschen (Extras.lua, ns.BAG_HINT_FREE) mit Knopf Ueberspringen
+V11.VENDOR_PLAN_FIX = false
 V11.REST_FOE_UP = 3
 V11.REST_QL_UP = 4
 function V11.RestFoeHigh(q, L)
@@ -2144,6 +2154,7 @@ function ns.Optimize(targetLevel, done, opts)
         end
         local okQ, byId = {}, {}
         for _, q in ipairs(cands) do
+          Tick()
           byId[q.id] = q
           local ok = true
           if IsGray(q) then
@@ -2191,21 +2202,52 @@ function ns.Optimize(targetLevel, done, opts)
       -- v11e (Pr P26, Nach 60 leer in Durotar und Dun Morogh): ein Stueck aus lauter Folgequests, deren Vorquest weder
       -- erledigt noch unter den Kandidaten ist, gibt 0 Schritte und die Route war fertig. Solche Quests jetzt nicht ins
       -- Stueck (sie kommen, wenn die Vorquest erledigt ist), und schon versuchte Quests eines leeren Stuecks auch nicht
-      local function Have(id) return complete[id] or byId2[id] ~= nil end
-      local function Blocked(q)
-        if q.inLog or q.forced or q.classQ then return false end
-        if opts.rest and ns.restTried and ns.restTried[q.id] then return true end
-        if opts.rest and V11.RestFoeHigh(q, L0) then return true end
-        if q.preSingle and #q.preSingle > 0 then
-          local any = false
-          for _, id in ipairs(q.preSingle) do if Have(id) then any = true; break end end
-          if not any then return true end
+      -- 1.2a (P46, Pr 12:34: UE60K wieder leer, "Vorquest fehlt noch"): die Vorquest muss selbst machbar sein, ueber die
+      -- ganze Kette (vorher reichte, dass sie unter den Kandidaten ist, auch wenn ihr selbst die Vorquest fehlte)
+      local bMemo = {}
+      -- 1.2p (P67, Pr 19:25: "fast alles gesperrt"): Grund je gesperrter Quest, fuer eine RECHNEN Zeile mit Anzahl je Grund
+      local bWhy, preOut = {}, {}
+      local Blocked
+      local function Have(id, depth)
+        if complete[id] then return true end
+        local p = byId2[id]
+        return p ~= nil and not Blocked(p, depth + 1)
+      end
+      Blocked = function(q, depth)
+        depth = depth or 0
+        local m = bMemo[q.id]
+        if m ~= nil then return m end
+        if depth > V11.CHAIN_MAX_DEPTH then return true end
+        bMemo[q.id] = true -- Ring in den Daten: gilt als blockiert
+        local r = false
+        -- 1.2m (P67, Pr 18:30 UE60K: Stueck nur noch Klassen Quests mit nicht machbarer Vorquest, Die Anrufung nur von Elite,
+        -- Talisman des Jaegers nicht erreichbar, jeder Versuch nahm sie wieder): auf Max Level zaehlt auch bei Klassen Quests
+        -- die Vorquest Kette und ein schon versuchtes leeres Stueck. Frei bleiben nur Quests im Log und erzwungene
+        local why
+        if q.inLog or q.forced or (q.classQ and not opts.rest) then r = false
+        elseif opts.rest and ns.restTried and ns.restTried[q.id] then r = true; why = "versucht"
+        elseif opts.rest and V11.RestFoeHigh(q, L0) then r = true; why = "gegner"
+        else
+          local function Miss(id)
+            if byId2[id] then why = why or "vorquest gesperrt" else why = "vorquest nicht in Auswahl"; preOut[id] = (preOut[id] or 0) + 1 end
+          end
+          if q.preSingle and #q.preSingle > 0 then
+            local any = false
+            for _, id in ipairs(q.preSingle) do if Have(id, depth) then any = true; break end end
+            if not any then r = true; for _, id in ipairs(q.preSingle) do Miss(id) end end
+          end
+          if not r then for _, id in ipairs(q.preGroup or {}) do if not Have(id, depth) then r = true; Miss(id); break end end end
+          if not r and q.excl then for _, id in ipairs(q.excl) do if complete[id] then r = true; why = "andere Variante"; break end end end
         end
-        for _, id in ipairs(q.preGroup or {}) do if not Have(id) then return true end end
-        return false
+        if r and depth == 0 then bWhy[q.id] = why or "?" end
+        bMemo[q.id] = r
+        return r
       end
       local list = {}
+      -- 1.2f (P63, Pr: Bild Spitze 222 ms beim Start auf Level 60 seit 1.2c): die Ketten Pruefung (P46) geht ueber alle
+      -- Kandidaten (auf 60 ueber 3000), darum mit Tick in Stuecken ueber mehrere Bilder
       for _, q in ipairs(cands) do
+        Tick()
         if not Blocked(q) then list[#list + 1] = { q = q, d = (q.inLog or q.forced or q.classQ) and -1 or D(q) } end
       end
       table.sort(list, function(a, b) return a.d < b.d end)
@@ -2215,9 +2257,11 @@ function ns.Optimize(targetLevel, done, opts)
         for _, p in ipairs(q.preSingle or {}) do Keep(byId2[p], depth + 1) end
         for _, p in ipairs(q.preGroup or {}) do Keep(byId2[p], depth + 1) end
       end
-      local n = 0
+      local n, nLater = 0, 0
       for _, e in ipairs(list) do
-        if e.d < 0 or n < chunkMax then Keep(e.q, 0); if e.d >= 0 then n = n + 1 end end
+        Tick()
+        if e.d < 0 or n < chunkMax then Keep(e.q, 0); if e.d >= 0 then n = n + 1 end
+        else nLater = nLater + 1 end
       end
       local keep = {}
       for _, q in ipairs(cands) do if keepSet[q.id] then keep[#keep + 1] = q end end
@@ -2225,10 +2269,35 @@ function ns.Optimize(targetLevel, done, opts)
       for k = 1, #keep do cands[k] = keep[k] end
       for k = #keep + 1, n0 do cands[k] = nil end
       if opts.rest then
-        ns.optRestMore = n0 - #keep
+        -- 1.2m (P67): "spaeter" sind nur Quests, die selbst machbar sind und nicht mehr ins Stueck passten. Gesperrte (Vorquest
+        -- fehlt ueber die ganze Kette, schon versucht, Gegner zu hoch) kommen nicht mit dem naechsten Stueck, sonst wurde jede
+        -- Sekunde neu gerechnet (30 Versuche) und am Ende noroute. Jetzt: nichts mehr machbar = Route fertig, wartet auf neue Quest
+        ns.optRestMore = nLater
         ns.optRestChunk = {}
         for _, q in ipairs(keep) do ns.optRestChunk[q.id] = true end
-        if ns.TestLog then ns.TestLog("RECHNEN", ("Nach 60 in Stuecken: %d von %d Quests in diesem Stueck (die naechsten ab dir), %d spaeter"):format(#keep, n0, n0 - #keep)) end
+        if ns.TestLog then
+          ns.TestLog("RECHNEN", ("Nach 60 in Stuecken: %d von %d Quests in diesem Stueck (die naechsten ab dir), %d spaeter, %d gesperrt"):format(#keep, n0, nLater, n0 - #keep - nLater))
+          -- 1.2p (P67): Gruende der Sperre (nur Quests, die selbst geprueft wurden, nicht ueber eine Kette), und die haeufigsten
+          -- Vorquests, die gar nicht in der Auswahl sind, mit ihrem Grund (warum sie raus sind)
+          local cnt, order = {}, {}
+          for id, w in pairs(bWhy) do
+            if not keepSet[id] then
+              if not cnt[w] then cnt[w] = 0; order[#order + 1] = w end
+              cnt[w] = cnt[w] + 1
+            end
+          end
+          table.sort(order, function(a, b) return cnt[a] > cnt[b] end)
+          local parts = {}
+          for _, w in ipairs(order) do parts[#parts + 1] = ("%s %d"):format(w, cnt[w]) end
+          if #parts > 0 then ns.TestLog("RECHNEN", "Nach 60 gesperrt: " .. table.concat(parts, ", ")) end
+          local top = {}
+          for id, nn in pairs(preOut) do top[#top + 1] = { id = id, n = nn } end
+          table.sort(top, function(a, b) return a.n > b.n end)
+          for i = 1, math.min(#top, V11.REST_DIAG_N) do
+            local id = top[i].id
+            ns.TestLog("RECHNEN", ("Nach 60 Vorquest fehlt in Auswahl: %s (%d), sperrt %d, Grund %s%s"):format(tostring(Q(id, "name") or "?"), id, top[i].n,
+              tostring(whyQ[id] or (complete[id] and "erledigt") or "nicht unter den Kandidaten"), "")) end
+        end
       else
         ns.optRestMore = nil
         if ns.TestLog then ns.TestLog("RECHNEN", ("Stufe %d begrenzt: %d von %d Quests (die naechsten ab Abschnitts Start)"):format(opts.stufe or 0, #keep, n0)) end
@@ -3088,6 +3157,16 @@ function ns.Optimize(targetLevel, done, opts)
       end
     end
     ns.optWhyDet = det
+    -- 1.2k (P67, Pr 16:55 UE60K: Nach 60 Stueck nimmt alle Quests, alle "Vorquest fehlt noch", 0 Schritte): die Stueck Wahl
+    -- haelt sie fuer machbar, Phase3 nicht. Welche Vorquest fehlt und warum (erledigt, in Auswahl mit Grund, raus mit Grund)
+    -- als RECHNEN Zeilen, nur auf Max Level und nur wenn nichts genommen wurde
+    if opts.rest and not next(chosen) and ns.TestLog then
+      local ready = 0
+      for _, q in ipairs(order) do if PreOK(q) then ready = ready + 1 end end
+      ns.TestLog("RECHNEN", ("Nach 60 leer: %d Quests, %d mit Vorquest da, Grenze XP %s, gebraucht %s, Durchgaenge %d"):format(
+        #order, ready, tostring(CAP), tostring(xpNeed), pass or 0))
+      for i = 1, math.min(#det, V11.REST_DIAG_N) do ns.TestLog("RECHNEN", ("Nach 60 leer %d: %s"):format(i, det[i])) end
+    end
     if ns.dbgOrder then ns.dbgOrder("insert", route) end
     Later(Improve)
   end
@@ -3962,7 +4041,7 @@ function ns.Optimize(targetLevel, done, opts)
   -- Schaetzung: etwa ein neuer Platz pro 3 Kills (Beute), Questitems stapeln sich
   ------------------------------------------------------------
   VendorPlan = function()
-    if sim or (ns.db and ns.db.bagPlan == false) or not (ns.Vendors and ns.FreeSlots) then Later(BookPlan); return end
+    if not V11.VENDOR_PLAN_FIX or sim or (ns.db and ns.db.bagPlan == false) or not (ns.Vendors and ns.FreeSlots) then Later(BookPlan); return end
     local free = ns.FreeSlots()
     -- Essen, Wasser und Munition kaufen plant die Route nicht mehr ein, Haendler nur noch zum Verkaufen
     local supply = nil
@@ -5865,6 +5944,20 @@ function ns.OptStepText(s)
       else parts[#parts] = parts[#parts] .. (TR" |cff9d9d9d(für %s, hilf mit)|r"):format(hw) end
     end
   end
+  -- 1.2q (P78, K 20:05: "Annehmen Endlose Qual, Annehmen Endlose Qual, Annehmen Endlose Qual", Reihe 97288 bis 97291):
+  -- gleicher Text mehrfach in einem Schritt (Teile einer Reihe mit gleichem Namen) nur einmal, mit Anzahl
+  local seen, out = {}, {}
+  for _, t in ipairs(parts) do
+    if seen[t] then seen[t].n = seen[t].n + 1
+    else seen[t] = { n = 1 }; out[#out + 1] = t end
+  end
+  if #out < #parts then
+    for i, t in ipairs(out) do
+      local n = seen[t].n
+      if n > 1 then out[i] = t .. (TR" (%d Teile)"):format(n) end
+    end
+    parts = out
+  end
   return table.concat(parts, ", ")
 end
 
@@ -5921,6 +6014,14 @@ end
 OptTargetRaw = function()
   local db = ns.db
   if not (db and db.optMode and db.opt) then return end
+  -- 1.2q (P79): gerade zurueck zur Leveling Route und sie wird ab hier neu gerechnet: der alte Schritt (zb Brachland Quest,
+  -- du in Unterstadt) zeigt nicht, bis die neue Route da ist ("Route wird gerechnet"). Hoechstens V11.STALE_MAX_S lang
+  local sv = ns.optStale
+  if sv then
+    local dt = (GetTime and GetTime() or 0) - sv.t
+    if sv.opt == db.opt and (dt < V11.STALE_START_S or (dt < V11.STALE_MAX_S and ns.OptBusy and ns.OptBusy())) then return end
+    ns.optStale = nil
+  end
   local s = db.opt.steps and db.opt.steps[db.opt.idx or 1]
   -- Schritt ohne Aktion (kaputte oder sehr alte gespeicherte Route): nichts zeigen statt Fehler
   if not (s and type(s.acts) == "table" and s.acts[1]) then return end
@@ -6087,10 +6188,31 @@ OptTargetRaw = function()
       -- noch keins gewaehlt: das mit den meisten Spawns, bei aehnlich vielen das naehere
       if not cur then
         local best, bs
+        -- 1.2i (P69, K 17:00, S "es gibt naehere Gebiete, wo noch Quests auf dem Weg sind"): Entfernung zaehlt staerker
+        -- (V11.AREA_DIST_YD statt 400), und Gebiete nahe an anderen offenen Questzielen der naechsten Schritte bekommen
+        -- einen Zuschlag (V11.AREA_OTHER_BONUS je Ziel in V11.AREA_NEAR_OTHER_YD)
+        local others = {}
+        do
+          local o = ns.db and ns.db.opt
+          local i0 = o and (o.idx or 1) or 1
+          for i = i0, math.min(#(o and o.steps or {}), i0 + V11.AREA_OTHER_STEPS) do
+            local st2 = o.steps[i]
+            for _, a2 in ipairs(st2 and st2.acts or {}) do
+              if a2 ~= first and a2.k == "O" and a2.qid ~= first.qid and st2.map == s.map and not ActDone(a2) then
+                others[#others + 1] = { st2.x, st2.y }
+              end
+            end
+          end
+        end
         for k, ar in ipairs(areas) do
           if not (first.areaTried and first.areaTried[k]) then
           local d = px and Dist(px, py, ar.x, ar.y) or 0
-          local score = ar.n / (1 + (d or 0) / 400)
+          local near = 0
+          for _, p in ipairs(others) do
+            local dd = Dist(ar.x, ar.y, p[1], p[2])
+            if dd and dd <= V11.AREA_NEAR_OTHER_YD then near = near + 1 end
+          end
+          local score = ar.n / (1 + (d or 0) / V11.AREA_DIST_YD) * (1 + V11.AREA_OTHER_BONUS * near)
           if not bs or score > bs then best, bs = k, score end
           end
         end
@@ -6186,7 +6308,7 @@ function ns.OptCurrentAct()
 end
 
 -- Naechsten Haendler oder Lehrer als Schritt in die Route einfuegen (Menue). Nochmal klicken: Schritt wieder raus.
-function ns.OptInsertService(kind)
+function ns.OptInsertService(kind, hint)
   local db = ns.db
   if not db then return end
   local trainer = kind == "trainer"
@@ -6228,12 +6350,28 @@ function ns.OptInsertService(kind)
   local _, wx, wy = World(t.map, t.x, t.y)
   local act = { k = "V", quest = nm, imap = t.map, ix = t.x, iy = t.y, npc = t.id, manual = true, since = time(),
     trainer = trainer or nil, tlvl = trainer and (UnitLevel("player") or 1) or nil }
-  local step = { map = t.map, x = t.x, y = t.y, wx = wx or cur.wx, wy = wy or cur.wy, acts = { act }, t = cur.t, lvl = cur.lvl, ins = kind }
+  local step = { map = t.map, x = t.x, y = t.y, wx = wx or cur.wx, wy = wy or cur.wy, acts = { act }, t = cur.t, lvl = cur.lvl, ins = kind,
+    hint = hint }
   table.insert(opt.steps, idx, step)
   if ns.serviceTarget then ns.serviceTarget = nil end
+  if ns.TestLog and hint then ns.TestLog("SCHRITT", ("Hinweis Schritt %s: %s"):format(kind, tostring(nm))) end
   ns.Print((TR"Neuer Schritt: %s %s, ca %d Yards. Danach geht es mit der Route weiter."):format(trainer and TR"Lehrer" or TR"Händler", nm, math.floor(d or 0)))
   if ns.Draw then ns.Draw() end
   if ns.RefreshHud then ns.RefreshHud() end
+end
+
+-- 1.2a (P44): jetziger Schritt ist ein Hinweis Schritt (zb Haendler bei vollen Taschen): Text fuers Mini Fenster, sonst nil
+function ns.OptHintStep()
+  local opt = ns.db and ns.db.optMode and ns.db.opt
+  local cur = opt and opt.steps and opt.steps[opt.idx or 1]
+  if cur and cur.ins and cur.hint then return cur.hint, cur.ins end
+end
+function ns.OptHintSkip()
+  local h, kind = ns.OptHintStep()
+  if h and ns.OptInsertService then
+    if ns.TestLog then ns.TestLog("SCHRITT", ("Hinweis Schritt uebersprungen: %s"):format(tostring(kind))) end
+    ns.OptInsertService(kind)
+  end
 end
 
 -- Text fuer Listen (rechte Seite, Vollbild)
@@ -8783,6 +8921,8 @@ function ns.ProfileBackToLevel(finished)
   local ok = ns.ProfileResume and ns.ProfileResume("level")
   if ok and ns.PlanActive and ns.PlanActive() and ns.PlanSectionLive and not (ns.groupFollow and db.opt and db.opt.group) then
     if ns.TestLog then ns.TestLog("RECHNEN", "Neu rechnen automatisch: Ende Tour") end
+    -- 1.2q (P79, K 20:05: nach "Tour beenden" kam 17 s lang der alte Schritt 4/189 "Intaktes Raptorhorn" im Brachland)
+    ns.optStale = { opt = db.opt, t = GetTime and GetTime() or 0 }
     C_Timer.After(1, function() if ns.ProfileOf(ns.db and ns.db.opt) == "level" then ns.PlanSectionLive() end end)
     return
   end
@@ -9316,8 +9456,9 @@ end
 -- Fertig (zb Glueck beim Droppen): Gelegenheit "Reserve abgeben". Liegt die Route nicht mehr in ihrer Naehe: Hinweis
 -- "kann abgebrochen werden". Alles aus den Quest Daten, keine Liste
 ------------------------------------------------------------
-V11.RESERVE_YD = 80            -- Ziele und Abgabe hoechstens so weit von einem der naechsten Schritte
-V11.RESERVE_AHEAD = 30         -- so viele Schritte voraus zaehlen
+-- 1.2a (P45, Pr: Reserve an gegen aus kein Unterschied): Schwelle weiter (vorher 80 yd und 30 Schritte)
+V11.RESERVE_YD = 150           -- Ziele und Abgabe hoechstens so weit von einem der naechsten Schritte
+V11.RESERVE_AHEAD = 40         -- so viele Schritte voraus zaehlen
 V11.RESERVE_LOG_FREE = 4       -- so viele Plaetze im Log bleiben fuer die Route frei
 V11.RESERVE_MAX = 5            -- hoechstens so viele Reserve Quests gleichzeitig im Log
 V11.RESERVE_LVL_UP = 2         -- Questlevel hoechstens so viel ueber dir
@@ -9419,6 +9560,72 @@ function V11.ReserveTurnIn(c, wx, wy, speed)
     end
   end
 end
+-- 1.2a (P45): Teil einer Quest Reihe? (hat Vorquests, hat eine Folgequest, oder eine Quest ab hier in der Route braucht sie)
+function V11.InChain(qid, opt)
+  for _, key in ipairs({ "preQuestSingle", "preQuestGroup" }) do
+    local v = Q(qid, key)
+    if type(v) == "table" and #v > 0 then return true end
+  end
+  local nx = Q(qid, "nextQuestInChain")
+  if type(nx) == "number" and nx > 0 then return true end
+  for i = (opt and opt.idx or 1), #(opt and opt.steps or {}) do
+    for _, a in ipairs(opt.steps[i].acts or {}) do
+      if a.k == "A" and a.qid and a.qid ~= qid then
+        for _, key in ipairs({ "preQuestSingle", "preQuestGroup" }) do
+          local v = Q(a.qid, key)
+          if type(v) == "table" then for _, x in ipairs(v) do if x == qid then return true end end end
+        end
+      end
+    end
+  end
+  return false
+end
+-- 1.2a (P45): beim Abdriften (Live Ausloeser abweichung) die Reserve neu bewerten. Liegt ein offenes Ziel oder die Abgabe
+-- einer Reserve Quest jetzt nah bei dir, kommt es als Schritt vor den jetzigen (einmal je Quest und Ziel)
+function ns.ReserveOnDrift()
+  local db = ns.db
+  if not (db and db.reserveQ and db.opt and db.opt.steps and LiveOn()) then return end
+  local opt = db.opt
+  local i0 = opt.idx or 1
+  local cur = opt.steps[i0]
+  if cur and cur.reserve then return end
+  local c, wx, wy = LiveRef(nil)
+  if not c then return end
+  local speed = (ns.PlanSpeed and ns.PlanSpeed()) or 7
+  V11.reserveDone = V11.reserveDone or {}
+  for qid in pairs(db.reserveQ) do
+    local lp = ns.logProgress and ns.logProgress[qid]
+    local q = lp and ReserveBuild(qid)
+    if q then
+      local st
+      if lp.complete then
+        st = V11.ReserveTurnIn(c, wx, wy, speed)
+      else
+        for _, n in ipairs(q.nodes or {}) do
+          if n.kind == "O" and n.cont == c and n.wx and not V11.reserveDone[qid .. ":" .. tostring(n.obj)] then
+            local d = math.sqrt((wx - n.wx) ^ 2 + (wy - n.wy) ^ 2)
+            if d <= LIVE_CHANCE_YD then
+              V11.reserveDone[qid .. ":" .. tostring(n.obj)] = true
+              st = { map = n.map, x = n.x, y = n.y, acts = { { k = "O", qid = qid, quest = lp.title or q.name, who = n.who, obj = n.obj,
+                count = n.count, npcs = n.npcs, pts = n.pts, item = n.item, npc = n.npc, mob = n.mob } } }
+              break
+            end
+          end
+        end
+      end
+      if st then
+        st.reserve = true
+        st.lvl, st.t = cur and cur.lvl or 0, cur and cur.t or 0
+        table.insert(opt.steps, i0, st)
+        liveCache.key = nil
+        LiveLog(("Reserve beim Abdriften als Schritt %d: %s"):format(i0, tostring(st.acts[1].quest)))
+        if ns.Draw then ns.Draw() end
+        if ns.RefreshHud then ns.RefreshHud() end
+        return true
+      end
+    end
+  end
+end
 -- Reserve Quest im Log, die Route ist nicht mehr in der Naehe: Hinweis Text (oder nil)
 function ns.ReserveDropHint()
   local db = ns.db
@@ -9428,6 +9635,8 @@ function ns.ReserveDropHint()
     local lp = ns.logProgress and ns.logProgress[qid]
     if lp and not lp.complete then
       local q = ReserveBuild(qid)
+      -- 1.2a (P45): Quest Reihen nie abbrechen lassen (Teil einer Kette oder Vorquest einer Quest der Route)
+      if q and V11.InChain(qid, db.opt) then q = nil end
       if q then
         pts = pts or ReserveSteps(db.opt)
         local near = false

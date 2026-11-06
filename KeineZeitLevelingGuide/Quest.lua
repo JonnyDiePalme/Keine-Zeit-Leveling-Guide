@@ -209,6 +209,29 @@ local function CheckOffered(offered)
   end
 end
 
+-- 1.2i (P70, K 17:00: "Annehmen Der Zorn von Rath'mael" ging nicht, HAENGT 43 yd): beim NPC vom jetzigen Schritt bietet
+-- er eine Quest zum Annehmen nicht an (Vorquest fehlt, andere Fassung der Quest auf Forever ...): Quest aus der Route nehmen
+-- statt davor zu haengen, mit Grund ins Log (fehlende Vorquest laut Questie, wenn bekannt). Nur fuer den NPC dieses Schritts
+local function OptOfferCheck(ids, nothing)
+  if not (ns.db and ns.db.optMode and ns.OptCurrentAct and ns.OptDropQuest) then return end
+  local st = ns.db.opt and ns.db.opt.steps and ns.db.opt.steps[ns.db.opt.idx or 1]
+  if not st then return end
+  local nm = ns.Api.U(UnitName, "npc")
+  if type(nm) ~= "string" then return end
+  -- sicher nur mit Quest Nummern (Gossip) oder wenn der NPC gar nichts zum Annehmen anbietet (Namen vergleichen waere
+  -- unsicher, Schreibweisen weichen ab)
+  if not (nothing or (ids and next(ids))) then return end
+  for _, a in ipairs(st.acts or {}) do
+    local who = a.k == "A" and a.qid and (ns.NpcName and ns.NpcName(a.npc, a.who) or a.who)
+    if who and who == nm and not (ns.logProgress and ns.logProgress[a.qid]) and not (ids and ids[a.qid]) then
+      local pre = ns.MissingPre and ns.MissingPre(a.qid)
+      local why = pre and ((TR"Vorquest fehlt: %s"):format(tostring(pre.name or pre.id or "?"))) or TR"NPC bietet sie nicht an"
+      if ns.TestLog then ns.TestLog("SCHRITT", ("Annehmen geht nicht: %s bei %s (%s), Quest raus"):format(tostring(a.quest), nm, why)) end
+      ns.OptDropQuest(a.qid, why)
+    end
+  end
+end
+
 -- Gossip Fenster (normale NPCs mit Text)
 local function HandleGossip()
   if C_GossipInfo and C_GossipInfo.GetAvailableQuests then
@@ -216,6 +239,7 @@ local function HandleGossip()
     for _, q in ipairs(C_GossipInfo.GetAvailableQuests() or {}) do if q.questID then offered[q.questID] = true end end
     for _, q in ipairs(C_GossipInfo.GetActiveQuests() or {}) do if q.questID then offered[q.questID] = true end end
     CheckOffered(offered)
+    pcall(OptOfferCheck, offered, #(C_GossipInfo.GetAvailableQuests() or {}) == 0)
   end
   if not Enabled() then return end
   if C_GossipInfo and C_GossipInfo.GetActiveQuests then
@@ -244,6 +268,8 @@ end
 
 -- Quest Begruessung (NPCs mit Questliste ohne Gossip)
 local function HandleGreeting()
+  -- 1.2i (P70): angebotene Titel fuer die Pruefung oben
+  if GetNumAvailableQuests and GetNumAvailableQuests() == 0 then pcall(OptOfferCheck, nil, true) end
   if not Enabled() then return end
   local now = GetTime()
   for i = 1, GetNumActiveQuests() do

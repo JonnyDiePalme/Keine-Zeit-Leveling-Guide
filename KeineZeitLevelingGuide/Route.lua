@@ -15,25 +15,24 @@ local ERA2FOR = {
   [1433] = { 0.9999996626080551, -5.086374584221827, 1.0, 0.0 },                                  -- Rotkammgebirge
   [1453] = { 0.7736792385183993, 19.680449646264936, 0.773826866980289, 24.433287807510073 },   -- Sturmwind
 }
-do
-  local iface = GetBuildInfo and tonumber((select(4, GetBuildInfo()))) or 0
-  ns.FOREVER = iface >= 16000 and iface < 20000
-end
-ns.ERA2FOR = ERA2FOR
--- Era Punkt (0 bis 1) auf die Karte vom laufenden Client (auf Era unveraendert)
-function ns.EraXY(map, x, y)
-  local t = ns.FOREVER and map and ERA2FOR[map]
+-- 1.2e (P47, S 12:44): nur noch Forever. Die Umrechnung bleibt, weil die fest eingetragenen Punkte im Addon in der alten
+-- Vermessung stehen (4 Karten). Sie gilt jetzt immer, ohne Era Zweig
+ns.FOREVER = true
+ns.FIXMAPS = ERA2FOR
+-- fester Punkt (0 bis 1, alte Vermessung) auf die Forever Karte
+function ns.FixXY(map, x, y)
+  local t = map and ERA2FOR[map]
   if not (t and type(x) == "number" and type(y) == "number") then return x, y end
   return (x * 100 * t[1] + t[2]) / 100, (y * 100 * t[3] + t[4]) / 100
 end
 -- Liste von Punkten { x, y, ..., map = Stadtkarte } pro Karte umrechnen
-function ns.EraFixLists(tbl)
-  if not ns.FOREVER or type(tbl) ~= "table" then return end
+function ns.FixLists(tbl)
+  if type(tbl) ~= "table" then return end
   for map, list in pairs(tbl) do
     if type(list) == "table" then
       for _, e in ipairs(list) do
         if type(e) == "table" and type(e[1]) == "number" and type(e[2]) == "number" then
-          e[1], e[2] = ns.EraXY(e.map or map, e[1], e[2])
+          e[1], e[2] = ns.FixXY(e.map or map, e[1], e[2])
         end
       end
     end
@@ -853,7 +852,7 @@ ns.fp = {
   [1451] = { { 0.487, 0.367, TR"Burg Cenarius" } },
 }
 -- auf Forever: fest eingetragene Era Punkte auf die neuen Karten
-ns.EraFixLists(ns.routes); ns.EraFixLists(ns.hubs); ns.EraFixLists(ns.grind); ns.EraFixLists(ns.fp)
+ns.FixLists(ns.routes); ns.FixLists(ns.hubs); ns.FixLists(ns.grind); ns.FixLists(ns.fp)
 
 -- Total XP, um ein Level zu erreichen
 ns.xpTotal = {

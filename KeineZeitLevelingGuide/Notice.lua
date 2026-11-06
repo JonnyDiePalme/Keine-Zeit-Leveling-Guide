@@ -13,6 +13,12 @@ local COL = {
   log = { 0.75, 0.75, 0.75 }, books = { 0.8, 0.6, 1 }, dq = { 0.8, 0.6, 1 }, group = { 0.3, 1, 0.6 }, recalc = { 1, 0.55, 0.1 }, calc = { 1, 0.55, 0.1 },
 }
 local gone = {} -- in dieser Sitzung weggeklickt (Warnungen, Ueberspringen)
+-- 1.2l (P75, S 17:47: x an "Reserve Quest ... kann abgebrochen werden" schloss die Karte nicht, nur "Hinweis fuer 15 Min
+-- ausgeblendet"): jede Hinweis Karte mit x ist nach dem Klick sofort weg, HINT_GONE_S lang (Art und Text), egal ob der
+-- Hinweis selbst seine Ruhe kennt
+local HINT_GONE_S = 900
+local hintGone = {}
+local function HintKey(h) return tostring(h.kind) .. ":" .. tostring(h.key or h.text) end
 
 function ns.NoticeOn()
   local db = ns.db
@@ -47,7 +53,11 @@ function ns.NoticeList()
   local function Add(n) if not (n.key and gone[n.key]) then table.insert(out, n) end end
   -- Hinweise: Gruppe, Ruhestein, Taschen, Reparieren, Lehrer, Questlog, Buecher, Dungeon, Flugpunkt, Gasthaus
   local function AddHints()
+    local now = GetTime()
     for _, h in ipairs(ns.HintList and ns.HintList() or {}) do
+      local hk = HintKey(h)
+      if hintGone[hk] and now >= hintGone[hk] then hintGone[hk] = nil end
+      if not hintGone[hk] then
       local n = { kind = h.kind, text = h.text, tip = h.tip, h = h }
       local svc = h.kind == "vendor" or h.kind == "repair" or h.kind == "trainer"
       if h.go then n.go = h.go elseif h.onClick then n.go = TR"Öffnen" elseif h.target then n.go = TR"Gehe zu" end
@@ -61,8 +71,12 @@ function ns.NoticeList()
         elseif ns.HintClick then ns.HintClick(h) end
         Redraw()
       end
-      n.onX = function() if ns.HintDismiss then ns.HintDismiss(h) end end
+      n.onX = function()
+        hintGone[hk] = GetTime() + HINT_GONE_S
+        if ns.HintDismiss then ns.HintDismiss(h) end
+      end
       Add(n)
+      end
     end
   end
 

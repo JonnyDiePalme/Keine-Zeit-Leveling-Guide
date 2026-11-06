@@ -1,5 +1,5 @@
 -- Forever Wegweiser Daten Korrektur (schreibt der Daten Chat, liest das Addon). Nur Daten, kein Code.
--- Stand 2026-11-01 13:25 Daten 7. Quellen: QuestieDB 1.0.7 (QuestieDB_Vanilla.toc und QuestieDB_Forever.toc aus _classic_era_\Interface\AddOns,
+-- Stand 2026-11-06 20:20 Daten 9 (Pr: 95216 braucht 451; Daten 8: Rath'mael Reihe 356, 99156, 92422). Davor 2026-11-01 13:25 Daten 7. Quellen: QuestieDB 1.0.7 (QuestieDB_Vanilla.toc und QuestieDB_Forever.toc aus _classic_era_\Interface\AddOns,
 -- bzw. Sim Claude\ForeverWegweiser_Sim\daten\realf\rdb_forever.lua als entpackte Forever Fassung), VMaNGOS 1.12 (mangos.sqlite aus dem Gelaende
 -- Cache, deckt nur Vanilla Inhalte ab, keine Forever eigenen Zonen/Quests) als zweite Quelle fuer Drops, Elite und Vorquests.
 -- Aufbau: alle = gilt fuer Era und Forever, era und forever = nur dort (ueberschreibt alle fuer dieselbe Nummer).
@@ -11,7 +11,7 @@
 -- Jeder Eintrag hat grund und quelle in FWW_Daten_Korrektur_Gruende.md. Unbekannte Felder ignorieren, Datei kann fehlen.
 FWW_DATEN_KORREKTUR = {
   format = 1,
-  stand = "2026-11-01 13:25 Daten 7",
+  stand = "2026-11-06 20:20 Daten 9",
   alle = {
     quest = {
       [10] = { vorquest_fehlt = { 82 } },
@@ -364,6 +364,7 @@ FWW_DATEN_KORREKTUR = {
       [5145] = { dropper_nicht_fuers_level = { 5317, 12477, 12478, 12498, 1047, 1050, 1756, 10363, 10683, 12476, 12479 } },
       [8412] = { dropper_nicht_fuers_level = { 1811 } },
       [65610] = { dropper_nicht_fuers_level = { 3931 } },
+      [92422] = { vorquest_fehlt = { 99156 } },
       [92466] = { dropper_nicht_fuers_level = { 252076, 252666 } },
       [92472] = { vorquest_fehlt = { 92470 } },
       [92514] = { kein_gegner_npc = { 254089 } },
@@ -465,6 +466,8 @@ FWW_DATEN_KORREKTUR = {
       [98286] = { kein_gegner_npc = { 257020 } },
       [98287] = { kein_gegner_npc = { 11026 } },
 
+      [99156] = { vorquest_fehlt = { 356 } },
+      [95216] = { vorquest_fehlt = { 451 } },
     },
     item = {
       [2447] = { nur_objekt = true, dropper_entfernen = { 275703, 275708, 276099 } },

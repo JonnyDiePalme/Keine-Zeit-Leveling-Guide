@@ -59,12 +59,12 @@ ns.PaintDecode = Decode
 -- Oestliche Pestlaender, Rotkammgebirge, Sturmwind) jedes Feld ueber seine Mitte auf das neue Raster legen.
 -- (Die Werkzeug Karte ist schon im Raster des eigenen Clients, die wird nicht umgerechnet.)
 local function ForeverCells(ui, set)
-  local t = ns.FOREVER and ns.ERA2FOR and ns.ERA2FOR[ui]
-  if not (t and set and ns.EraXY) then return set end
+  local t = ns.FIXMAPS and ns.FIXMAPS[ui]
+  if not (t and set and ns.FixXY) then return set end
   local out = {}
   for k, v in pairs(set) do
     local cx, cy = k % 100, math.floor(k / 100)
-    local x, y = ns.EraXY(ui, (cx + 0.5) * CELL, (cy + 0.5) * CELL)
+    local x, y = ns.FixXY(ui, (cx + 0.5) * CELL, (cy + 0.5) * CELL)
     if x and y then
       local nx, ny = Cell(x, y)
       out[Key(nx, ny)] = v
@@ -242,6 +242,11 @@ local DOCK_R = 45
 ns.WalkOnBoat = function()
   local now = GetTime and GetTime() or 0
   return onBoat or now - fastAt < 3
+end
+-- 1.2j (P66, Ka 17:06 WEG_FERN Tirisfal ueber dem Meer): auf einem Transport? Flug (ns.InFlight) oder Schiff / Zeppelin (oben)
+ns.OnRide = function()
+  if ns.InFlight and ns.InFlight() then return true end
+  return ns.WalkOnBoat() and true or false
 end
 do
   -- Sprung oder Sturz genau messen (der Lern Takt ist nur einmal pro Sekunde)
@@ -998,12 +1003,19 @@ local function NetzWeg(N, sa, sb, ga, gb)
   local lim2 = ANBIND_YD * ANBIND_YD
   local heap = {}
   local function H(i) return math.sqrt((nodes[i][1] - ga) ^ 2 + (nodes[i][2] - gb) ^ 2) end
+  -- 1.2j (P66, Ka 16:05 Orgrimmar "kein Wegnetz in 250 yd", Netz Knoten 7 yd neben dir): das Ziel lag ausserhalb der Stadt
+  -- (zb Durotar), also weiter als ANBIND_YD von jedem Knoten, dann gab es gar keinen Weg. Jetzt: liegt kein Knoten nah am Ziel,
+  -- haengt das Ziel frei an jedem Knoten (Weg bis zum Knoten, der dem Ziel am naechsten liegt, meist der Ausgang)
+  local goalNear = false
+  local sNear = false
   for i = 1, n do
     if nodes[i][6] ~= "leer" then
       local d2 = (nodes[i][1] - sa) ^ 2 + (nodes[i][2] - sb) ^ 2
-      if d2 <= lim2 then dist[i] = math.sqrt(d2) * FREI_FAKTOR; HeapPush(heap, dist[i] + H(i), i) end
+      if d2 <= lim2 then sNear = true; dist[i] = math.sqrt(d2) * FREI_FAKTOR; HeapPush(heap, dist[i] + H(i), i) end
+      if not goalNear and (nodes[i][1] - ga) ^ 2 + (nodes[i][2] - gb) ^ 2 <= lim2 then goalNear = true end
     end
   end
+  if not sNear then return nil, nil, "start" end
   local best, bi = nil, nil
   while true do
     local f, u = HeapPop(heap)
@@ -1013,7 +1025,7 @@ local function NetzWeg(N, sa, sb, ga, gb)
       done[u] = true
       local ud = dist[u]
       local d2 = (nodes[u][1] - ga) ^ 2 + (nodes[u][2] - gb) ^ 2
-      if d2 <= lim2 then
+      if d2 <= lim2 or not goalNear then
         local tot = ud + math.sqrt(d2) * FREI_FAKTOR
         if not best or tot < best then best, bi = tot, u end
       end
@@ -1023,10 +1035,10 @@ local function NetzWeg(N, sa, sb, ga, gb)
       end
     end
   end
-  if not bi then return nil end
+  if not bi then return nil, nil, "ziel" end
   local path, k = {}, bi
   while k do table.insert(path, 1, k); k = prev[k] end
-  return path, best
+  return path, best, not goalNear and "fern" or nil
 end
 local gateS = {}   -- Zustand des aktuellen Tor Wegs: ui, tx, ty, route { {u, v, id, art}, ... }, i, t0, cap, done
 -- Ziel (cx, cy) oder, wenn ein Tor bzw. Weg im Netz auf dem Weg lohnt, der naechste Knoten davon. Wird nur im Rueckfall (kein Weg, haengt) gerufen.
@@ -1082,11 +1094,14 @@ local function GateOr(ui, fx, fy, cx, cy, force)
   local sa, sb = CityWorld(ui, fx, fy)
   local ga, gb = CityWorld(ui, cx, cy)
   if not (sa and ga) then return cx, cy end
-  local path, cost = NetzWeg(N, sa, sb, ga, gb)
+  local path, cost, nwhy = NetzWeg(N, sa, sb, ga, gb)
   if not path then
-    if ns.TestLog then ns.TestLog("STADTTOR", ("Stadt %s: kein Wegnetz in %d yd, gerade aufs Ziel (Luftlinie %d yd)"):format(tostring(ui), ANBIND_YD, math.floor(dDirect))) end
+    if ns.TestLog then ns.TestLog("STADTTOR", ("Stadt %s: kein Wegnetz in %d yd (%s), gerade aufs Ziel (Luftlinie %d yd, Karte %.3f %.3f)"):format(
+      tostring(ui), ANBIND_YD, nwhy == "start" and "bei dir" or "beim Ziel", math.floor(dDirect), fx, fy)) end
     return cx, cy
   end
+  -- Ziel ausserhalb des Netzes: der Netz Weg endet am naechsten Knoten, der Vergleich mit der Luftlinie gilt fuer diesen Teil
+  if nwhy == "fern" then force = true end
   if not force and cost > dDirect * TOR_DETOUR + 60 then
     if ns.TestLog then ns.TestLog("STADTTOR", ("Stadt %s: Netz Weg %d yd lohnt nicht gegen Luftlinie %d yd, gerade aufs Ziel"):format(tostring(ui), math.floor(cost), math.floor(dDirect))) end
     return cx, cy
@@ -1130,7 +1145,9 @@ function ns.WalkNext(ui, fx, fy, tx, ty)
         local zx, zy = ns.ToMap(city, rx, ry, ui)
         if zx then return zx, zy end
       end
-      if ok then return nil end
+      -- 1.2j (P66, Ka 16:05 "Stadt 1411: kein Wegnetz und keine Tore"): auch nach einem Fehler nicht im Netz der Zone weiter suchen
+      if not ok and ns.TestLog and not ns.walkInnerErr then ns.walkInnerErr = true; ns.TestLog("STADTTOR", ("Stadt %s ueber Zone %s: Fehler %s"):format(tostring(city), tostring(ui), tostring(rx))) end
+      return nil
     end
   end
   local s = cityS

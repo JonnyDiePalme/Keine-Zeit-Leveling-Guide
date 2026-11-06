@@ -4353,6 +4353,9 @@ T["- Log erweitert"] = "- Log extended"
 T["- Neue Anzeige im Mini Fenster: jetzige Quest farbig, Höhe zum Ziel"] = "- New display in the mini window: current quest colored, height to the target"
 T["- Marker von weitem, Kartenpunkt aufs Ziel"] = "- Markers from afar, map pin on the target"
 T["- Gold Statistik, Mein Weg mit Ausrüstung, Knopf an der Minimap"] = "- Gold statistics, my way with gear, minimap button"
+-- 1.2a
+T["Nur ein Hinweis: Schritt raus, weiter mit der Route."] = "Just a hint: step removed, the route continues."
+T["Taschen fast voll: Händler am Weg (nur Hinweis)"] = "Bags almost full: vendor on the way (just a hint)"
 -- 1.1 Hotfix
 T["Namensplaketten weiter sichtbar (41 Yards)?"] = "Nameplates visible further (41 yards)?"
 T["Symbole über NPCs extra gross?"] = "Extra big symbols above NPCs?"
@@ -4360,3 +4363,27 @@ T["Symbole über NPCs extra gross?"] = "Extra big symbols above NPCs?"
 T["nach Abgabe"] = "after turn-in"
 T["Lvl %d nach Abgabe"] = "Lvl %d after turn-in"
 T["Level %d nach Abgabe"] = "Level %d after turn-in"
+-- 1.2e
+T["%s von %s%s"] = "%s of %s%s"
+-- 1.2g (P64)
+T["Neu in 1.2"] = "New in 1.2"
+T["Neu in Version 1.2|r"] = "New in version 1.2|r"
+T["- Marker und Kartenpunkt aufs Ziel als Einstellung (Standard aus)"] = "- Markers and map pin on the target as a setting (off by default)"
+T["- Händler nur noch als Hinweis, nicht fest in der Route"] = "- Vendors only as a hint, not fixed in the route"
+T["- Mehr Quests am Weg mitnehmen, Quest Reihen bleiben geschützt"] = "- Take more quests along the way, quest chains stay protected"
+T["- Route nach Level 60 geht weiter"] = "- Route after level 60 continues"
+T["- Flugzeit als Balken unter dem Pfeil"] = "- Flight time as a bar under the arrow"
+T["- Zeit bis Level rechnet fertige Quests mit"] = "- Time to level counts finished quests"
+T["- Nur noch für WoW Forever"] = "- Only for WoW Forever now"
+-- 1.2i
+T["Vorquest fehlt: %s"] = "Prerequisite missing: %s"
+T["NPC bietet sie nicht an"] = "NPC does not offer it"
+-- 1.2n
+T["Route Schritt"] = "Route step"
+-- 1.2q
+T[" (%d Teile)"] = " (%d parts)"
+T["Navi %d Punkte, Route Schritt %d von %d"] = "Navi %d points, route step %d of %d"
+-- 1.2
+T["- Pfeil in Städten und auf Zeppelin oder Schiff verbessert"] = "- Arrow improved in cities and on zeppelins or ships"
+T["- Weiter Schritt: Navi nimmt Flug, Schiff oder Zeppelin, wenn es schneller ist"] = "- Far step: navi takes a flight, ship or zeppelin when faster"
+T["- Meine Route zeigt die ganze laufende Route, Hinweise mit x gehen sofort zu"] = "- My Route shows the whole running route, hints close at once with x"

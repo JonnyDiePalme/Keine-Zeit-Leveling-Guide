@@ -67,7 +67,12 @@ local function OptPoints(mapID)
   for i = i0, math.min(#opt.steps, i0) do
     local st = opt.steps[i]
     local x, y = st.x, st.y
-    if st.map ~= mapID and ns.ToMap then x, y = ns.ToMap(st.map, st.x, st.y, mapID) end
+    if st.map ~= mapID and ns.ToMap then
+      local x0, y0 = st.x, st.y
+      x, y = ns.ToMap(st.map, x0, y0, mapID)
+      -- 1.2i (P71): Ziel knapp ausserhalb der Karte (Zeppelin Turm vor der Stadt): trotzdem zeigen
+      if not x and ns.ToMapFree then x, y = ns.ToMapFree(st.map, x0, y0, mapID) end
+    end
     if x then
       local hasA, hasT = false, false
       for _, a in ipairs(st.acts) do if a.k == "A" then hasA = true elseif a.k == "T" then hasT = true end end

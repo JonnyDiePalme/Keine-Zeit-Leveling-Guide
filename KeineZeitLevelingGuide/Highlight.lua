@@ -55,8 +55,10 @@ local function Info(unit)
   return (id and ns.objMobIds and ns.objMobIds[id]) or (name and ns.objMobs and ns.objMobs[name])
 end
 
--- Marker NICHT an die Namensplakette haengen (die gehoert Blizzard, das fuehrt auf Forever zu "UNKNOWN" Blockaden).
--- Eigene Frames an UIParent, die jedes Bild der Plakette hinterher geschoben werden.
+-- Marker sind eigene Frames an UIParent, die jedes Bild der Plakette hinterher geschoben werden. 1.2h: ist die Lage der
+-- Plakette geheim, wird der Marker per SetPoint an die Plakette gehaengt (ns.MARK_ANCHOR, Rueckfall). Die UNKNOWN Sperre
+-- von frueher kam nicht von hier, sondern vom Kampflog (1.1 P57)
+ns.MARK_ANCHOR = true
 local follow = {}
 local mover = CreateFrame("Frame", nil, UIParent)
 mover:SetScript("OnUpdate", function()
@@ -68,9 +70,12 @@ mover:SetScript("OnUpdate", function()
     else
     local plate = m.plate
     local ok, x, y = false, nil, nil
+    -- okVis: true sichtbar, false versteckt, nil unbekannt (geheim)
+    local okVis
     if plate then
       local okV, vis = pcall(plate.IsVisible, plate)
-      if okV and ns.Plain(vis) == true then ok, x, y = pcall(plate.GetCenter, plate) end
+      if okV then okVis = ns.Plain(vis) end
+      if okVis == true then ok, x, y = pcall(plate.GetCenter, plate) end
     end
     x, y = ns.Plain(x), ns.Plain(y)
     if ok and type(x) == "number" and type(y) == "number" then
@@ -80,7 +85,19 @@ mover:SetScript("OnUpdate", function()
       h = okH and ns.Plain(h) or 20
       m:ClearAllPoints()
       m:SetPoint("BOTTOM", UIParent, "BOTTOMLEFT", x * ps / us, (y + h / 2) * ps / us + (m.dy or 2))
+      m.anch = nil
       m:SetAlpha(1)
+    elseif plate and ns.MARK_ANCHOR and not (okVis == false) then
+      -- 1.2h (P65, K 15:56, Log "Treffer Geber 14, Symbol 0"): auf Forever ist die Lage der Plakette geheim (GetCenter gibt
+      -- geheime Werte). Dann den Marker an die Plakette ANHAENGEN (SetPoint auf die Plakette): das Spiel setzt ihn selbst
+      -- an die richtige Stelle, ohne dass wir geheime Werte lesen oder vergleichen. Der Marker bleibt unser eigener Frame
+      if m.anch ~= plate then
+        local okA = pcall(m.ClearAllPoints, m) and pcall(m.SetPoint, m, "BOTTOM", plate, "TOP", 0, m.dy or 2)
+        m.anch = okA and plate or false
+        if okA then diag.anch = (diag.anch or 0) + 1 end
+        if not okA and ns.TestLog and not ns.markAnchorSaid then ns.markAnchorSaid = true; ns.TestLog("MARKE", "Anhaengen an Plakette geht nicht") end
+      end
+      m:SetAlpha(m.anch and 1 or 0)
     else
       m:SetAlpha(0)
     end
@@ -406,6 +423,7 @@ local function MarkDiag(why)
     tostring(g or "-"), tostring(k or "-"), plates, fr, en, CV("nameplateShowFriendlyNPCs"), CV("nameplateShowEnemies"),
     ns.objMobs and tostring(nm) or "nil", diag.giver, diag.mob, diag.raid,
     diag.raidErr and (", Fehler " .. diag.raidErr:sub(1, 80)) or "", blocked and (", Blizzard blockiert " .. blocked .. " mal") or "")
+    .. (" | angehaengt %d"):format(diag.anch or 0)
     .. (" | Instanz %s | gesucht %s/%s | Plaketten gesehen: %s"):format((ns.InInstance and ns.InInstance()) and "ja" or "nein",
       tostring(select(3, CurrentGiver()) or "-"), tostring(g or "-"), #diag.cmp > 0 and table.concat(diag.cmp, ", ") or "-"))
   diag.giver, diag.mob, diag.raid, diag.raidErr = 0, 0, 0, nil

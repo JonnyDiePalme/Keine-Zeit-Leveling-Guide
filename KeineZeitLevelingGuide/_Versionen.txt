@@ -1,7 +1,29 @@
-Keine Zeit Leveling Guide 1.1 (WoW Forever)
+Keine Zeit Leveling Guide 1.2 (WoW Forever)
 Autor: jonnydiepalme. Lizenz: GNU General Public License Version 3 oder später (GPLv3), Volltext in LICENSE.txt.
 Copyright (C) 2026 jonnydiepalme. Dieses Programm ist freie Software: du kannst es unter den Bedingungen der GPLv3
 weitergeben und verändern. Es wird OHNE JEDE GEWÄHRLEISTUNG bereitgestellt, Einzelheiten in LICENSE.txt.
+
+Neu in Version 1.2
+- Händler nur noch als Hinweis, nicht fest in der Route
+- Mehr Quests am Weg mitnehmen, Quest Reihen bleiben geschützt
+- Route nach Level 60 geht weiter
+- Flugzeit als Balken unter dem Pfeil
+- Pfeil in Städten und auf Zeppelin oder Schiff verbessert
+- Weiter Schritt: Navi nimmt Flug, Schiff oder Zeppelin, wenn es schneller ist
+- Meine Route zeigt die ganze laufende Route, Hinweise mit x gehen sofort zu
+- Zeit bis Level rechnet fertige Quests mit
+- Nur noch für WoW Forever
+
+New in version 1.2
+- Vendors only as a hint, not fixed in the route
+- Take more quests along the way, quest chains stay protected
+- Route after level 60 continues
+- Flight time as a bar under the arrow
+- Arrow improved in cities and on zeppelins or ships
+- Far step: navi takes a flight, ship or zeppelin when faster
+- My Route shows the whole running route, hints close at once with x
+- Time to level counts finished quests
+- Only for WoW Forever now
 
 Neu in Version 1.1
 - Fehler behoben (Forever Client 1.60.1)
@@ -9,7 +31,7 @@ Neu in Version 1.1
 - Navi und Pfeil verbessert, auch in Städten
 - Log erweitert
 - Neue Anzeige im Mini Fenster: jetzige Quest farbig, Höhe zum Ziel
-- Marker von weitem, Kartenpunkt aufs Ziel
+- Marker und Kartenpunkt aufs Ziel als Einstellung (Standard aus)
 - Gold Statistik, Mein Weg mit Ausrüstung, Knopf an der Minimap
 
 New in version 1.1
@@ -18,7 +40,7 @@ New in version 1.1
 - Navi and arrow improved, also in cities
 - Log extended
 - New display in the mini window: current quest colored, height to the target
-- Markers from afar, map pin on the target
+- Markers and map pin on the target as a setting (off by default)
 - Gold statistics, my way with gear, minimap button
 
 Was drin ist (Version 1.0)

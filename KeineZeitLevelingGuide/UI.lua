@@ -742,6 +742,13 @@ local function BuildHud0()
     hud.Update()
   end)
   hud.bPause = bPause
+  -- 1.2a (P44): Hinweis Schritt (zb Haendler bei vollen Taschen) mit eigenem Knopf Ueberspringen, nur solange er dran ist
+  hud.bHint = HudButton(hud, TR"Überspringen", TR"Nur ein Hinweis: Schritt raus, weiter mit der Route.", function()
+    if ns.OptHintSkip then ns.OptHintSkip() end
+    hud.Update()
+  end)
+  hud.bHint:SetSize(96, 18)
+  hud.bHint:Hide()
   hud.btnList = { bBack, bNext, bPause, bMenu }
   hud.bMenu = bMenu
   hud.btns:SetScript("OnSizeChanged", function(self, w)
@@ -1012,6 +1019,14 @@ local function BuildHud0()
       hud.dist:SetText("")
     end
     local extra = {}
+    -- 1.2a (P44): Hinweis Schritt oben mit Knopf Ueberspringen
+    local hintTxt = (not ns.db.paused) and ns.OptHintStep and ns.OptHintStep()
+    if hud.bHint then
+      if hintTxt then
+        hud.bHint:ClearAllPoints(); hud.bHint:SetPoint("TOPRIGHT", hud, "TOPRIGHT", -8, -44 - hd); hud.bHint:Show()
+      else hud.bHint:Hide() end
+    end
+    if hintTxt then table.insert(extra, "|cffffd100" .. hintTxt .. "|r") end
     -- wichtige Hinweise zuerst und gut sichtbar
     -- Hinweis Fenster an: Warnungen, Hinweise, Neu und Ueberspringen stehen dort als eigene Karten
     local nw = ns.NoticeOn and ns.NoticeOn()

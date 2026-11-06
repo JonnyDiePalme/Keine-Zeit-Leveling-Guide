@@ -1,4 +1,6 @@
 local ADDON, ns = ...
+-- 1.2e (P62): Flugzeit Balken unter dem Pfeil
+ns.FLIGHT_BAR_W, ns.FLIGHT_BAR_H = 150, 14
 local TR = ns.TR
 
 -- 19.31 (Saschas Runde: Startgebiet Durotar gewaehlt, "er macht mir keinen Weg dorthin"): bei einem Ziel in einer
@@ -469,6 +471,8 @@ end
 local function ResolveTarget(db)
   local m, px, py, tx, ty, name, tpt = ResolveRaw(db)
   if not tx or type(px) ~= "number" then return m, px, py, tx, ty, name, tpt end
+  -- 1.2j (P66, Ka 17:06): auf Zeppelin, Schiff oder Flug kein WEG_FERN und kein Umweg ums Gelaende (Position in der Luft / auf See)
+  if ns.OnRide and ns.OnRide() then return m, px, py, tx, ty, name, tpt end
   local fx, fy = WegFern(m, px, py, (tpt and tonumber(tpt[1])) or tx, (tpt and tonumber(tpt[2])) or ty, name)
   -- schon ueber den Weg gerechnet (Route, Navi Lauf Abschnitt, Uebergang): nichts mehr tun
   if resolveSrc == "opt" or resolveFinal then return m, px, py, tx, ty, name, tpt end
@@ -712,11 +716,35 @@ local function BuildArrow()
     if hearthNow then info = "|cffffd100" .. TR"Jetzt" .. "|r " .. label .. "\n" .. TR"jetzt benutzen, wo du stehst" .. "\n" .. TR"Knopf darunter klicken" end
     if hearthNow then self.tex:Hide(); cm = nil end
     -- 1.1 (S Wunsch): im Flug die Flugzeit, wenn sie bekannt ist (eigene Messung oder von anderen geteilt)
-    if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") and ns.FlightNow then
+    -- 1.2e (P62, S 14:30): als Balken, der sich fuellt, mit der Restzeit drin ("2:10 von 3:27")
+    local flying = (ns.InFlight and ns.InFlight()) or (not ns.InFlight and UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player"))
+    local fLeft, fTotal, fSrc
+    if flying and ns.FlightNow then
       local okF, left, total, src = pcall(ns.FlightNow)
-      if okF and left then
-        info = info .. "\n|cff66ccff" .. (TR"Flug: noch %s von %s%s"):format(ns.Clock(left), ns.Clock(total), src == "geteilt" and TR" (geteilt)" or "") .. "|r"
+      if okF and left and total and total > 0 then fLeft, fTotal, fSrc = left, total, src end
+    end
+    if fLeft then
+      local fb = self.flightBar
+      if not fb then
+        fb = CreateFrame("StatusBar", nil, self)
+        fb:SetSize(ns.FLIGHT_BAR_W, ns.FLIGHT_BAR_H)
+        fb:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+        fb:SetStatusBarColor(0.4, 0.8, 1, 0.9)
+        fb.bg = fb:CreateTexture(nil, "BACKGROUND")
+        fb.bg:SetAllPoints()
+        fb.bg:SetColorTexture(0, 0, 0, 0.55)
+        fb.txt = fb:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+        fb.txt:SetPoint("CENTER")
+        self.flightBar = fb
       end
+      fb:ClearAllPoints()
+      fb:SetPoint("TOP", self.text, "BOTTOM", 0, -3)
+      fb:SetMinMaxValues(0, fTotal)
+      fb:SetValue(math.max(0, fTotal - fLeft))
+      fb.txt:SetText((TR"%s von %s%s"):format(ns.Clock(fLeft), ns.Clock(fTotal), fSrc == "geteilt" and TR" (geteilt)" or ""))
+      fb:Show()
+    elseif self.flightBar then
+      self.flightBar:Hide()
     end
     self.text:SetText(info)
     if not docked and not following and not hearthNow then Rotate(self, m, px, py, tx, ty) end
@@ -1184,6 +1212,11 @@ do
     if L.lastReason[reason] and now - L.lastReason[reason] < MIN_GAP then return end
     L.lastReason[reason] = now
     L.periodAt = now
+    -- 1.2a (P45): beim Abdriften die Reserve Quests neu bewerten (nah: Schritt)
+    if reason == "abweichung" and ns.ReserveOnDrift then
+      local okR, took = pcall(ns.ReserveOnDrift)
+      if okR and took then Reset(ns.db.opt.idx or 1); return end
+    end
     if not ns.LiveReplan then
       Log("LIVE", ("Ausloeser %s (ns.LiveReplan fehlt, nichts gerechnet)"):format(reason))
       return
@@ -1375,7 +1408,7 @@ do
         if out and ns.ReserveDropHint and Enabled() then
           local okR, txt, rq = pcall(ns.ReserveDropHint)
           if okR and txt and not (L.reserveQuiet and L.reserveQuiet[rq]) then
-            table.insert(out, { kind = "reserve", text = txt,
+            table.insert(out, { kind = "reserve", text = txt, rq = rq,
               tip = ns.EN and "Click: hide this hint for this quest." or "Klick: Hinweis für diese Quest ausblenden.",
               onClick = function()
                 L.reserveQuiet = L.reserveQuiet or {}
@@ -1391,6 +1424,12 @@ do
       local origDis = ns.HintDismiss
       ns.HintDismiss = function(h, ...)
         if h and h.kind == "live" then L.lockUntil = GetTime() + LOCK_SEC; L.chance = nil; return end
+        -- 1.2l (P75): x am Reserve Hinweis = fuer diese Quest still (wie Klick), keine Meldung "15 Min ausgeblendet"
+        if h and h.kind == "reserve" then
+          if h.rq then L.reserveQuiet = L.reserveQuiet or {}; L.reserveQuiet[h.rq] = true end
+          if ns.RefreshHud then ns.RefreshHud() end
+          return
+        end
         return origDis(h, ...)
       end
     end

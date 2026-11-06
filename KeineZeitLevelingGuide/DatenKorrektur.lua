@@ -90,7 +90,7 @@ do
     DK.short = DK.stand and DK.stand:match("(Daten%s+%S+)%s*$") or (DK.stand and DK.stand:sub(1, 24)) or tostring(fmt)
     local ok = pcall(function()
       Take(src.alle)
-      Take(ns.FOREVER and src.forever or src.era)
+      Take(src.forever) -- 1.2e (P47): nur Forever
     end)
     if not ok then DK.quest, DK.item, DK.npc, DK.nQ, DK.nI, DK.nN, DK.bad = {}, {}, {}, 0, 0, 0, true end
   end

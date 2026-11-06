@@ -741,7 +741,8 @@ local function Tick()
       last.bestD, last.bestT, last.bestWalk = d, GetTime(), stepStat.walk
     elseif d > 40 and not last.slowWarn and GetTime() - last.bestT > 90
       and stepStat.walk - (last.bestWalk or 0) > 30 -- nur wenn er sich bewegt, nicht wenn er einfach steht
-      and not ns.Api.U(UnitAffectingCombat, "player") and not ns.Api.U(UnitIsDeadOrGhost, "player") and not ns.Api.U(UnitOnTaxi, "player") then
+      and not ns.Api.U(UnitAffectingCombat, "player") and not ns.Api.U(UnitIsDeadOrGhost, "player") and not ns.Api.U(UnitOnTaxi, "player")
+      and not (ns.WaitsForRide and ns.WaitsForRide()) then
       last.slowWarn = true
       L("HAENGT", ("90s nicht naeher ans Ziel, noch %d Yards: %s"):format(math.floor(d), tostring(last.txt)))
       if CUR then CUR.stuck = (CUR.stuck or 0) + 1 end
@@ -1089,7 +1090,7 @@ function ns.TestLogStart()
   Roster()
   -- Kopf: Version, Server, Sprache, Charakter, Einstellungen, Bildschirm, Addons
   local hc = C_GameRules and C_GameRules.IsHardcoreActive and C_GameRules.IsHardcoreActive()
-  local server = (ns.FOREVER and "Forever" or "Era") .. (hc and " Hardcore" or "")
+  local server = "Forever" .. (hc and " Hardcore" or "")
   L("START", ("==== Sitzung %s, Version %s, Server %s, Sprache %s, Build %s, %s %s %s, Level %d"):format(LOG.sess and LOG.sess[SI] and LOG.sess[SI].id or "?", ver, server, tostring(GetLocale and GetLocale()),
     tostring((select(4, GetBuildInfo()))), tostring(race), tostring(cls), tostring(UnitFactionGroup("player")), UnitLevel("player") or 0))
   -- v11e (K P35, S 10:51): Versionen (unser Addon, Zusatz Addons, Questie, QuestieDB, Client). Aendert sich etwas gegen die
@@ -1411,4 +1412,17 @@ function ns.TesterBoxStart()
   tbStarted = true
   TesterBox()
   if ns.Ticker then ns.Ticker(1, TesterBox) end
+end
+
+-- 1.2i (P72, K 17:00: HAENGT "Reise: Zeppelin nach Unterstadt (faehrt in 2:02)"): Reise Schritt (Schiff, Zeppelin, Flug)
+-- ist dran, oder das Navi wartet auf ein Schiff: dann zaehlt Stehen oder Herumlaufen nicht als Haengen
+function ns.WaitsForRide()
+  local db = ns.db
+  local o = db and db.optMode and db.opt
+  local st = o and o.steps and o.steps[o.idx or 1]
+  if st and st.travel then return true end
+  local nv = ns.navi
+  local lg = nv and not nv.hidden and nv.legs and nv.legs[nv.cur or 1]
+  if lg and (lg.kind == "ride" or lg.kind == "fly") then return true end
+  return false
 end

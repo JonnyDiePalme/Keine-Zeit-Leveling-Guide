@@ -1738,10 +1738,18 @@ local function DrawOpt(mapID, optArg)
   local wide = vinfo and vinfo.mapType and vinfo.mapType < Enum.UIMapType.Zone
   -- 1.1 (S Log 06.11., Core.lua:1753 compare nil with number, 173x): Schritte ohne Punkt (zb Reise ohne Ziel) oder eine
   -- Umrechnung mit nur einem Wert. View gibt nur noch ein ganzes Paar Zahlen zurueck oder nichts
-  local function View(zone, x, y)
+  local function View(zone, x, y, edge)
     if not (zone and type(x) == "number" and type(y) == "number") then return nil, nil end
     local u, v = ToView(zone, x, y, mapID)
-    if not (type(u) == "number" and type(v) == "number") and wide and ns.MapViewPt then u, v = ns.MapViewPt(zone, x, y, mapID) end
+    -- 1.2i (P71, K 17:00: "Reise: Zeppelin" ohne Linie, KARTE "0 von 4 Schritten" auf Orgrimmar): Schritte knapp
+    -- ausserhalb der Karte (Zeppelin Turm vor der Stadt) gab ToMap nicht her. Jetzt auch in der Zonen Ansicht ueber
+    -- ToMapFree (ns.MapViewPt), und am Rand der Karte festhalten, damit die Linie dorthin zeigt
+    if not (type(u) == "number" and type(v) == "number") and ns.MapViewPt and (wide or edge) then
+      u, v = ns.MapViewPt(zone, x, y, mapID)
+      if not wide and type(u) == "number" and type(v) == "number" then
+        u, v = math.max(0, math.min(1, u)), math.max(0, math.min(1, v))
+      end
+    end
     if type(u) ~= "number" or type(v) ~= "number" then return nil, nil end
     return u, v
   end
@@ -1767,7 +1775,8 @@ local function DrawOpt(mapID, optArg)
   local viewZone = (ns.cityParent and ns.cityParent[mapID]) or mapID
   for li, i in ipairs(list) do
     local st = opt.steps[i]
-    local x, y = View(st.map, st.x, st.y)
+    -- 1.2i (P71): Reise Schritt und jetziger Schritt duerfen am Kartenrand stehen (Linie zeigt dorthin)
+    local x, y = View(st.map, st.x, st.y, st.travel or i == start)
     if x and wide and (x < 0 or x > 1 or y < 0 or y > 1) then x, y = nil, nil end
     if x then drawn = drawn + 1 end
     if x and zoneView and allZones and not st.travel and ((ns.cityParent and ns.cityParent[st.map]) or st.map) ~= viewZone then x, y = nil, nil end

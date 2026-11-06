@@ -19,15 +19,26 @@ local CATS = {}
 local function Cat(key, title, lines) CATS[#CATS + 1] = { key = key, title = title, lines = lines } end
 
 -- 1.1 (K: Versionsverlauf im Spiel nur Kernpunkte, nie Details)
-Cat("neu", TR"Neu in 1.1", function()
+Cat("neu", TR"Neu in 1.2", function()
   return {
+    H .. TR"Neu in Version 1.2|r",
+    TR"- Händler nur noch als Hinweis, nicht fest in der Route",
+    TR"- Mehr Quests am Weg mitnehmen, Quest Reihen bleiben geschützt",
+    TR"- Route nach Level 60 geht weiter",
+    TR"- Flugzeit als Balken unter dem Pfeil",
+    TR"- Pfeil in Städten und auf Zeppelin oder Schiff verbessert",
+    TR"- Weiter Schritt: Navi nimmt Flug, Schiff oder Zeppelin, wenn es schneller ist",
+    TR"- Meine Route zeigt die ganze laufende Route, Hinweise mit x gehen sofort zu",
+    TR"- Zeit bis Level rechnet fertige Quests mit",
+    TR"- Nur noch für WoW Forever",
+    "",
     H .. TR"Neu in Version 1.1|r",
     TR"- Fehler behoben (Forever Client 1.60.1)",
     TR"- Leveling Route optimiert, rechnet flüssig in Schritten",
     TR"- Navi und Pfeil verbessert, auch in Städten",
     TR"- Log erweitert",
     TR"- Neue Anzeige im Mini Fenster: jetzige Quest farbig, Höhe zum Ziel",
-    TR"- Marker von weitem, Kartenpunkt aufs Ziel",
+    TR"- Marker und Kartenpunkt aufs Ziel als Einstellung (Standard aus)",
     TR"- Gold Statistik, Mein Weg mit Ausrüstung, Knopf an der Minimap",
   }
 end)

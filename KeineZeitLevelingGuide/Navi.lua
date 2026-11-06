@@ -886,6 +886,15 @@ end
 local function Tick()
   local nv = ns.navi
   if not nv then return end
+  -- 1.2n (P76): Navi fuer einen weiten Route Schritt endet, sobald die Route einen anderen Schritt hat
+  if nv.routeIdx then
+    local o = ns.db and ns.db.optMode and ns.db.opt
+    if not (o and (o.idx or 1) == nv.routeIdx) then
+      if ns.TestLog then ns.TestLog("NAVI", "Route Schritt gewechselt, Navi fuer den Schritt beendet") end
+      Stop()
+      return
+    end
+  end
   if nv.hidden then return end
   -- Pfeil Ziel wurde ersetzt oder weggeklickt (Mini Fenster, Feierabend, Haendler ...): Navi ausblenden, nicht wegwerfen
   if ns.serviceTarget ~= nv.st then
@@ -914,10 +923,12 @@ local function Tick()
   nv.wartet = nil
   local P = Here()
   local onTaxi = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")
+  -- 1.2j (P66, Ka 17:06): auf Schiff oder Zeppelin nicht neu planen (die Position auf dem Transport ist kein Startort)
+  local onBoat = not onTaxi and ns.WalkOnBoat and ns.WalkOnBoat()
   if not P then return end
   -- 19.9 (Code Pruefung): beim Planen rechnete der Zonen Graph noch (zb gemerktes Navi nach dem Einloggen), der Plan
   -- ist nur vorlaeufig. Sobald der Graph fertig ist, einmal still neu planen
-  if nv.busy and not onTaxi then
+  if nv.busy and not onTaxi and not onBoat then
     local K = ns.Karte
     if not (K and K.Busy and K.Busy()) then
       nv.busy = nil
@@ -930,7 +941,7 @@ local function Tick()
     end
   end
   -- 19.32 (Navi Chat): neue Flugpunkte gelernt (Flugkarte offen, gelandet): einmal still neu planen, nicht in der Luft
-  if not onTaxi and ns.db and (ns.db.knownFPRev or 0) ~= (nv.fpRev or 0) then
+  if not onTaxi and not onBoat and ns.db and (ns.db.knownFPRev or 0) ~= (nv.fpRev or 0) then
     nv.fpRev = ns.db.knownFPRev or 0
     local sig = FPSig()
     -- Flugkarte nur geoeffnet, nichts Neues: nicht neu planen (20.3z3, P7)
@@ -965,7 +976,11 @@ local function Tick()
   local lg = nv.legs[nv.cur]
   -- 19.32 (Navi Chat): Teleport oder Ruhestein benutzt, aber nicht genau am geplanten Ort angekommen (Ankunft nur
   -- geschaetzt): nicht zurueck zum Startort zeigen, sondern ab hier neu planen
-  if (lg.kind == "portal" or lg.kind == "hearth") and not onTaxi and lg.at and (P.cont ~= lg.at.cont or D(P, lg.at) > 300) then
+  -- 1.2i (P68, K 17:00, S "Ruhestein wird dauernd eingeblendet"): beim Ruhestein nur, wenn er seit dem Plan wirklich benutzt
+  -- wurde (Zauber 8690 oder 556, ns.portUsedAt aus Travel.lua). Vorher reichte es, 300 yd vom Startort weg zu laufen, dann
+  -- plante das Navi alle 45 s neu, wieder mit Ruhestein als Schritt 1
+  local jumped = lg.kind == "portal" or (ns.portUsedAt and ns.portUsedAt >= (nv.made or 0))
+  if (lg.kind == "portal" or lg.kind == "hearth") and jumped and not onTaxi and lg.at and (P.cont ~= lg.at.cont or D(P, lg.at) > 300) then
     -- Pruefer A3: findet die Planung von hier keinen Weg, nicht jede Sekunde neu probieren
     if nv.jumpTry and GetTime() - nv.jumpTry < 20 then return end
     nv.jumpTry = GetTime()
@@ -998,7 +1013,7 @@ local function Tick()
     return
   end
   -- ganz woanders gelandet (anderer Kontinent als dieser Abschnitt): neu rechnen
-  if not onTaxi and P.cont ~= lg.at.cont and P.cont ~= lg.to.cont then Replan(); return end
+  if not onTaxi and not onBoat and P.cont ~= lg.at.cont and P.cont ~= lg.to.cont then Replan(); return end
   -- Abfahrt im Text mitzaehlen
   if lg.kind == "ride" and lg.exact then
     nv.st.name = LegText(nv, nv.cur)
@@ -1294,10 +1309,67 @@ if ns.AddMapButton then
     on = function() return pick or (ns.navi ~= nil and not ns.navi.hidden and not ns.navi.zielSeite) end, click = Click })
 end
 
+-- 1.2n (P76, K 18:45, S 18:38 "hier haette er den Weg ueber den Flugmeister suchen sollen"): der Route Schritt liegt weit weg
+-- (Annehmen bei Theodore Griffs in Unterstadt, du am Grabmal im Silberwald, 1500 yd zu Fuss ueber den Zonen Uebergang). Die
+-- Route plant Fluege nur beim Rechnen, danach ging der Pfeil nur zu Fuss. Jetzt: ist der jetzige Schritt mehr als
+-- AUTO_MIN_YD weg (oder auf einem anderen Kontinent), plant das Navi still einen Weg. Spart er mit Flug, Schiff, Zeppelin
+-- oder Portal mindestens AUTO_GAIN_S gegen Laufen, fuehrt das Navi bis zum Schritt (Linie, Flugmeister), danach wieder die
+-- Route. Ruhestein nicht (der hat seinen eigenen Hinweis). Je Schritt hoechstens alle AUTO_RETRY_S neu und nur, wenn du
+-- seitdem AUTO_MOVE_YD weiter bist. Schalter db.naviAuto=false: aus
+local AUTO_EVERY_S, AUTO_MIN_YD, AUTO_GAIN_S, AUTO_RETRY_S, AUTO_MOVE_YD = 5, 600, 60, 60, 200
+local autoTry = {}
+local function AutoRoute()
+  local db = ns.db
+  if not (db and db.optMode and db.naviAuto ~= false and db.zielNavi ~= false) then return end
+  if ns.navi or ns.serviceTarget then return end
+  if InCombatLockdown and InCombatLockdown() then return end
+  if ns.OnRide and ns.OnRide() then return end
+  if ns.InInstance and ns.InInstance() then return end
+  if ns.OptBusy and ns.OptBusy() then return end
+  local o = db.opt
+  local idx = o and (o.idx or 1)
+  local st = o and o.steps and o.steps[idx]
+  if not (st and st.map and st.x and st.y) or st.travel then return end
+  local P = Here()
+  local G = P and Node(st.map, st.x, st.y)
+  if not (P and G) then return end
+  local far = P.cont ~= G.cont or D(P, G) > AUTO_MIN_YD
+  if not far then return end
+  local now = GetTime()
+  local tr = autoTry
+  if tr.idx == idx and tr.started then return end -- je Schritt nur einmal von selbst (weggeklickt bleibt weg)
+  if tr.idx == idx and tr.t and (now - tr.t < AUTO_RETRY_S or (tr.P and tr.P.cont == P.cont and D(tr.P, P) < AUTO_MOVE_YD)) then return end
+  autoTry = { idx = idx, t = now, P = P }
+  local name = st.who or st.npc or st.quest or st.name or TR"Route Schritt"
+  if type(name) ~= "string" then name = TR"Route Schritt" end
+  local ok, nv = pcall(ns.NaviPlan, st.map, st.x, st.y, name)
+  if not (ok and nv and nv.legs) then return end
+  local ride, hearth = false, false
+  for _, lg in ipairs(nv.legs) do
+    if lg.kind == "fly" or lg.kind == "ride" or lg.kind == "portal" then ride = true end
+    if lg.kind == "hearth" then hearth = true end
+  end
+  if not ride or hearth then return end
+  local TV = ns.TRAVEL or { PATH = 1.2 }
+  local speed = (ns.PlanSpeed and ns.PlanSpeed()) or 7
+  local walk = (P.cont == G.cont) and (D(P, G) * (TV.PATH or 1.2) / speed) or math.huge
+  if not (nv.total + AUTO_GAIN_S < walk) then
+    if ns.TestLog then ns.TestLog("NAVI", ("Route Schritt weit weg (%s): mit Reise %d s, zu Fuss %d s, bleibt zu Fuss"):format(name, math.floor(nv.total), math.floor(math.min(walk, 99999)))) end
+    return
+  end
+  nv.zielSeite = true -- nicht als eigenes Ziel merken (kommt nach dem Einloggen nicht zurueck), Karten Knopf blendet nur aus
+  nv.routeIdx = idx
+  autoTry.started = true
+  Start(nv, false)
+  if ns.TestLog then ns.TestLog("NAVI", ("Route Schritt weit weg (%s): Navi mit Reise %d s statt %s zu Fuss"):format(name, math.floor(nv.total),
+    walk == math.huge and "anderer Kontinent" or (math.floor(walk) .. " s"))) end
+end
+
 local hf = CreateFrame("Frame")
 hf:RegisterEvent("PLAYER_LOGIN")
 hf:SetScript("OnEvent", function()
   ns.Ticker(1, function() pcall(Tick) end, true)
+  ns.Ticker(AUTO_EVERY_S, function() local ok, err = pcall(AutoRoute); if not ok and ns.TestLog then ns.TestLog("NAVI", "Route Navi Fehler: " .. tostring(err)) end end)
   -- gemerktes Navi nach dem Einloggen wieder aufbauen (Position und Flugpunkte brauchen ein paar Sekunden)
   if C_Timer then
     C_Timer.After(8, function()

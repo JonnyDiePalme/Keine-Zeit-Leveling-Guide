@@ -52,9 +52,9 @@ ns.BOOK_TURNIN = {
   Alliance = { map = 1453, x = 0.490, y = 0.863, name = TR"Garion Wendell (Sturmwind, Magierturm)" },
 }
 -- Forever: Era Punkte auf die neuen Karten (Oestliche Pestlaender, Sturmwind)
-if ns.EraXY then
-  for _, b in ipairs(ns.BOOKS) do b.x, b.y = ns.EraXY(b.map, b.x, b.y) end
-  for _, t in pairs(ns.BOOK_TURNIN) do t.x, t.y = ns.EraXY(t.map, t.x, t.y) end
+if ns.FixXY then
+  for _, b in ipairs(ns.BOOKS) do b.x, b.y = ns.FixXY(b.map, b.x, b.y) end
+  for _, t in pairs(ns.BOOK_TURNIN) do t.x, t.y = ns.FixXY(t.map, t.x, t.y) end
 end
 
 local function DB()

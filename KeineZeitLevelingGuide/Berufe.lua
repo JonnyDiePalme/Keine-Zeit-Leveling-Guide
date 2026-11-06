@@ -16,7 +16,7 @@ ns.Berufe = B
 local function Plain(v) if ns.Plain then return ns.Plain(v) end return v end
 local function L0() return (ns.UnitLevel and ns.UnitLevel("player")) or UnitLevel("player") or 1 end
 local function Now() return (time and time()) or 0 end
-local IS_FOREVER = GetBuildInfo ~= nil and ((select(4, GetBuildInfo())) or 0) >= 16000 and ((select(4, GetBuildInfo())) or 0) < 20000
+local IS_FOREVER = true -- 1.2e (P47): nur Forever
 
 local function DB()
   local db = ns.db
@@ -296,7 +296,7 @@ local function ZoneCells(map)
       end
     end
   end
-  local hot = (IS_FOREVER and ns.PROF_HOT_FOREVER or ns.PROF_HOT_ERA) or {}
+  local hot = ns.PROF_HOT_FOREVER or {}
   for node, s in pairs(hot[map] or {}) do
     local it = NODE_ITEM[node]
     if it and not gm[it.prof] then
@@ -329,7 +329,7 @@ B.ZoneCells = ZoneCells
 -- alle Zonen mit Daten fuer Kraeuter und Erz
 local function NodeZones()
   local z = {}
-  local hot = (IS_FOREVER and ns.PROF_HOT_FOREVER or ns.PROF_HOT_ERA) or {}
+  local hot = ns.PROF_HOT_FOREVER or {}
   for map in pairs(hot) do z[map] = true end
   for _, kind in ipairs({ "Herb Gathering", "Mining" }) do
     for map in pairs(GMDB(kind) or {}) do if type(map) == "number" then z[map] = true end end
