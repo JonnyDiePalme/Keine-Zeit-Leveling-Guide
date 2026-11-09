@@ -68,9 +68,9 @@ local function GearFor(L)
 end
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("PLAYER_LEVEL_UP")
-ev:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
-ev:RegisterEvent("PLAYER_ENTERING_WORLD")
+ns.RegEv(ev, "PLAYER_LEVEL_UP")
+ns.RegEv(ev, "PLAYER_EQUIPMENT_CHANGED")
+ns.RegEv(ev, "PLAYER_ENTERING_WORLD")
 ev:SetScript("OnEvent", function(_, e, a1)
   if e == "PLAYER_LEVEL_UP" then
     -- beim Event ist UnitLevel manchmal noch das alte Level

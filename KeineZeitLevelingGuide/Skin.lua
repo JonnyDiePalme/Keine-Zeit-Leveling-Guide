@@ -119,6 +119,6 @@ do
     end)
   end
   local ef = CreateFrame("Frame")
-  ef:RegisterEvent("PLAYER_ENTERING_WORLD")
+  ns.RegEv(ef, "PLAYER_ENTERING_WORLD")
   ef:SetScript("OnEvent", Hook)
 end

@@ -154,11 +154,42 @@ local function Tick()
 end
 if C_Timer and C_Timer.NewTicker then ns.Ticker(1, function() pcall(Tick) end) end
 
+-- 1.3zl (S 14:11, K 14:16 Punkt 2): Route schickte S zu "Buch holen: Baxtan", das Buch war schon abgegeben (vor dem Addon
+-- oder ohne Erkennung, auf Forever steht es danach nicht mehr in der Welt). Jetzt: stehst du BOOK_GONE_S am Fundort (bis
+-- BOOK_AT_YD) und es kommt keine Beute, gilt das Buch fuer diesen Charakter als erledigt (booksDone ist pro Charakter) und
+-- wird nie mehr eingeplant. Falsch? Im Fenster Buecher den Haken wieder wegnehmen
+ns.BOOK_GONE_S, ns.BOOK_AT_YD = 45, 30
+local bookById, atBook = nil, {}
+function ns.BookStepDone(id)
+  if ns.BookDone(id) then return true end
+  local db = DB()
+  if not (db and id and ns.WorldDist) then return false end
+  if not bookById then
+    bookById = {}
+    for _, b in ipairs(ns.BOOKS) do bookById[b.id] = bookById[b.id] or b end
+  end
+  local b = bookById[id]
+  local map = ns.PlayerMap and ns.PlayerMap()
+  local pos = b and map and C_Map.GetPlayerMapPosition(map, "player")
+  if not pos then atBook[id] = nil; return false end
+  local px, py = pos:GetXY()
+  local d = ns.WorldDist({ map, px, py }, { b.map, b.x, b.y })
+  if not (d and d < ns.BOOK_AT_YD) then atBook[id] = nil; return false end
+  atBook[id] = atBook[id] or GetTime()
+  if GetTime() - atBook[id] < ns.BOOK_GONE_S then return false end
+  db.booksDone[id] = true
+  atBook[id] = nil
+  ns.Print((TR"Buch %s ist hier nicht (mehr), gilt als erledigt. Falls doch nicht: im Fenster Bücher den Haken wegnehmen."):format(b.name))
+  if ns.TestLog then ns.TestLog("BUCH", ("am Fundort %d s ohne Beute, gilt als erledigt: %s"):format(ns.BOOK_GONE_S, b.name)) end
+  if ns.RefreshBig then ns.RefreshBig() end
+  return true
+end
+
 -- Beute aus einem Gegenstand (Buch liegt als Objekt in der Welt), nicht von einem Mob daneben
 local objLoot -- { items = { [itemID] = true }, t }
 local lf = CreateFrame("Frame")
-lf:RegisterEvent("CHAT_MSG_LOOT")
-lf:RegisterEvent("LOOT_OPENED")
+ns.RegEv(lf, "CHAT_MSG_LOOT")
+ns.RegEv(lf, "LOOT_OPENED")
 lf:SetScript("OnEvent", function(_, event, msg)
   if event == "LOOT_OPENED" then
     objLoot = nil
@@ -174,9 +205,20 @@ lf:SetScript("OnEvent", function(_, event, msg)
     if next(items) then objLoot = { items = items, t = GetTime() } end
     return
   end
-  if not (near and GetTime() - near.t < 15) then return end
   msg = ns.Plain and ns.Plain(msg) or msg
   if type(msg) ~= "string" then return end
+  -- 1.3zzk (P133 Teil e): bekanntes Buch Item auch weiter weg vom Guide Ort: Fundort merken (naechster Eintrag dieses Buchs)
+  if not (near and GetTime() - near.t < 15) then
+    local id0 = tonumber(msg:match("item:(%d+)"))
+    local db0 = DB()
+    local bid = id0 and db0 and db0.bookItems and db0.bookItems[id0]
+    local mine0 = not LOOT_ITEM_SELF or msg:find((LOOT_ITEM_SELF:gsub("%%s.*", "")), 1, true) == 1
+    if bid and mine0 then
+      if ns.BookFoundNote then pcall(ns.BookFoundNote, bid) end
+      if not db0.booksDone[bid] then db0.booksDone[bid] = true; if ns.RefreshBig then ns.RefreshBig() end end
+    end
+    return
+  end
   -- nur eigene Beute (die Vorlage fuer "Ihr bekommt Beute" beginnt so)
   local mine = LOOT_ITEM_SELF and msg:find((LOOT_ITEM_SELF:gsub("%%s.*", "")), 1, true) == 1
   if LOOT_ITEM_SELF and not mine then return end
@@ -191,6 +233,7 @@ lf:SetScript("OnEvent", function(_, event, msg)
   local canCheck = GetLootSourceInfo ~= nil
   if canCheck and not (byObj or byName or known) then return end
   if id then db.bookItems = db.bookItems or {}; db.bookItems[id] = near.book.id end
+  if ns.BookFoundNote then pcall(ns.BookFoundNote, near.book.id, near.book) end
   db.booksDone[near.book.id] = true
   ns.Print((TR"Buch eingesammelt: %s. Abgeben bei %s."):format(near.book.name,
     (ns.BOOK_TURNIN[UnitFactionGroup("player")] or {}).name or TR"der Bibliothek"))
@@ -414,7 +457,7 @@ end
 
 do
   local bf = CreateFrame("Frame")
-  bf:RegisterEvent("PLAYER_ENTERING_WORLD")
+  ns.RegEv(bf, "PLAYER_ENTERING_WORLD")
   bf:SetScript("OnEvent", function(self)
     self:UnregisterAllEvents()
     if not WorldMapFrame then return end
@@ -455,7 +498,116 @@ do
     if changed and ns.RefreshBig then ns.RefreshBig() end
   end
   local bf = CreateFrame("Frame")
-  bf:RegisterEvent("BAG_UPDATE_DELAYED")
-  bf:RegisterEvent("PLAYER_LOGIN")
+  ns.RegEv(bf, "BAG_UPDATE_DELAYED")
+  ns.RegEv(bf, "PLAYER_LOGIN")
   bf:SetScript("OnEvent", function() C_Timer.After(1, Scan) end)
+end
+
+------------------------------------------------------------
+-- 1.3zzk (P133 Teil e, K 04:18): Buch Fundorte. Wo du ein Buch wirklich aufgehoben hast, wird gemerkt (Karte und Zelle
+-- 1 Promille der Karte) und geteilt (Art b, Wert = Kennzahl des Buchs). Der Ort im Guide wird damit nachgebessert:
+-- eigener Fund zuerst, sonst der Ort mit den meisten Absendern. Nur bis BOOK_FOUND.MAX_SHIFT_YD vom Guide Ort weg.
+------------------------------------------------------------
+ns.BOOK_FOUND = { CELLS = 1000, MAP_F = 1000000, MAX_MAP = 99999, MAX_SHIFT_YD = 300, HASH_M = 65521 }
+local BF = ns.BOOK_FOUND
+function ns.BookHash(id)
+  local h = 0
+  for i = 1, #id do h = (h * 31 + id:byte(i)) % BF.HASH_M end
+  return h + 1
+end
+local function FKey(map, x, y)
+  local cx = math.max(0, math.min(BF.CELLS - 1, math.floor(x * BF.CELLS)))
+  local cy = math.max(0, math.min(BF.CELLS - 1, math.floor(y * BF.CELLS)))
+  return map * BF.MAP_F + cx * BF.CELLS + cy
+end
+local function FPos(key)
+  local map = math.floor(key / BF.MAP_F)
+  local c = key % BF.MAP_F
+  return map, (math.floor(c / BF.CELLS) + 0.5) / BF.CELLS, (c % BF.CELLS + 0.5) / BF.CELLS
+end
+ns.BookFoundPos = FPos
+-- Guide Eintrag eines Buchs auf dieser Karte, am naechsten an x, y (nur bis MAX_SHIFT_YD)
+local function EntryFor(bid, map, x, y)
+  local best, bd
+  for _, b in ipairs(ns.BOOKS) do
+    if b.id == bid and b.map == map then
+      local d = ns.WorldDist and ns.WorldDist({ map, x, y }, { map, b.gx or b.x, b.gy or b.y })
+      if d and d <= BF.MAX_SHIFT_YD and (not bd or d < bd) then best, bd = b, d end
+    end
+  end
+  return best, bd
+end
+function ns.BookFoundNote(bid, b)
+  local db = ns.db
+  if not db then return end
+  local map = ns.PlayerMap and ns.PlayerMap()
+  local pos = map and C_Map.GetPlayerMapPosition(map, "player")
+  if not pos then return end
+  local x, y = pos:GetXY()
+  x, y = ns.Plain and ns.Plain(x) or x, ns.Plain and ns.Plain(y) or y
+  if not (x and y) or map > BF.MAX_MAP then return end
+  local e, d = EntryFor(bid, map, x, y)
+  if not e then
+    if ns.TestLog then ns.TestLog("BUCH", ("Fundort %s auf Karte %d nicht gemerkt, kein Guide Ort bis %d yd"):format(bid, map, BF.MAX_SHIFT_YD)) end
+    return
+  end
+  db.bookFound = db.bookFound or {}
+  -- je Buch und Karte nur der letzte Fund
+  local h = ns.BookHash(bid)
+  for k, v in pairs(db.bookFound) do if v == h and math.floor(k / BF.MAP_F) == map then db.bookFound[k] = nil end end
+  db.bookFound[FKey(map, x, y)] = h
+  if ns.TestLog then ns.TestLog("BUCH", ("Fundort gemerkt %s Karte %d %.3f %.3f, %d yd vom Guide Ort"):format(bid, map, x, y, math.floor(d or 0))) end
+  ns.BookApplyFound()
+end
+-- Pruefung fuer geteilte Fundorte: Buch bekannt, auf dieser Karte, nah genug am Guide Ort
+function ns.BookShareCheck(key, v)
+  if not (key and v) then return false, "Werte" end
+  local map, x, y = FPos(key)
+  if map <= 0 or map > BF.MAX_MAP then return false, "Karte" end
+  for _, b in ipairs(ns.BOOKS) do
+    if ns.BookHash(b.id) == v and b.map == map then
+      local d = ns.WorldDist and ns.WorldDist({ map, x, y }, { map, b.gx or b.x, b.gy or b.y })
+      if d and d <= BF.MAX_SHIFT_YD then return true end
+      return false, "zu weit"
+    end
+  end
+  return false, "Buch"
+end
+function ns.BookFoundAll() return (ns.db and ns.db.bookFound) or {} end
+-- Guide Orte nachbessern (eigener Fund vor geteiltem mit den meisten Absendern), Original bleibt in gx, gy
+function ns.BookApplyFound()
+  local own = (ns.db and ns.db.bookFound) or {}
+  local sh = ns.SharedTable and ns.SharedTable("b") or {}
+  local moved = 0
+  for _, b in ipairs(ns.BOOKS) do
+    b.gx, b.gy = b.gx or b.x, b.gy or b.y
+    local h = ns.BookHash(b.id)
+    local px, py, src
+    for k, v in pairs(own) do
+      if v == h then
+        local map, x, y = FPos(k)
+        if map == b.map and EntryFor(b.id, map, x, y) == b then px, py, src = x, y, "eigen" end
+      end
+    end
+    if not px then
+      local bestN = 0
+      for k, m in pairs(sh) do
+        local n = 0
+        for _, e in pairs(m) do if e.v == h then n = n + 1 end end
+        if n > bestN then
+          local map, x, y = FPos(k)
+          if map == b.map and EntryFor(b.id, map, x, y) == b then px, py, src, bestN = x, y, "geteilt", n end
+        end
+      end
+    end
+    if px then
+      if b.x ~= px or b.y ~= py then moved = moved + 1 end
+      b.x, b.y, b.found = px, py, src
+    else
+      b.x, b.y, b.found = b.gx, b.gy, nil
+    end
+  end
+  if moved > 0 and ns.TestLog then ns.TestLog("BUCH", ("Fundorte nachgebessert: %d Orte"):format(moved)) end
+  if moved > 0 and ns.DrawBooks then pcall(ns.DrawBooks) end
+  return moved
 end

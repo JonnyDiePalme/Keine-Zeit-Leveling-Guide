@@ -50,7 +50,7 @@ function ns.BuildFactionIndex(done)
       local qid = ids[i]
       local rr = Q(qid, "reputationReward")
       if type(rr) == "table" and #rr > 0 then
-        local rc, rra = Q(qid, "requiredClasses"), Q(qid, "requiredRaces")
+        local rc, rra = Q(qid, "requiredClasses"), ns.DKRaces(qid, Q(qid, "requiredRaces"))
         local ok = not (rc and rc > 0 and classID and not HasBit(rc, classID - 1))
           and not (rra and rra > 0 and raceID and not ns.RaceOK(rra, raceID))
         local rep = QDB.IsRepeatable and QDB.IsRepeatable(qid)
@@ -136,8 +136,8 @@ end
 -- Stand der Fraktionen (jetzt annehmbar, erledigt) nach Level Up und Abgabe neu bauen
 do
   local rf = CreateFrame("Frame")
-  rf:RegisterEvent("PLAYER_LEVEL_UP")
-  rf:RegisterEvent("QUEST_TURNED_IN")
+  ns.RegEv(rf, "PLAYER_LEVEL_UP")
+  ns.RegEv(rf, "QUEST_TURNED_IN")
   rf:SetScript("OnEvent", function() if not building then ns.factions = nil end end)
 end
 
@@ -346,7 +346,7 @@ local function RepPattern()
 end
 
 local rf = CreateFrame("Frame")
-rf:RegisterEvent("CHAT_MSG_COMBAT_FACTION_CHANGE")
+ns.RegEv(rf, "CHAT_MSG_COMBAT_FACTION_CHANGE")
 rf:SetScript("OnEvent", function(_, _, msg)
   msg = ns.Plain and ns.Plain(msg) or msg
   if type(msg) ~= "string" then return end

@@ -7,6 +7,10 @@ local ADDON, ns = ...
 local TR = ns.TR
 
 local HEARTH = 10          -- Ruhestein wirken
+-- 1.3zo (P115, S Log 15:1x: Navi Orgrimmar nach Unterstadt plante zuerst "hearth 25s" zum Gasthaus in Orgrimmar): Ruhestein
+-- nur, wenn der Bindeort weiter als HEARTH_MIN_YD weg ist (oder auf einem anderen Kontinent) und nicht in derselben Zone bzw
+-- Stadt wie du. Sonst kostet er die Abklingzeit fuer ein paar Sekunden Laufweg
+local HEARTH_MIN_YD = 1000
 local PORT_EXTRA = 90      -- 19.32: Teleport (Magier) erst, wenn er mindestens so viel spart
 local BOARD = 15           -- so viel vor der Abfahrt am Steg sein
 local REACH = { walk = 25, fly = 120, ride = 200, hearth = 150, portal = 150, wp = 30 }
@@ -44,6 +48,8 @@ local function Here()
 end
 
 -- Wartezeit am Steg, wenn man t Sekunden ab jetzt dort ist (Nauticus: echte Abfahrt, sonst halber Takt)
+-- 1.3za: live Abfahrt (unten bei der Abfahrt Vorschau gesetzt), hier vorne bekannt fuer LegText und Tick
+local LiveDepart
 local function Wait(l, side, t)
   -- 17.9: nicht "x and f()", das gibt nur den ersten Wert weiter (rtt war immer nil, Nauticus Zeiten nie benutzt)
   local w0, _, rtt
@@ -336,7 +342,14 @@ function ns.NaviPlan(dmap, dx, dy, dname)
         end
       end
     end
-    if not inCity and K and K.ReachPoint and K.HasZone and K.HasZone(zu) then
+    -- 1.3zd (K 07:16): Ufer Punkt von Ka geht vor (Ziel im tiefen Wasser)
+    local ux, uy, ud = nil, nil, nil
+    if K and K.Ufer then ux, uy, ud = K.Ufer(zu, zx, zy) end
+    if ux and uy then
+      local R = Node(zu, ux, uy, Z.name)
+      local du = ns.WorldDist and ns.WorldDist({ zu, zx, zy }, { zu, ux, uy })
+      if R then G = R; reach = { d = math.floor(du or ud or 0), why = "wasser" } end
+    elseif not inCity and K and K.ReachPoint and K.HasZone and K.HasZone(zu) then
       local ok, rx, ry, rd, why = pcall(K.ReachPoint, zu, zx, zy)
       if ok and rx and rd and rd > 25 then
         local R = Node(zu, rx, ry, Z.name)
@@ -380,7 +393,14 @@ function ns.NaviPlan(dmap, dx, dy, dname)
   if bi and not (hasStone and ns.HearthLeft and ns.HearthLeft() <= 0) and ns.NaviRecallReady and ns.NaviRecallReady() then recall = true end
   if bi and ((hasStone and ns.HearthLeft and ns.HearthLeft() <= 0) or recall) then
     local h = Node(bi[1], bi[2], bi[3], (ns.ZoneName and ns.ZoneName(bi[1])) or "?", { inn = true })
-    if h then nodes[#nodes + 1] = h; H = #nodes end
+    local cp = ns.cityParent or {}
+    local function Zone(m) return m and (cp[m] or m) end
+    local far = h and S and (h.cont ~= S.cont or D(S, h) > HEARTH_MIN_YD) and Zone(h.map) ~= Zone(S.map)
+    if h and far then nodes[#nodes + 1] = h; H = #nodes
+    elseif h and ns.TestLog and ns.naviHearthSkipLog ~= h.map then
+      ns.naviHearthSkipLog = h.map
+      ns.TestLog("NAVI", ("Ruhestein nicht eingeplant: Bindeort %s zu nah oder gleiche Zone"):format(tostring(h.name)))
+    end
   end
   -- 19.32 (Navi Chat, Saschas Log 30.10.): Magier Teleport in die Hauptstaedte (Rune im Gepaeck), ab deinem Standort
   local jumps = {}
@@ -477,7 +497,13 @@ function ns.NaviPlan(dmap, dx, dy, dname)
         txt = ("%s (%d yd) nach %s (%d yd): Flug %s s (%s), Fussweg %d s"):format(tostring(f1.name), math.floor(d1), tostring(f2.name), math.floor(d2),
           tot and tostring(math.floor(tot)) or "-", src, math.floor(walkT))
       end
-      ns.TestLog("FLUG_PLAN", ("%d Flugpunkte im Plan, %s, Plan nimmt %s"):format(nfp, txt, flew and ("FLUG: " .. table.concat(fl, ", ")) or "keinen Flug"))
+      -- 1.3f (K 02:30 Nebenbei: 01:49 bis 01:54 alle 5 bis 60 s dieselbe Zeile): nur loggen, wenn sich der Plan aendert
+      -- (Flugpunkte, Wahl, Flug ja nein); Zeiten und yd zaehlen nicht, die aendern sich beim Laufen dauernd
+      local fpKey = tostring(nfp) .. "|" .. (txt:gsub("%d+", "")) .. "|" .. (flew and table.concat(fl, ",") or "-")
+      if fpKey ~= ns.lastFlugPlanKey then
+        ns.lastFlugPlanKey = fpKey
+        ns.TestLog("FLUG_PLAN", ("%d Flugpunkte im Plan, %s, Plan nimmt %s"):format(nfp, txt, flew and ("FLUG: " .. table.concat(fl, ", ")) or "keinen Flug"))
+      end
     end)
   end
   -- Weg zurueck verfolgen
@@ -527,6 +553,10 @@ function ns.NaviPlan(dmap, dx, dy, dname)
       -- Pfeil bleibt am Steg (das Ziel liegt meist auf einem anderen Kontinent)
       leg.at = a
       leg.wait, leg.exact = e.wait, e.exact
+      -- 1.3za (P110 Punkt 6, S Log 05:29: "faehrt in 7:13", Nauticus "warten 193.8 s"): die Verbindung am Abschnitt merken,
+      -- damit Anzeige, Vorschau und "verpasst" die Abfahrt live aus Nauticus nehmen. Vorher fehlten l und side am
+      -- Abschnitt, darum galt immer die beim Planen geschaetzte Zeit (depart), und die lag um einen Teil Umlauf daneben
+      leg.l, leg.side = e.l, e.side
       leg.tram = e.l and e.l.tram or nil
       leg.depart = GetTime() + e.t0 - (exv[e.from] or 0) + e.wait
       leg.text = (TR"%s nach %s"):format(e.l.kind or TR"Schiff", b.name or "?")
@@ -544,6 +574,33 @@ function ns.NaviPlan(dmap, dx, dy, dname)
     if leg then legs[#legs + 1] = leg end
   end
   if #legs == 0 then legs[1] = { kind = "walk", at = G, to = G, sec = 0, text = reach and TR"Zur nächsten erreichbaren Stelle" or TR"Zum Ziel", reach = reach } end
+  -- 1.3g (P87, S 02:20: Steinkrallengebirge bis Orgrimmar als zwei Fluege, zweimal Auto Flug): Fluege direkt hintereinander
+  -- (ohne Fussweg dazwischen) werden ein Schritt "Flug nach X (ueber Y)", Zeit als Summe. Die einzelnen Strecken bleiben in
+  -- lg.hops: am Flugmeister nimmt der Auto Flug direkt das Endziel, wenn es auf der Flugkarte erreichbar ist, sonst die
+  -- naechste Strecke (und am Zwischenpunkt wieder)
+  do
+    local merged = {}
+    for _, lg in ipairs(legs) do
+      local prev = merged[#merged]
+      if lg.kind == "fly" and prev and prev.kind == "fly" then
+        prev.hops = prev.hops or { { from = prev.from, to = prev.to, sec = prev.sec } }
+        prev.hops[#prev.hops + 1] = { from = lg.from, to = lg.to, sec = lg.sec }
+        prev.to = lg.to
+        prev.sec = (prev.sec or 0) + (lg.sec or 0)
+        prev.measured = prev.measured and lg.measured
+        prev.game = prev.game and lg.game
+        local via = {}
+        for k = 1, #prev.hops - 1 do via[#via + 1] = tostring(prev.hops[k].to and prev.hops[k].to.name or "?") end
+        local b = lg.to
+        local place = ns.ZoneName and b and ns.ZoneName(b.map)
+        local dest = (place and place ~= b.name) and (place .. " (" .. (b.name or "?") .. ")") or (b and b.name or "?")
+        prev.text = (TR"Flug nach %s (über %s)"):format(dest, table.concat(via, ", "))
+      else
+        merged[#merged + 1] = lg
+      end
+    end
+    legs = merged
+  end
   -- Laufen als Schritte: Wegpunkte den Wegen entlang, dann das eigentliche Ziel des Abschnitts
   local steps, wpn, from = {}, 0, S
   local postZ
@@ -648,7 +705,7 @@ local function LegText(nv, i)
   local lg = nv.legs[i]
   local t = lg.text
   if lg.kind == "ride" and lg.exact and lg.depart then
-    local left = lg.depart - GetTime()
+    local left = (LiveDepart and LiveDepart(lg.l, lg.side, lg.depart)) or (lg.depart - GetTime())
     if left > 0 then t = t .. (TR", fährt in %s"):format(ns.Clock and ns.Clock(left) or math.floor(left) .. "s") end
   end
   return ("Weg %d/%d: %s"):format(i, #nv.legs, t)   -- 20.4b (Ad ANT z6): war "Navi 1/20", die Zahl sind Wegpunkte, nicht Schritte
@@ -673,8 +730,29 @@ local function SetTarget()
   if ns.RefreshHud then pcall(ns.RefreshHud) end
 end
 
+-- 1.3a (P84, K 00:05, Log 23:36:01 bis 23:36:09: Pfeil wechselt alle 1 bis 2 s zwischen "Service Ziel, Weg 1/1: Zum Ziel"
+-- und der Route, jedes Mal ein neues Navi mit anderem Ziel im Brachland, ohne Zeile wer es startet oder beendet): wer
+-- startet und beendet, steht jetzt im Log (NAVI "Start von" / "Ende von", je Sitzung hoechstens FLAP_LOG_N mal). Kommt ein
+-- neues Navi, das nicht vom Spieler gewaehlt ist, kurz nachdem eins beendet wurde (FLAP_GAP_S), zaehlt das als hin und
+-- her. Ab FLAP_MAX Mal in FLAP_WIN_S sind solche Navis FLAP_BLOCK_S gesperrt: der Pfeil bleibt auf der Route
+local FLAP_GAP_S, FLAP_WIN_S, FLAP_MAX, FLAP_BLOCK_S, FLAP_LOG_N = 8, 30, 2, 30, 20
+local flap = { n = 0, t0 = 0, stopT = 0, blockT = 0, logN = 0 }
+local function Caller()
+  if not debugstack then return "?" end
+  local ok, st = pcall(debugstack, 3, 3, 0)
+  if not ok or type(st) ~= "string" then return "?" end
+  st = st:gsub("Interface[/\\]AddOns[/\\]", ""):gsub("\n", " < ")
+  return st:sub(1, 200)
+end
+local function FlapLog(what)
+  if not ns.TestLog or flap.logN >= FLAP_LOG_N then return end
+  flap.logN = flap.logN + 1
+  ns.TestLog("NAVI", what .. " von: " .. Caller())
+end
+
 local function Stop(msg)
   local nv = ns.navi
+  if nv then flap.stopT = GetTime(); FlapLog("Ende") end
   ns.navi = nil
   if ns.db then ns.db.naviDest = nil end
   if nv and ns.serviceTarget == nv.st then ns.serviceTarget = nil end
@@ -685,7 +763,24 @@ local function Stop(msg)
 end
 ns.NaviStop = Stop
 
-local function Start(nv, quiet, hidden)
+local function Start(nv, quiet, hidden, user)
+  -- 1.3a (P84): Sperre gegen hin und her (siehe oben), vom Spieler gewaehlte Ziele (Karte, Seiten) gehen immer
+  local now = GetTime()
+  if not user and not ns.navi then
+    if now < flap.blockT then return false end
+    if now - flap.stopT < FLAP_GAP_S then
+      if now - flap.t0 > FLAP_WIN_S then flap.n, flap.t0 = 0, now end
+      flap.n = flap.n + 1
+      if flap.n >= FLAP_MAX then
+        flap.blockT = now + FLAP_BLOCK_S
+        flap.n = 0
+        if ns.TestLog then ns.TestLog("NAVI", ("Hin und her: neues Navi %d s gesperrt, Pfeil bleibt auf der Route (Ziel %s)"):format(FLAP_BLOCK_S, tostring(nv.dest and nv.dest.name))) end
+        FlapLog("Gesperrt")
+        return false
+      end
+    end
+  end
+  FlapLog("Start")
   -- 20.3z3 (K 18:08 N2, Ad Z5): ein Navi von einer Seite (Berufe, Farm, Gold, Tour Anweg) bleibt auch nach einem Neuplanen
   -- (Flugpunkte, neuer Weg ab hier, Einblenden) eines: der neue Plan erbt das Zeichen vom alten mit gleichem Ziel
   local old = ns.navi
@@ -809,7 +904,7 @@ end
 function ns.NaviTo(map, x, y, name)
   local nv, err = ns.NaviPlan(map, x, y, name)
   if not nv then ns.Print(TR"Navi: " .. (err or "?")); return end
-  Start(nv)
+  Start(nv, nil, nil, true)
 end
 
 -- 20.3h (Na, test_203g Punkt 6/8/13): Pfeil zu einem Ziel von einer Seite (Questgeber, Dungeon Eingang, Farmgebiet, Buch).
@@ -821,7 +916,7 @@ function ns.ZielNavi(map, x, y, name, kind)
     local ok, nv = pcall(ns.NaviPlan, map, x, y, name)
     if ok and nv then
       nv.zielSeite = true -- 20.3y (K 17:22 P6): Karten Knopf blendet es nur aus (kommt per Klick wieder), beendet es nicht
-      Start(nv)
+      Start(nv, nil, nil, true)
       if ns.TestLog then ns.TestLog("NAVI", ("Ziel von Seite (%s): %s"):format(tostring(kind), tostring(name))) end
       return true
     end
@@ -870,6 +965,121 @@ ns.API.Navi = {
   end,
 }
 if _G.KeineZeitLevelingGuide_API == nil then _G.KeineZeitLevelingGuide_API = ns.API end
+
+-- 1.3p (P98, S 15:44 "Navi soll den Weg nachfuehren"): Grenzen fuer das Nachfuehren, keine Orte fest
+-- 1.3v (P105 Punkt 4): verpasst = Abfahrt war hoechstens WIN_S weg und springt um mehr als JUMP_S nach oben
+-- 1.3zh (Pr 08:30 schiff_lang: 6 von 14 verpasst nicht erkannt): nicht mehr nur Sprung zwischen zwei nahen Proben, sondern
+-- ueber die Uhr: die letzte Probe (hoechstens WIN_S vor der Abfahrt) sagte eine Abfahrt voraus, die jetzt (LATE_S Toleranz)
+-- vorbei ist, und jetzt wartet man wieder mehr als JUMP_S. So zaehlt es auch, wenn Proben fehlen (zb am Steg kurz als an
+-- Bord erkannt)
+local MISS = { WIN_S = 120, JUMP_S = 60, LATE_S = 2, BOARD_WAIT_S = 60, AWAY_YD = 700, BOAT_MOVE_YD = 150,
+  -- 1.3zt (Pr 21:48 verpasst_zeilen, 7 Faelle "doch an Bord" ohne einzusteigen): Weg und Schiff Erkennung zaehlen nur, wenn du bei
+  -- der Abfahrt am Steg oder Turm warst (DOCK_YD), und die Schiff Erkennung muss BOAT_HOLD_S am Stueck gelten (ein Positions
+  -- Sprung oder kurzes schnelles Reiten reicht nicht). Ladebildschirm und Flug zaehlen immer
+  DOCK_YD = 80, BOAT_HOLD_S = 10 }
+-- 1.3zo (P117, S 15:24: Zeppelin "verpasst", obwohl S drauf war): "verpasst" erst nach MISS.BOARD_WAIT_S melden. Kommt in
+-- der Zeit ein Ladebildschirm, steht das Spiel auf Schiff/Zeppelin (WalkOnBoat) oder auf einem Flug, warst du drauf: dann
+-- nichts melden. Gilt fuer alle Zeppeline, Schiffe und die Tiefenbahn
+local missPend
+local missLoads = 0
+do
+  local lf = CreateFrame("Frame")
+  ns.RegEv(lf, "PLAYER_ENTERING_WORLD")
+  ns.RegEv(lf, "LOADING_SCREEN_ENABLED")
+  lf:SetScript("OnEvent", function() missLoads = missLoads + 1 end)
+end
+local function MissDefer(what, report)
+  if missPend then return end
+  -- 1.3zp (Pr 17:27 schiff_lang2: 2 verpasst nicht erkannt): an Bord heisst jetzt Ladebildschirm, Flug, weit weg von hier
+  -- (MISS.AWAY_YD in der Wartezeit, das schafft man zu Fuss oder beritten nicht) oder anderer Kontinent. "Auf dem Schiff"
+  -- (WalkOnBoat) zaehlt nur, wenn du dich dabei auch bewegt hast (MISS.BOAT_MOVE_YD), sonst stimmte es am Steg falsch
+  local p0 = Here()
+  local near = true
+  if p0 and ns.NearDock then near = ns.NearDock(p0.map, p0.x, p0.y, MISS.DOCK_YD) and true or false end
+  missPend = { t = GetTime(), loads = missLoads, what = what, report = report, p0 = p0, near = near }
+  if ns.TestLog then ns.TestLog("NAVI", ("Abfahrt vorbei: %s, warte %d s, ob du an Bord bist"):format(tostring(what), MISS.BOARD_WAIT_S)) end
+end
+local function MissPendTick()
+  local m = missPend
+  if not m then return end
+  local P1 = Here()
+  -- erst spaet am Steg angekommen (zb gleich nach der Abfahrt): ab dann zaehlt auch Weg und Schiff
+  if not m.near and P1 and ns.NearDock and ns.NearDock(P1.map, P1.x, P1.y, MISS.DOCK_YD) then m.near = true; m.p0 = P1 end
+  local moved = (m.p0 and P1) and ((P1.cont ~= m.p0.cont) and math.huge or D(P1, m.p0)) or 0
+  local now = GetTime()
+  local wob = ns.WalkOnBoat and ns.WalkOnBoat()
+  if wob then m.boatT = m.boatT or now else m.boatT = nil end
+  local loads = missLoads ~= m.loads
+  local taxi = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")
+  local away = m.near and moved > MISS.AWAY_YD
+  local boat = m.near and m.boatT and now - m.boatT >= MISS.BOAT_HOLD_S and moved > MISS.BOAT_MOVE_YD
+  if loads or taxi or away or boat then
+    missPend = nil
+    if ns.TestLog then ns.TestLog("NAVI", ("doch an Bord, nicht verpasst: %s (%s)"):format(tostring(m.what),
+      loads and "Ladebildschirm" or taxi and "Flug" or away and ("%d yd weg"):format(math.floor(moved)) or "auf dem Schiff")) end
+    return
+  end
+  if GetTime() - m.t < MISS.BOARD_WAIT_S then return end
+  missPend = nil
+  pcall(m.report)
+end
+local function MissHit(st, w, key)
+  local now = GetTime()
+  local hit = false
+  -- andere Fahrt (anderer Abschnitt oder Schritt): neu anfangen, sonst zaehlt die alte Probe
+  if st.key ~= key then st.key, st.w0, st.at = key, nil, nil end
+  if w and st.w0 and st.at and st.w0 <= MISS.WIN_S and now - st.at >= st.w0 - MISS.LATE_S and w > MISS.JUMP_S and w > st.w0 then hit = true end
+  st.w0, st.at = w, now
+  return hit
+end
+local NV = {
+  OFF_YD = 150,        -- so weit neben der Strecke zum naechsten Wegpunkt gilt als vom Weg abgekommen
+  OFF_S = 10,          -- so lange muss man daneben sein
+  CHECK_S = 120,       -- so oft leise pruefen, ob es einen klar besseren Weg gibt
+  CHECK_CITY_S = 8,    -- 1.3zo (P118, S 15:32): in Hauptstaedten so oft (verwinkelt, ein Ausgang aendert viel)
+  CHECK_SLOW_MS = 40,  -- dauert die Pruefung laenger (Rechner langsam), naechste Pruefung erst nach doppelter Zeit
+  BETTER_S = 60,       -- neuer Weg muss mindestens so viel schneller sein
+  BETTER_PCT = 0.15,   -- und mindestens so viel Anteil der Restzeit
+  REPLAN_GAP_S = 30,   -- hoechstens so oft neu rechnen
+}
+ns.NAVI_NV = NV
+local function InFight() return (InCombatLockdown and InCombatLockdown()) or (UnitAffectingCombat and UnitAffectingCombat("player")) end
+-- Restzeit vom jetzigen Navi: laufender Abschnitt grob (Luftlinie mal Umweg), dann die geplanten Zeiten der naechsten
+local function RestSec(nv, P)
+  local lg = nv.legs[nv.cur]
+  if not lg then return 0 end
+  local speed = (ns.PlanSpeed and ns.PlanSpeed()) or 7
+  local TV = ns.TRAVEL or { PATH = 1.2 }
+  local left = lg.sec or 0
+  if (lg.kind == "walk") and P and lg.to and P.cont == lg.to.cont then left = D(P, lg.to) * (TV.PATH or 1.2) / math.max(1, speed) end
+  for k = nv.cur + 1, #nv.legs do left = left + (nv.legs[k].sec or 0) end
+  return left
+end
+-- neu rechnen mit Grund im Log (NAVI), nur wenn wirklich anders oder besser
+local function ReplanWhy(nv, why, onlyBetter, rest)
+  if GetTime() - lastPlan < NV.REPLAN_GAP_S then return false end
+  if not onlyBetter then lastPlan = GetTime() end
+  local t0 = debugprofilestop and debugprofilestop() or 0
+  local nn = ns.NaviPlan(nv.dest.map, nv.dest.x, nv.dest.y, nv.dest.name)
+  local ms = debugprofilestop and (debugprofilestop() - t0) or 0
+  if ms > NV.CHECK_SLOW_MS then nv.checkGap = NV.CHECK_S * 2 else nv.checkGap = nil end
+  if not nn then
+    if ns.TestLog then ns.TestLog("NAVI", ("neu rechnen (%s): kein Weg gefunden, alter Weg bleibt"):format(why)) end
+    return false
+  end
+  if onlyBetter then
+    local gain = (rest or 0) - (nn.total or 0)
+    if gain < math.max(NV.BETTER_S, (rest or 0) * NV.BETTER_PCT) then return false end
+    lastPlan = GetTime()
+    why = ("%s, %d s schneller (%d statt %d s)"):format(why, math.floor(gain), math.floor(nn.total or 0), math.floor(rest or 0))
+    ns.Print((TR"Navi: schnellerer Weg gefunden, ca %s"):format(ns.Clock and ns.Clock(nn.total) or math.floor(nn.total) .. "s"))
+  else
+    ns.Print(TR"Navi: neuer Weg ab hier")
+  end
+  if ns.TestLog then ns.TestLog("NAVI", ("neu berechnet ab hier, Grund: %s (%d ms)"):format(why, math.floor(ms))) end
+  Start(nn, true)
+  return true
+end
 
 local function Replan()
   local nv = ns.navi
@@ -1014,6 +1224,55 @@ local function Tick()
   end
   -- ganz woanders gelandet (anderer Kontinent als dieser Abschnitt): neu rechnen
   if not onTaxi and not onBoat and P.cont ~= lg.at.cont and P.cont ~= lg.to.cont then Replan(); return end
+  -- 1.3v (P105 Punkt 4, S 03:05): Schiff oder Zeppelin verpasst (Abfahrt springt von fast 0 auf fast einen ganzen Umlauf,
+  -- du bist nicht drauf): sofort melden und neu rechnen, dann nimmt das Navi die naechste Abfahrt oder einen anderen Weg
+  -- (Flug, Ruhestein, anderer Hafen), was schneller ist. Fuer alle Verbindungen aus Travel.lua
+  MissPendTick()
+  if lg.kind == "ride" and lg.exact and not onBoat and not onTaxi then
+    local w = LiveDepart(lg.l, lg.side, lg.depart)
+    nv.rideMiss = nv.rideMiss or {}
+    if MissHit(nv.rideMiss, w, lg) then
+      local nv0, text0 = nv, lg.text
+      MissDefer(text0, function()
+        local w2 = LiveDepart(lg.l, lg.side, lg.depart) or w
+        local C = ns.Clock or function(x) return tostring(math.floor(x)) .. "s" end
+        ns.Print((TR"Verpasst, nächste Abfahrt in %s. Prüfe andere Wege ..."):format(C(w2)))
+        if ns.TestLog then ns.TestLog("NAVI", ("verpasst: %s, nächste Abfahrt in %d s"):format(tostring(text0), math.floor(w2))) end
+        lastPlan = 0
+        if ns.navi == nv0 then ReplanWhy(nv0, "Schiff oder Zeppelin verpasst") end
+      end)
+    end
+  end
+  -- 1.3p (P98): Weg nachfuehren. Nicht im Kampf, nicht im Flug, nicht auf Schiff oder Zeppelin
+  if not onTaxi and not onBoat and not InFight() and not (ns.UwHold and ns.UwHold("navi_weg")) then
+    local now = GetTime()
+    nv.p0 = nv.p0 or P
+    -- 1. deutlich vom Weg abgekommen (Abstand zur Strecke vom letzten zum naechsten Wegpunkt, ein paar Sekunden lang)
+    if lg.kind == "walk" and lg.to and P.cont == lg.to.cont then
+      local a = (nv.cur > 1 and nv.legs[nv.cur - 1].to) or nv.p0
+      local off = SegD(P, a, lg.to)
+      if off ~= math.huge and off > NV.OFF_YD then
+        nv.offSince = nv.offSince or now
+        if now - nv.offSince >= NV.OFF_S then
+          nv.offSince = nil
+          if ReplanWhy(nv, ("vom Weg abgekommen, %d yd neben der Strecke"):format(math.floor(off))) then return end
+        end
+      else
+        nv.offSince = nil
+      end
+    end
+    -- 2. ab und zu leise pruefen, ob es jetzt einen klar besseren Weg gibt (neuer Flugpunkt, Schiff faehrt bald, Ruhestein bereit)
+    nv.checkAt = nv.checkAt or now
+    local KC = ns.Karte
+    local inCity = KC and KC.InCity and P and P.map and P.x and KC.InCity(P.map, P.x, P.y)
+    if now - nv.checkAt >= (nv.checkGap or (inCity and NV.CHECK_CITY_S) or NV.CHECK_S) then
+      nv.checkAt = now
+      local K = ns.Karte
+      if not (K and K.Busy and K.Busy()) then
+        if ReplanWhy(nv, "Pruefung besserer Weg", true, RestSec(nv, P)) then return end
+      end
+    end
+  end
   -- Abfahrt im Text mitzaehlen
   if lg.kind == "ride" and lg.exact then
     nv.st.name = LegText(nv, nv.cur)
@@ -1154,6 +1413,179 @@ function ns.NaviHearthWanted()
   return nil
 end
 
+------------------------------------------------------------
+-- 1.3s (P100, S 18:22 und 18:25): Abfahrt von Zeppelin oder Schiff vorausschauend zeigen. Nur wenn hoechstens
+-- DP.MAX_QUEST Quest Schritte davor liegen (S will sehen, ob er vorher noch zur Bank oder zum Haendler kann).
+-- Zeile "danach Zeppelin nach X, fährt in m:ss, du brauchst ca m:ss, Puffer m:ss". Alle Verbindungen aus den Daten
+-- (Travel.lua LINKS). Ergebnis kurz gemerkt (DP.CACHE_S), damit das Mini Fenster nicht jede Sekunde sucht
+------------------------------------------------------------
+local DP = { MAX_QUEST = 1, LOOK_STEPS = 8, CACHE_S = 2, RAW_LOG_S = 30 }
+local dpCache = { at = -99, txt = nil }
+local dpLogKey
+function LiveDepart(l, side, fallbackAt)
+  local w = ns.TravelDeparts and l and ns.TravelDeparts(l.id, side, l.idx)
+  if w then return w end
+  if fallbackAt then return fallbackAt - GetTime() end
+end
+local function DpText(name, leave, need)
+  local C = ns.Clock or function(s) return tostring(math.floor(s)) .. "s" end
+  local buf = leave - need
+  if buf >= 0 then
+    return (TR"danach %s, fährt in %s, du brauchst ca %s, Puffer %s"):format(name, C(leave), C(need), C(buf))
+  end
+  return (TR"danach %s, fährt in %s, du brauchst ca %s, reicht knapp nicht (nächster nehmen)"):format(name, C(leave), C(need))
+end
+local function DpNavi(nv, P)
+  local lg = nv.legs[nv.cur]
+  if not lg or lg.kind == "ride" then return nil end
+  local need = RestSec(nv, P)
+  -- RestSec zaehlt alle Abschnitte bis zum Ziel, hier nur bis zum Steg
+  for k = #nv.legs, nv.cur + 1, -1 do
+    local l2 = nv.legs[k]
+    need = need - (l2.sec or 0)
+    if l2.kind == "ride" then
+      -- erster Steg nach dem jetzigen Abschnitt? sonst weiter zurueck
+      local first = true
+      for j = nv.cur + 1, k - 1 do if nv.legs[j].kind == "ride" then first = false end end
+      if first then
+        local leave = l2.exact and LiveDepart(l2.l, l2.side, l2.depart)
+        if not leave or leave <= 0 then return nil end
+        local name = (l2.text or ""):gsub("^%s+", "")
+        return DpText(name, leave, math.max(0, need)), "navi " .. tostring(k)
+      end
+    end
+  end
+  return nil
+end
+local function DpRoute(P)
+  local db = ns.db
+  local o = db and db.optMode and db.opt
+  local idx = o and (o.idx or 1)
+  local cur = o and o.steps and o.steps[idx]
+  if not cur then return nil end
+  local function IsQuest(s) for _, a in ipairs(s.acts or {}) do if a.k == "A" or a.k == "O" or a.k == "T" then return true end end return false end
+  local function Ride(s) for _, a in ipairs(s.acts or {}) do if a.k == "R" then return a end end end
+  if cur.travel or Ride(cur) then return nil end -- der Reise Schritt zeigt seine Abfahrt selbst
+  local nq = IsQuest(cur) and 1 or 0
+  for k = idx + 1, math.min(#o.steps, idx + DP.LOOK_STEPS) do
+    local s = o.steps[k]
+    local a = Ride(s)
+    if a and not a.link then return nil end
+    if a then
+      if nq > DP.MAX_QUEST then return nil end
+      local leave = ns.TravelDeparts and ns.TravelDeparts(a.link, a.side, a.li)
+      if not leave or leave <= 0 then return nil end
+      local speed = (ns.PlanSpeed and ns.PlanSpeed()) or 7
+      local TV = ns.TRAVEL or { PATH = 1.2 }
+      local toCur = 0
+      if P and cur.map and ns.MapWorld then
+        local c, wx, wy = ns.MapWorld(cur.map, cur.x, cur.y)
+        if c and c == P.cont then toCur = math.sqrt((wx - P.wx) ^ 2 + (wy - P.wy) ^ 2) * (TV.PATH or 1.2) / math.max(1, speed) end
+      end
+      local need = math.max(0, (s.t or 0) - (cur.t or 0)) + toCur
+      local name = ("%s %s"):format(tostring(a.kind or TR"Reise"), (TR"nach %s"):format(tostring(a.dest or a.quest or "?")))
+      return DpText(name, leave, need), "route " .. tostring(k)
+    end
+    if IsQuest(s) then nq = nq + 1; if nq > DP.MAX_QUEST then return nil end end
+  end
+  return nil
+end
+function ns.DepartPreview()
+  local now = GetTime()
+  MissPendTick() -- 1.3zo (P117)
+  if now - dpCache.at < DP.CACHE_S then return dpCache.txt end
+  dpCache.at = now
+  local P = Here()
+  local nv = ns.navi
+  local ok, txt, key
+  -- 1.3v (P102 Punkt 2, S Log 01:56: Vorschau "Zeppelin nach Unterstadt" waehrend der Schritt selbst "Zeppelin nach
+  -- Orgrimmar" war): ist der jetzige Route Schritt schon die Reise, keine Vorschau, auch nicht aus dem Navi dahin
+  local db = ns.db
+  local o = db and db.optMode and db.opt
+  local cur = o and o.steps and o.steps[o.idx or 1]
+  local curRide = cur and cur.travel
+  if not curRide and cur then for _, a in ipairs(cur.acts or {}) do if a.k == "R" then curRide = true end end end
+  if curRide then
+    dpCache.txt = nil; dpLogKey = nil
+    -- 1.3v (P105 Punkt 4): Route Reise Schritt ohne Navi und verpasst: melden, dann Navi ans Ziel der Fahrt, das den
+    -- schnellsten Weg ab jetzt nimmt (naechste Abfahrt, Flug, Ruhestein, anderer Hafen)
+    -- 1.3zg (Pr 08:15: Zeppelin Grom'gol verpasst, nicht erkannt): auch wenn ein Navi laeuft (zb nach einem frueheren
+    -- verpasst), nur nicht, wenn dessen jetziger Abschnitt selbst die Fahrt ist (dann meldet das Navi)
+    local navRide = nv and nv.legs and nv.legs[nv.cur or 1] and nv.legs[nv.cur or 1].kind == "ride"
+    if not navRide and not (ns.WalkOnBoat and ns.WalkOnBoat()) then
+      for _, a in ipairs(cur.acts or {}) do
+        if a.k == "R" and a.link and a.link ~= "fly" and ns.TravelDeparts then
+          local w = ns.TravelDeparts(a.link, a.side, a.li)
+          dpCache.rideMiss = dpCache.rideMiss or {}
+          if MissHit(dpCache.rideMiss, w, tostring(a.link) .. ":" .. tostring(a.side) .. ":" .. tostring(o.idx or 1) .. ":" .. tostring(o.created or 0)) then
+            local o0, idx0 = o, o.idx
+            MissDefer(tostring(a.kind) .. " nach " .. tostring(a.dest), function()
+              -- inzwischen weiter (Schritt fertig, Route neu): nichts mehr melden
+              if not (ns.db and ns.db.opt == o0 and o0.idx == idx0) then return end
+              local w2 = ns.TravelDeparts(a.link, a.side, a.li) or w
+              local C = ns.Clock or function(x) return tostring(math.floor(x)) .. "s" end
+              ns.Print((TR"Verpasst, nächste Abfahrt in %s. Prüfe andere Wege ..."):format(C(w2)))
+              if ns.TestLog then ns.TestLog("NAVI", ("verpasst (Route Schritt): %s nach %s, nächste Abfahrt in %d s"):format(tostring(a.kind), tostring(a.dest), math.floor(w2))) end
+              if a.toMap and a.toX and ns.ZielNavi then pcall(ns.ZielNavi, a.toMap, a.toX, a.toY, tostring(a.dest or "?"), "route") end
+            end)
+          end
+          break
+        end
+      end
+    end
+    -- 1.3v (P105 Punkt 3): auch beim Reise Schritt selbst alle DP.RAW_LOG_S die rohen Nauticus Werte ins Log
+    if ns.TestLog and now - (dpCache.rawAt or -999) >= DP.RAW_LOG_S then
+      for _, a in ipairs(cur.acts or {}) do
+        if a.k == "R" and a.link and a.link ~= "fly" and ns.TravelDeparts then
+          dpCache.rawAt = now
+          local w = ns.TravelDeparts(a.link, a.side, a.li)
+          local r = ns.lastNautRaw
+          ns.TestLog("NAVI", ("Abfahrt Schritt: %s nach %s, faehrt in %s | Nauticus roh: since %.1f, off %.1f, Umlauf %.1f, Alter %.1f s | Uhr %s"):format(
+            tostring(a.kind), tostring(a.dest), w and (ns.Clock and ns.Clock(w) or tostring(math.floor(w))) or "unbekannt",
+            r and r.since or -1, r and r.off or -1, r and r.rtt or -1, r and (now - (r.at or now)) or -1, date and date("%H:%M:%S") or "?"))
+          break
+        end
+      end
+    end
+    -- 1.3zo (P114, S 15:19 "zeigt mir den Zeppelinstep nicht an, da es auf Navi geschaltet hat"): laeuft ein Navi (das Mini
+    -- Fenster zeigt dann das Navi statt des Route Schritts), steht die Abfahrt trotzdem unter dem Ziel: zuerst die Vorschau
+    -- des Navi, sonst die Fahrt des Route Schritts
+    if nv and not nv.hidden and nv.legs and nv.legs[nv.cur] then
+      local ok2, t2 = pcall(DpNavi, nv, P)
+      if not (ok2 and t2) then
+        t2 = nil
+        for _, a in ipairs(cur.acts or {}) do
+          if a.k == "R" and a.link and a.link ~= "fly" and ns.TravelDeparts then
+            local w = ns.TravelDeparts(a.link, a.side, a.li)
+            if w then
+              t2 = (TR"%s nach %s fährt in %s"):format(tostring(a.kind or TR"Fahrt"), tostring(a.dest or "?"), ns.Clock and ns.Clock(w) or tostring(math.floor(w)))
+            end
+            break
+          end
+        end
+      end
+      dpCache.txt = t2
+      return t2
+    end
+    return nil
+  end
+  if nv and not nv.hidden and nv.legs and nv.legs[nv.cur] then ok, txt, key = pcall(DpNavi, nv, P)
+  else ok, txt, key = pcall(DpRoute, P) end
+  if not ok then txt, key = nil, nil end
+  dpCache.txt = txt
+  -- 1.3v (P105 Punkt 3): bei neuer Vorschau und dann alle DP.RAW_LOG_S die rohen Nauticus Werte mitschreiben
+  if key and ns.TestLog and (key ~= dpLogKey or now - (dpCache.rawAt or -999) >= DP.RAW_LOG_S) then
+    dpCache.rawAt = now
+    local r = ns.lastNautRaw
+    local raw = r and (" | Nauticus roh: Linie %s Seite %s Platz %s, since %.1f, off %.1f, Umlauf %.1f, warten %.1f s, andere Seite Platz %s off %s, Alter %.1f s%s"):format(
+      tostring(r.id), tostring(r.side), tostring(r.idx), r.since or -1, r.off or -1, r.rtt or -1, r.wait or -1, tostring(r.idxQ), r.offQ and ("%.1f"):format(r.offQ) or "?", now - (r.at or now),
+      r.sync and (", Sync vor %.0f s"):format(now - r.sync) or "") or " | Nauticus roh: keine"
+    ns.TestLog("NAVI", "Abfahrt Vorschau: " .. tostring(txt) .. raw .. (" | Uhr %s, Server %s"):format(date and date("%H:%M:%S") or "?", (GetServerTime and date and date("%H:%M:%S", GetServerTime())) or "?"))
+  end
+  dpLogKey = key
+  return txt
+end
+
 function ns.NaviHudInfo()
   local nv = ns.navi
   if not (nv and not nv.hidden and nv.legs and nv.legs[nv.cur]) then return nil end
@@ -1207,7 +1639,10 @@ function ns.NaviHudInfo()
     if lg.kind == "walk" then left = wd / speed
     elseif lg.kind == "ride" then
       left = wd / speed
-      if lg.exact and lg.depart then i.objs = { (TR"Abfahrt in %s"):format(ns.Clock(math.max(0, lg.depart - GetTime()))) } end
+      if lg.exact and lg.depart then
+        local left = (LiveDepart and LiveDepart(lg.l, lg.side, lg.depart)) or (lg.depart - GetTime())
+        i.objs = { (TR"Abfahrt in %s"):format(ns.Clock(math.max(0, left))) }
+      end
     end
   end
   if lg.kind == "fly" or lg.kind == "hearth" or lg.kind == "portal" then
@@ -1366,7 +1801,7 @@ local function AutoRoute()
 end
 
 local hf = CreateFrame("Frame")
-hf:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(hf, "PLAYER_LOGIN")
 hf:SetScript("OnEvent", function()
   ns.Ticker(1, function() pcall(Tick) end, true)
   ns.Ticker(AUTO_EVERY_S, function() local ok, err = pcall(AutoRoute); if not ok and ns.TestLog then ns.TestLog("NAVI", "Route Navi Fehler: " .. tostring(err)) end end)

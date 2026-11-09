@@ -1,4 +1,4 @@
-## Interface: 16000, 16001, 16002, 16100
+## Interface: 16001
 ## Title: Keine Zeit Leveling Guide: Farming
 ## Notes: Zusatz zum Keine Zeit Leveling Guide: Berufe (Kraeuter, Erz, Leder, Stoff, Fleisch, Fische) und Gold farmen. Ohne dieses Addon blendet der Guide alles zum Farmen aus.
 ## Author: jonnydiepalme

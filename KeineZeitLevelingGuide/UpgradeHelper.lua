@@ -262,7 +262,7 @@ local function Stale()
 end
 do
   local ef = CreateFrame("Frame")
-  ef:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+  ns.RegEv(ef, "PLAYER_EQUIPMENT_CHANGED")
   ef:SetScript("OnEvent", function() equipAt = GetTime() end)
 end
 
@@ -278,8 +278,8 @@ function ns.ToggleUpgradeStrip()
 end
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("PLAYER_LOGIN")
-ev:RegisterEvent("PLAYER_LEVEL_UP")
+ns.RegEv(ev, "PLAYER_LOGIN")
+ns.RegEv(ev, "PLAYER_LEVEL_UP")
 ev:SetScript("OnEvent", function(_, e)
   if e == "PLAYER_LEVEL_UP" then
     C_Timer.After(1, function() if ns.UpgradeStripRefresh then ns.UpgradeStripRefresh() end end)

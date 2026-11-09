@@ -14,7 +14,7 @@ ns.UNLOCK_STEPS = {
   { lvl = 10, items = { "gear", "berufe" } },
   { lvl = 12, items = { "books" } },
   { lvl = 13, items = { "plan", "questlog" } },
-  { lvl = 14, items = { "hearth" } },
+  { lvl = 14, items = { "hearth", "sleepbag" } },
   { lvl = 15, items = { "dungeons", "split" } },
   { lvl = 17, items = { "sleep", "budget" } },
   { lvl = 20, items = { "pvp" } },
@@ -44,6 +44,11 @@ local U = {
   questlog = { name = TR"Questlog Route", text = TR"Plant nur die Quests, die schon in deinem Log sind. Gut wenn du wenig Zeit hast oder das Log aufräumen willst.",
     how = { TR"Im grossen Fenster unter Meine Route, Reiter Planen." }, try = function() if ns.TourQuestLog then ns.TourQuestLog() end end, page = "plan" },
   -- Ruhestein gehoert immer zur Planung (keine Stufe dafuer), hier nur das Gasthaus
+  -- 1.3c (P85): Special Schlafsack (nur Forever), Knopf startet die eigene Route
+  sleepbag = { name = TR"Special: Schlafsack", forever = true, page = "gear",
+    text = TR"Eine Quest Reihe über zwei Kontinente bringt einen Schlafsack: unterwegs ausruhen gibt Ruhebonus. Eigene Route, nicht in der Leveling Route.",
+    how = { TR"Im grossen Fenster unter Ausrüstung auf Schlafsack holen klicken.", TR"Rechtsklick dort: zum Händler, der ihn verkauft." },
+    try = function() if ns.SpecialRoute then ns.SpecialRoute("schlafsack") end end },
   hearth = { name = TR"Gasthaus", text = TR"Die Route sagt dir, in welchem Gasthaus du dich binden sollst. Dort ausloggen gibt Ruhebonus." },
   plan = { name = TR"Planen", page = "plan", text = TR"In Meine Route kommt der Reiter Planen dazu: Questlog Route, später Stunden Budget, Flugpunkte und Entdecken Tour.",
     how = { TR"Im grossen Fenster unter Meine Route, Reiter Planen." } },
@@ -249,8 +254,8 @@ local tempoCache, tempoDirty = nil, true
 function ns.TempoDirty() tempoDirty = true end
 do
   local tf = CreateFrame("Frame")
-  tf:RegisterEvent("PLAYER_LEVEL_UP")
-  tf:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+  ns.RegEv(tf, "PLAYER_LEVEL_UP")
+  ns.RegEv(tf, "ZONE_CHANGED_NEW_AREA")
   tf:SetScript("OnEvent", function() tempoDirty = true end)
 end
 -- Modell Zeit fuer ein Band (Teil frac davon) mit deinen Werten
@@ -589,7 +594,7 @@ local function ShowUnlock(key, lvl)
 end
 do
   local ce = CreateFrame("Frame")
-  ce:RegisterEvent("PLAYER_REGEN_ENABLED")
+  ns.RegEv(ce, "PLAYER_REGEN_ENABLED")
   ce:SetScript("OnEvent", function()
     if not queued then return end
     local q = queued
@@ -679,8 +684,8 @@ function ns.TakePendingUnlock()
 end
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("PLAYER_LOGIN")
-ev:RegisterEvent("PLAYER_LEVEL_UP")
+ns.RegEv(ev, "PLAYER_LOGIN")
+ns.RegEv(ev, "PLAYER_LEVEL_UP")
 ev:SetScript("OnEvent", function(_, event, lvl)
   if event == "PLAYER_LOGIN" then
     C_Timer.After(1, function()

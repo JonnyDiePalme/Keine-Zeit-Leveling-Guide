@@ -468,11 +468,24 @@ local function WegFern(m, px, py, tx, ty, name)
   return nil
 end
 
+-- 1.3.1a (P119): Ziel ohne Weg Umrechnung (fuer das Vorrechnen ab dem Landepunkt)
+ns.ArrowTargetRaw = function() return ResolveRaw(ns.db) end
 local function ResolveTarget(db)
   local m, px, py, tx, ty, name, tpt = ResolveRaw(db)
   if not tx or type(px) ~= "number" then return m, px, py, tx, ty, name, tpt end
   -- 1.2j (P66, Ka 17:06): auf Zeppelin, Schiff oder Flug kein WEG_FERN und kein Umweg ums Gelaende (Position in der Luft / auf See)
   if ns.OnRide and ns.OnRide() then return m, px, py, tx, ty, name, tpt end
+  -- 1.3zf (K 07:16 und 07:48, Ka Stand 170): Ziel ohne Weg mit Ersatz Punkt von Ka: der Pfeil fuehrt dorthin (bei Wasser
+  -- ans Ufer, nie ins tiefe Wasser)
+  do
+    local K = ns.Karte
+    local ex, ey, _, gr = nil, nil, nil, nil
+    if K and K.Ersatz then ex, ey, _, gr = K.Ersatz(m, (tpt and tonumber(tpt[1])) or tx, (tpt and tonumber(tpt[2])) or ty) end
+    if ex and ex >= 0 and ey then
+      tx, ty, tpt = ex, ey, nil
+      name = (name or "") .. (gr == "w" and TR"\n|cff9d9d9dZiel im Wasser, zum Ufer|r" or TR"\n|cff9d9d9dZiel abseits, zum nächsten erreichbaren Punkt|r")
+    end
+  end
   local fx, fy = WegFern(m, px, py, (tpt and tonumber(tpt[1])) or tx, (tpt and tonumber(tpt[2])) or ty, name)
   -- schon ueber den Weg gerechnet (Route, Navi Lauf Abschnitt, Uebergang): nichts mehr tun
   if resolveSrc == "opt" or resolveFinal then return m, px, py, tx, ty, name, tpt end
@@ -943,9 +956,12 @@ function ns.ToggleArrow()
   if not arrow then return end
   ns.db.arrow = not arrow:IsShown()
   -- in der Pause bleibt er weg (kommt mit Weitermachen wieder)
-  if ns.db.arrow and ns.db.paused then ns.Print(TR"Pause ist an: mit Weitermachen kommt der Pfeil wieder.") end
+  if ns.db.arrow and ns.db.paused and not ns.db.autoPaused then ns.Print(TR"Pause ist an: mit Weitermachen kommt der Pfeil wieder.") end
   if ns.db.arrow and not ns.db.paused then arrow:Show() else arrow:Hide() end
   if ns.RefreshItemBar then ns.RefreshItemBar() end
+  -- 1.3k (P93): Pfeil und Mini Fenster beide aus = Pause, eins wieder an = weiter
+  if ns.AutoPauseCheck then ns.AutoPauseCheck() end
+  if ns.db.arrow and not ns.db.paused then arrow:Show() end
 end
 
 ------------------------------------------------------------
@@ -1118,7 +1134,7 @@ end
 -- weiter dorthin ("Pfeil zeigt zu: Je'neu Sancrea"), obwohl das Mini Fenster die neue Route zeigte. Jetzt: wird eine Route
 -- geladen (ns.OptLoad, alle Seiten laufen darueber), faellt das alte Pfeil Ziel weg.
 local optHook = CreateFrame("Frame")
-optHook:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(optHook, "PLAYER_LOGIN")
 optHook:SetScript("OnEvent", function(self)
   self:UnregisterAllEvents()
   if not (hooksecurefunc and ns.OptLoad) then return end
@@ -1286,6 +1302,7 @@ do
     if not Enabled() then return end
     if ns.navi and not ns.navi.hidden then return end   -- Navi fuehrt gerade, nicht die Route
     if UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") then return end
+    if ns.UwHold and ns.UwHold("live") then return end   -- 1.3.1a (P119): Schiff, Zeppelin, Tiefenbahn, Laden auch
     if (ns.InInstance and ns.InInstance()) or (ns.InTram and ns.InTram()) then return end
     if UnitIsDeadOrGhost and ns.Api.U(UnitIsDeadOrGhost, "player") then return end
     if UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player") then return end   -- im Kampf nicht rechnen
@@ -1348,10 +1365,10 @@ do
   end
 
   local f = CreateFrame("Frame")
-  f:RegisterEvent("PLAYER_DEAD")
-  f:RegisterEvent("PLAYER_UNGHOST")
-  f:RegisterEvent("PLAYER_ALIVE")
-  f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+  ns.RegEv(f, "PLAYER_DEAD")
+  ns.RegEv(f, "PLAYER_UNGHOST")
+  ns.RegEv(f, "PLAYER_ALIVE")
+  ns.RegEv(f, "ZONE_CHANGED_NEW_AREA")
   f:SetScript("OnEvent", function(_, ev)
     if ev == "PLAYER_DEAD" then L.dead = true
     elseif ev == "PLAYER_UNGHOST" or ev == "PLAYER_ALIVE" then
@@ -1366,7 +1383,10 @@ do
     if L.acc < 1 then return end
     L.acc = 0
     local now = GetTime()
-    if L.pending and now >= L.pending[2] and not (UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player")) then
+    -- 1.3.1a (P119, Log 15:14:29 "Ausloeser zone" mitten im Flug): unterwegs bleibt der Ausloeser liegen bis nach der Ankunft
+    if L.pending and now >= L.pending[2] and not (UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player"))
+      and not (ns.UwHold and ns.UwHold("live_" .. tostring(L.pending[1])))
+      and not (UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")) then   -- 1.3zzc (Pr FLUG_PAUSE_ROT): auch direkt am Taxi pruefen
       local r = L.pending[1]; L.pending = nil
       if Enabled() and not (ns.navi and not ns.navi.hidden) then pcall(Fire, r) end
     end
@@ -1380,7 +1400,7 @@ do
 
   -- Mini Fenster: Gelegenheit als niedrigster Hinweis (nach Taschen, Lehrer, Questlog ...). Klick nimmt sie, X sperrt sie 60 s.
   local pl = CreateFrame("Frame")
-  pl:RegisterEvent("PLAYER_LOGIN")
+  ns.RegEv(pl, "PLAYER_LOGIN")
   pl:SetScript("OnEvent", function(self)
     self:UnregisterAllEvents()
     if ns.HintList then

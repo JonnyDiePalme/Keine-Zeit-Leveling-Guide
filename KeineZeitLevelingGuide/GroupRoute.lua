@@ -139,9 +139,19 @@ ns.GroupFollowers = Followers
 
 -- fuer die Planung: Klassen, Lehrer Stand, Bindepunkte und Ruhestein der Mitlaeufer
 function ns.GroupPlanInfo()
-  if not (Leader() and ns.db and ns.db.groupSync ~= false) then return nil end
+  if not (ns.db and ns.db.groupSync ~= false) then return nil end
   local list = {}
   local now = GetTime()
+  -- 1.3zd (P111): Mitspieler ohne unser Addon, deren Questlog Questie meldet (qonly: nur Log, Level, Klasse, Volk; keine
+  -- erledigten Quests, kein Ruhestein, kein Lehrer Halt). Sie laufen nicht mit, darum auch ohne Leiter Rolle
+  local qonly = {}
+  for who, g in pairs((ns.QuestieGroup and ns.QuestieGroup()) or {}) do
+    qonly[#qonly + 1] = { name = who, lvl = g.lvl, cid = g.cid, rid = g.rid, hcd = 0, log = g.quests, qonly = true }
+  end
+  if not Leader() then
+    if #qonly == 0 then return nil end
+    return { members = qonly, addon = 0 }
+  end
   for _, who in ipairs(Followers()) do
     local m = ns.groupMirror[who]
     local g = ns.group and ns.group[who]
@@ -149,8 +159,10 @@ function ns.GroupPlanInfo()
       hcd = m.hcd and math.max(0, m.hcd - (now - (m.hcdAt or now))) or 0,
       rid = m.rid, cid = m.cid, done = m.done, log = g and g.quests or nil }
   end
+  local nA = #list
+  for _, m in ipairs(qonly) do list[#list + 1] = m end
   if #list == 0 then return nil end
-  return { members = list }
+  return { members = list, addon = nA }
 end
 
 local function SendWindow(opt, from, count)
@@ -286,6 +298,7 @@ local function CanTake(qid)
     local _, _, rid = UnitRace("player")
     local okC, rc = pcall(qdb.QueryQuestSingle, qid, "requiredClasses")
     local okR, rr = pcall(qdb.QueryQuestSingle, qid, "requiredRaces")
+    if ns.DKRaces then rr = ns.DKRaces(qid, okR and rr or nil); okR = true end -- 1.3p (P96): fraktion aus der Daten Korrektur
     if okC and rc and rc > 0 and cid and ns.HasBit and not ns.HasBit(rc, cid - 1) then return false end
     if okR and rr and rr > 0 and rid and ns.RaceOK and not ns.RaceOK(rr, rid) then return false end
   end
@@ -297,10 +310,10 @@ end
 local helpCache = setmetatable({}, { __mode = "k" })
 -- Questlog geaendert (angenommen, abgegeben): gleich neu pruefen
 local hcf = CreateFrame("Frame")
-hcf:RegisterEvent("QUEST_ACCEPTED")
-hcf:RegisterEvent("QUEST_TURNED_IN")
-hcf:RegisterEvent("QUEST_REMOVED")
-hcf:RegisterEvent("PLAYER_LEVEL_UP")
+ns.RegEv(hcf, "QUEST_ACCEPTED")
+ns.RegEv(hcf, "QUEST_TURNED_IN")
+ns.RegEv(hcf, "QUEST_REMOVED")
+ns.RegEv(hcf, "PLAYER_LEVEL_UP")
 hcf:SetScript("OnEvent", function() for k in pairs(helpCache) do helpCache[k] = nil end end)
 function ns.MirrorHelp(a)
   if not (ns.mirrorActive and mir and a) then return nil end
@@ -471,7 +484,7 @@ SendDone = function()
   for k, ch in ipairs(chunks) do Send(("GD|%d|%d|%s"):format(k, #chunks, ch)) end
 end
 local tf = CreateFrame("Frame")
-tf:RegisterEvent("QUEST_TURNED_IN")
+ns.RegEv(tf, "QUEST_TURNED_IN")
 tf:SetScript("OnEvent", function(_, _, qid)
   if IsInGroup and IsInGroup() and not Leader() and tonumber(qid) then Send("GT|" .. tonumber(qid)) end
 end)
@@ -588,7 +601,7 @@ end
 
 -- eigener Abstecher fertig, sobald die Quest abgegeben ist
 local qf = CreateFrame("Frame")
-qf:RegisterEvent("QUEST_TURNED_IN")
+ns.RegEv(qf, "QUEST_TURNED_IN")
 qf:SetScript("OnEvent", function(_, _, qid)
   if myAbst and tonumber(qid) == myAbst.qid then C_Timer.After(1, EndAbstecher) end
 end)
@@ -607,7 +620,7 @@ local function EntranceHint()
   local px, py = pos:GetXY()
   local de = ns.WorldDist({ map, px, py }, { d.entrance[1], d.entrance[2], d.entrance[3] })
   if not de or de > 80 then return nil end
-  for who, g in pairs(ns.group or {}) do
+  for who, g in pairs((ns.GroupAll and ns.GroupAll()) or ns.group or {}) do
     for _, qid in ipairs(d.quests or {}) do
       local mine = ns.logProgress and ns.logProgress[qid]
       local st = dqStatus[d.key or d.name] and dqStatus[d.key or d.name][who] and dqStatus[d.key or d.name][who][qid]
@@ -885,8 +898,8 @@ function ns.AskDungeonStatus(key) dqStatus[key] = {}; Send("DQ|" .. key) end
 
 -- Gruppe verlassen oder Leiter weg: wieder eigene Route
 local gf = CreateFrame("Frame")
-gf:RegisterEvent("GROUP_ROSTER_UPDATE")
-gf:RegisterEvent("PARTY_LEADER_CHANGED")
+ns.RegEv(gf, "GROUP_ROSTER_UPDATE")
+ns.RegEv(gf, "PARTY_LEADER_CHANGED")
 -- wer ist in der Gruppe und wer leitet: nur bei echter Aenderung die Route neu schicken (im Raid feuert das staendig)
 local rosterKey, rosterWait
 local function RosterKey()
@@ -927,7 +940,7 @@ end)
 
 -- Nach dem Einloggen (Reload): Gruppen Route aus den gespeicherten Daten, gleich beim Leiter den Stand holen
 local lf = CreateFrame("Frame")
-lf:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(lf, "PLAYER_LOGIN")
 lf:SetScript("OnEvent", function()
   C_Timer.After(6, function()
     local o = ns.db and ns.db.opt
@@ -948,7 +961,7 @@ end)
 
 -- Stand an den Leiter, wenn sich etwas aendert (Level, Lehrer, Bindepunkt)
 local sf = CreateFrame("Frame")
-sf:RegisterEvent("PLAYER_LEVEL_UP")
-sf:RegisterEvent("TRAINER_CLOSED")
-sf:RegisterEvent("PLAYER_ENTERING_WORLD")
+ns.RegEv(sf, "PLAYER_LEVEL_UP")
+ns.RegEv(sf, "TRAINER_CLOSED")
+ns.RegEv(sf, "PLAYER_ENTERING_WORLD")
 sf:SetScript("OnEvent", function() C_Timer.After(2, function() SendState(false) end) end)

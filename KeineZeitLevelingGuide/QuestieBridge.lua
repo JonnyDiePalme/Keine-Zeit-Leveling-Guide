@@ -517,13 +517,13 @@ function ns.QuestieScan()
       i = i + 1
       n = n + 1
       local qid = ids[i]
-      if not complete[qid] and not inLog[qid] and not blocked[qid] then
+      if not complete[qid] and not inLog[qid] and not blocked[qid] and not (ns.OfferNo and ns.OfferNo(qid)) then
         local ok, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
         if ok and ql and rl and rl <= L and ql >= L - 4 and ql <= L + 3 then
           local okD, doable = true, true
           if not useAvail and not ns.questieEarly then okD, doable = pcall(QDB.IsDoable, qid) end
           -- Klassen und Rassen Quests immer selber nachpruefen
-          local rc, rr = Q(qid, "requiredClasses"), Q(qid, "requiredRaces")
+          local rc, rr = Q(qid, "requiredClasses"), ns.DKRaces(qid, Q(qid, "requiredRaces"))
           local _, _, classID = UnitClass("player")
           local _, _, raceID = UnitRace("player")
           if rc and rc > 0 and classID and not ns.HasBit(rc, classID - 1) then doable = false end
@@ -648,7 +648,7 @@ function ns.ScanGoldQuests(done)
         local ok, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
         if ok and ql and ql >= 55 and ql <= 60 and (not rl or rl <= 60) then
           local good = true
-          local rc, rr = Q(qid, "requiredClasses"), Q(qid, "requiredRaces")
+          local rc, rr = Q(qid, "requiredClasses"), ns.DKRaces(qid, Q(qid, "requiredRaces"))
           if rc and rc > 0 and classID and not ns.HasBit(rc, classID - 1) then good = false end
           if rr and rr > 0 and raceID and not ns.RaceOK(rr, raceID) then good = false end
           if good and ((QDB.IsRepeatable and QDB.IsRepeatable(qid)) or (QDB.IsDungeonQuest and QDB.IsDungeonQuest(qid))
@@ -725,15 +725,15 @@ local function Changed()
 end
 
 local f = CreateFrame("Frame")
-f:RegisterEvent("PLAYER_LOGIN")
-f:RegisterEvent("PLAYER_LEVEL_UP")
-f:RegisterEvent("QUEST_ACCEPTED")
-f:RegisterEvent("QUEST_TURNED_IN")
-f:RegisterEvent("QUEST_REMOVED")
-f:RegisterEvent("QUEST_LOG_UPDATE")
-f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
-f:RegisterEvent("GOSSIP_SHOW")
-f:RegisterEvent("QUEST_GREETING")
+ns.RegEv(f, "PLAYER_LOGIN")
+ns.RegEv(f, "PLAYER_LEVEL_UP")
+ns.RegEv(f, "QUEST_ACCEPTED")
+ns.RegEv(f, "QUEST_TURNED_IN")
+ns.RegEv(f, "QUEST_REMOVED")
+ns.RegEv(f, "QUEST_LOG_UPDATE")
+ns.RegEv(f, "ZONE_CHANGED_NEW_AREA")
+ns.RegEv(f, "GOSSIP_SHOW")
+ns.RegEv(f, "QUEST_GREETING")
 -- Quest angenommen: bestaetigen, wenn sie zum aktuellen Questgeber gehoert
 local function ConfirmAccepted(questID)
   local ag = ns.atGiver

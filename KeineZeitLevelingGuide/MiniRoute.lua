@@ -75,10 +75,12 @@ local function OptPoints(mapID)
     end
     if x then
       local hasA, hasT = false, false
-      for _, a in ipairs(st.acts) do if a.k == "A" then hasA = true elseif a.k == "T" then hasT = true end end
-      local k = st.acts[1].k
-      local pin = (hasA and hasT and "both") or (hasT and "turnin") or (hasA and "quest") or OPIN[k]
-      if k == "V" and st.acts[1].books then pin = "book" end
+      for _, a in ipairs(st.acts or {}) do if a.k == "A" then hasA = true elseif a.k == "T" then hasT = true end end
+      -- 1.3zg (Pr 08:15 Lua Fehler: Dungeon Eingang Schritt mit leerer acts Liste)
+      local a1 = st.acts and st.acts[1]
+      local k = a1 and a1.k or (st.dungeon and "O") or nil
+      local pin = (hasA and hasT and "both") or (hasT and "turnin") or (hasA and "quest") or (k and OPIN[k])
+      if k == "V" and a1 and a1.books then pin = "book" end
       table.insert(out, { x, y, kind = OKIND[k] or "via", target = (i == i0), giver = hasA or hasT, both = hasA and hasT, pin = pin })
     end
   end
@@ -451,9 +453,8 @@ local MAPBTN = {
     tip = TR"Offene Bücher als Symbol auf der Karte. Maus drauf zeigt mehr, Klick setzt den Pfeil.",
     on = function() return ns.db.mapBooks ~= false end, lock = "books",
     click = function() ns.db.mapBooks = (ns.db.mapBooks == false); if ns.DrawBookPins then ns.DrawBookPins() end end },
-  { key = "omap", icon = "Interface\\Icons\\INV_Misc_Map02", name = TR"OpenMap Karte",
-    tip = TR"Zwischen OpenMap und der normalen Karte wechseln (braucht ein Neuladen).", on = function() return ns.OpenMapActive and ns.OpenMapActive() end,
-    only = function() return AddonExists("OpenMap") end, click = function() ns.SwitchMap() end },
+  -- 1.3x (P107, S 03:30): Knopf "OpenMap Karte" an der grossen Karte raus. Umschalten geht weiter in den Einstellungen
+  -- ("OpenMap als Karte nutzen?", nur wenn OpenMap installiert ist)
 }
 
 local function MarkOn(b, on)

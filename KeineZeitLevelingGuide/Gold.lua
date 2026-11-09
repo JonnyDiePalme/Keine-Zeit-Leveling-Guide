@@ -289,7 +289,7 @@ end
 
 -- Auf 60 gibt es statt XP Gold: einmal fragen, ob alle offenen Quests fuer Gold gemacht werden sollen
 local gf = CreateFrame("Frame")
-gf:RegisterEvent("PLAYER_LEVEL_UP")
+ns.RegEv(gf, "PLAYER_LEVEL_UP")
 gf:SetScript("OnEvent", function(_, _, lvl)
   local max = (GetMaxPlayerLevel and GetMaxPlayerLevel()) or 60
   if tonumber(lvl) ~= max or not ns.Confirm then return end

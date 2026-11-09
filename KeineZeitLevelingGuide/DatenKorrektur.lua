@@ -37,6 +37,24 @@ local function Set(list)
   return s
 end
 
+-- 1.3q (Daten 13, K 17:07, S 17:05): Lueckenfueller aus dem Dungeon Abgleich. Nur gueltige Felder uebernehmen
+local function Pos(e)
+  local m, x, y = tonumber(e.map), tonumber(e.x), tonumber(e.y)
+  if m and x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1 then return m, x, y end
+  return m, nil, nil
+end
+local function MissQ(e)
+  if type(e) ~= "table" or type(e.name) ~= "string" then return nil end
+  local m, x, y = Pos(e)
+  return { name = e.name, level = tonumber(e.level), min = tonumber(e.min), fac = (e.fraktion == "Alliance" or e.fraktion == "Horde") and e.fraktion or nil,
+    geber = type(e.geber) == "string" and e.geber or nil, map = m, x = x, y = y, dungeon = type(e.dungeon) == "string" and e.dungeon or nil }
+end
+local function MissG(e)
+  if type(e) ~= "table" or type(e.name) ~= "string" then return nil end
+  local m, x, y = Pos(e)
+  return { name = e.name, obj = e.objekt == true or nil, map = m, x = x, y = y, innen = type(e.innen) == "string" and e.innen or nil }
+end
+
 -- Teil "alle", dann der Teil vom laufenden Client (era oder forever) ersetzt den Eintrag fuer dieselbe Nummer
 local function Take(part)
   if type(part) ~= "table" then return end
@@ -44,8 +62,10 @@ local function Take(part)
     for id, e in pairs(part.quest) do
       if type(id) == "number" and type(e) == "table" then
         local t = { skip = (e.ueberspringen == true) or nil, noFoe = Set(e.kein_gegner_npc), noLvl = Set(e.dropper_nicht_fuers_level),
-          pre = List(e.vorquest_fehlt), timer = (type(e.zeitlimit_s) == "number" and e.zeitlimit_s > 0) and e.zeitlimit_s or nil }
-        if t.skip or t.noFoe or t.noLvl or t.pre or t.timer then
+          pre = List(e.vorquest_fehlt), timer = (type(e.zeitlimit_s) == "number" and e.zeitlimit_s > 0) and e.zeitlimit_s or nil,
+          fac = (e.fraktion == "Alliance" or e.fraktion == "Horde") and e.fraktion or nil,
+          fq = MissQ(e.fehlt_quest), fg = MissG(e.fehlt_geber) }
+        if t.skip or t.noFoe or t.noLvl or t.pre or t.timer or t.fac or t.fq or t.fg then
           if not DK.quest[id] then DK.nQ = DK.nQ + 1 end
           DK.quest[id] = t
         end
@@ -102,6 +122,44 @@ end
 
 -- Hilfen fuer die Route und den Sim (play\pagent.lua nutzt dieselben)
 function ns.DKQuest(qid) return qid and DK.quest[qid] or nil end
+-- 1.3q (Daten 13): Questie geht immer vor. qHas = Questie kennt die Quest (Name) bzw den Geber. Log DATEN einmal je Quest
+function ns.DKMissQuest(qid, qHas)
+  local e = qid and DK.quest[qid]
+  if not (e and e.fq) then return nil end
+  if qHas then if ns.DKLog then ns.DKLog("Quest", qid, "fehlt_quest: Questie hat es jetzt") end return nil end
+  if ns.DKLog then ns.DKLog("Quest", qid, "fehlt_quest aus Korrektur") end
+  return e.fq
+end
+function ns.DKMissQuestIds()
+  local t = {}
+  for id, e in pairs(DK.quest) do if e.fq then t[#t + 1] = id end end
+  table.sort(t)
+  return t
+end
+-- Geber: fehlt_geber, sonst der Geber einer ganz fehlenden Quest (fehlt_quest geber, map, x, y)
+function ns.DKGiver(qid, qHas)
+  local e = qid and DK.quest[qid]
+  local g = e and (e.fg or (e.fq and e.fq.geber and { name = e.fq.geber, map = e.fq.map, x = e.fq.x, y = e.fq.y }))
+  if not g then return nil end
+  if qHas then if ns.DKLog then ns.DKLog("Quest", qid, "fehlt_geber: Questie hat es jetzt") end return nil end
+  if ns.DKLog then ns.DKLog("Quest", qid, "fehlt_geber aus Korrektur") end
+  return g
+end
+-- 1.3p (P96, Daten 12): fraktion fuer Quests ohne Rassen Maske in Questie (zb 1198, Questgeber nur in Darnassus). Gibt die
+-- Maske zurueck, die ueberall statt requiredRaces gilt: eigene Maske von Questie bleibt, sonst die alten Voelker der Seite
+-- (Forever Voelker ueber ns.RaceOK und die Fraktion). Bits: Volk Id minus 1
+local DK_FAC_RACES = { Alliance = { 1, 3, 4, 7 }, Horde = { 2, 5, 6, 8 } }
+local DK_FAC_MASK = {}
+for f, ids in pairs(DK_FAC_RACES) do local m = 0; for _, r in ipairs(ids) do m = m + 2 ^ (r - 1) end; DK_FAC_MASK[f] = m end
+function ns.DKRaces(qid, rr)
+  if type(rr) == "number" and rr > 0 then return rr end
+  local e = qid and DK.quest[qid]
+  if e and e.fac then
+    if ns.DKLog then ns.DKLog("Quest", qid, "fraktion") end
+    return DK_FAC_MASK[e.fac]
+  end
+  return rr
+end
 function ns.DKItem(id) return id and DK.item[id] or nil end
 -- npc ist fuer diese Quest kein Gegner (kein_gegner_npc)
 function ns.DKNoFoe(qid, npc)

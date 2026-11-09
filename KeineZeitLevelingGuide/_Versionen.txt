@@ -1,7 +1,25 @@
-Keine Zeit Leveling Guide 1.2 (WoW Forever)
+Keine Zeit Leveling Guide 1.3 (WoW Forever)
 Autor: jonnydiepalme. Lizenz: GNU General Public License Version 3 oder später (GPLv3), Volltext in LICENSE.txt.
 Copyright (C) 2026 jonnydiepalme. Dieses Programm ist freie Software: du kannst es unter den Bedingungen der GPLv3
 weitergeben und verändern. Es wird OHNE JEDE GEWÄHRLEISTUNG bereitgestellt, Einzelheiten in LICENSE.txt.
+
+Neu in Version 1.3
+- Dungeon Touren mit Zielen drinnen und Abgabe
+- Zeppelin und Schiff mit Abfahrtszeiten, verpasst wird erkannt
+- Flugkarte zeigt den nächsten Flugpunkt
+- Berufe mit Filter, Farben wie im Spiel und Gold pro Stunde
+- Daten teilen mit anderen Spielern (abschaltbar)
+- Statistik mit Zeit nach Art
+- Viele Fehler behoben
+
+New in version 1.3
+- Dungeon tours with objectives inside and turn in
+- Zeppelin and ship departure times, missed departures detected
+- Flight map shows the next flight point
+- Professions with filter, game colors and gold per hour
+- Data sharing with other players (can be turned off)
+- Statistics with time by activity
+- Many fixes
 
 Neu in Version 1.2
 - Händler nur noch als Hinweis, nicht fest in der Route

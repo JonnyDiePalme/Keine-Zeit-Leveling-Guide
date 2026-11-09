@@ -1,4 +1,4 @@
--- Friedhoefe (Geistheiler aus Questie) fuer Forever Wegweiser (Forever, Build WOW-70790patch1.60.1_Retail, Werkzeug Stand 167, 2026-11-06 09:22)
+-- Friedhoefe (Geistheiler aus Questie) fuer Forever Wegweiser (Forever, Build WOW-70862patch1.60.1_Retail, Werkzeug Stand 170, 2026-11-08 07:25)
 -- FWW_AUTO_FRIEDHOF.<client> = { { ui, x, y, kontinent, welt_x, welt_y, npc }, ... }  ui, x, y wie C_Map
 -- Nach dem Tod: Geist erscheint beim naechsten Friedhof (meist in der gleichen Zone), Weg zur Leiche ueber das Netz.
 FWW_AUTO_FRIEDHOF = FWW_AUTO_FRIEDHOF or {}

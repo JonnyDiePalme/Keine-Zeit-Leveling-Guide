@@ -31,7 +31,7 @@ local MAXLEN = 700 -- eine Zeile hoechstens so lang
 -- pro Sitzung hoechstens so viele Zeilen je Art, der Rest wird nur gezaehlt (steht am Ende in der Zusammenfassung)
 local CAP = { HINWEIS = 400, RECHNER = 600, PFEIL = 600, QUEST = 1200, NPC = 300, ZONE = 300, RUCKLER = 80, FEHLER = 450,
   BLOCKIERT = 40, GPS = 60, BUFFS = 80, ROUTE = 300, RECHNEN = 500, PLAN = 200, SCHRITT = 2500, GRIND = 300, REISE = 400,
-  TOD = 120, NACHRICHT = 120, PROFIL = 100, GRUPPE = 100, LANGSAM = 100, HAENGT = 200, STAND = 400,
+  TOD = 120, NACHRICHT = 120, PROFIL = 100, GRUPPE = 100, LANGSAM = 100, HAENGT = 200, STAND = 400, UNTERWEGS = 200,
   EINSTELLUNG = 300, FENSTER = 600, DARSTELLUNG = 100, POS = 1200 }
 local capN, capDrop = {}, {}
 -- v11e (P34): Fehler je Art einmal mit Stack, dann gezaehlt
@@ -239,7 +239,10 @@ local function L(cat, msg)
   local xp, mx = UnitXP("player") or 0, UnitXPMax("player") or 1
   local lv = lvl + (mx > 0 and xp / mx or 0)
   -- 19.31: beim Ausloggen fehlt die XP (Level x.00 statt x.56): letzter Wert, wenn er zum gleichen Level passt
-  if lastLv and math.floor(lastLv) == lvl and xp == 0 and lastLv > lv then lv = lastLv else lastLv = lv end
+  -- 1.3b (P82, K 23:40: eine Zeile mit L14.00 statt L21.43 waehrend Ladebildschirm): beim Laden (Welt noch nicht bereit) oder
+  -- wenn das Spiel ein kleineres Level meldet als vorher in dieser Sitzung (Level sinkt nie), den letzten Wert halten
+  if lastLv and (not ns.worldReady or lvl < math.floor(lastLv)) then lv = lastLv
+  elseif lastLv and math.floor(lastLv) == lvl and xp == 0 and lastLv > lv then lv = lastLv else lastLv = lv end
   local txt = Scrub(Clean(msg))
   if #txt > MAXLEN then txt = txt:sub(1, MAXLEN) .. " ..." end
   local plain = ("%s +%ds L%.2f %s %d,%d | %s | %s"):format(date("%H:%M:%S"), math.floor(GetTime() - t0),
@@ -294,9 +297,20 @@ local function MsgLine(final)
   for why, n in pairs(MSG.rej) do parts[#parts + 1] = why .. " " .. n; nr = nr + n end
   table.sort(parts)
   -- Wege: Addon Nachrichten (Gilde, Gruppe) plus Kanal (zaehlt Sync selber)
-  local wIn, wOut = MSG.inS + (S and S.readable or 0), MSG.outS + (S and S.sent or 0)
-  local s = ("rein Gruppe %d, Wege %d, raus Gruppe %d, Wege %d, abgelehnt %d%s"):format(MSG.inG, wIn, MSG.outG, wOut, nr,
+  -- 1.3h (P91, K 04:00: "rein" war immer gleich "raus", das war das Echo der eigenen Nachrichten): getrennt raus, Echo
+  -- (eigene Nachricht kam im Kanal zurueck) und von anderen (Anzahl Absender), Raten extra
+  local others = (S and S.recv or 0) + (S and S.rates or 0)
+  local nsend = 0
+  for _ in pairs(S and S.senders or {}) do nsend = nsend + 1 end
+  local wIn, wOut = MSG.inS + others, MSG.outS + (S and S.sent or 0) + (S and S.gsent or 0)
+  local s = ("rein Gruppe %d, raus Gruppe %d, Wege raus %d (Kanal %d, Gilde %d), Echo %d, von anderen %d (%d Absender, davon Raten %d), abgelehnt %d%s"):format(
+    MSG.inG, MSG.outG, wOut, S and S.sent or 0, S and S.gsent or 0, S and S.echo or 0, others, nsend, S and S.rates or 0, nr,
     #parts > 0 and (": " .. table.concat(parts, ", ")) or "")
+  -- 1.3zy (P128): Kanal Zustand und was im Kanal ankam
+  if ns.SyncChanInfo then
+    local okC, cs, rd, sc = pcall(ns.SyncChanInfo)
+    if okC then s = s .. (", Kanal %s, rein Kanal %d, geheim %d"):format(tostring(cs), rd or 0, sc or 0) end
+  end
   if CUR then CUR.msgIn, CUR.msgOut, CUR.msgRej = MSG.inG + wIn, MSG.outG + wOut, nr end
   if s ~= msgLast and (final or MSG.inG + wIn + MSG.outG + wOut + nr > 0) then msgLast = s; L("NACHRICHT", s) end
 end
@@ -613,6 +627,7 @@ local function Tick()
     last.prof = pc
   end
   -- Schritt Wechsel
+  if ns.curAct and ns.curAct ~= "route" then last.offR = true end
   local idx, txt, s = StepInfo()
   -- derselbe Schritt bleibt derselbe, auch wenn die Zahl im Text steigt (Eber 1/10, 2/10 ...)
   local key = tostring(idx) .. "|" .. (s and tostring(s) or tostring(txt))
@@ -632,6 +647,8 @@ local function Tick()
         stepStat.line and tostring(math.floor(stepStat.line)) or "?", math.floor(stepStat.fight), stepStat.kills, XPTotal() - (last.xp0 or XPTotal()),
         lvPlan and ("%.2f"):format(lvPlan) or "?", lvNow, tostring(last.txt)))
       if CUR and lvPlan then CUR.lvlDiff = (CUR.lvlDiff or 0) + (lvNow - lvPlan); CUR.lvlN = (CUR.lvlN or 0) + 1 end
+      -- 1.3zzh (P133 Teil c): echte Ziel Zeit lernen (nur von selbst fertig, nur Route Zeit, ein Ziel im Schritt)
+      if how == "von selbst" and not last.offR and ns.StepLearn and last.s then pcall(ns.StepLearn, last.s, used, stepStat.line) end
       GrindDone(how)
       if CUR then
         CUR.steps = (CUR.steps or 0) + 1
@@ -642,6 +659,7 @@ local function Tick()
     end
     if idx then L("SCHRITT", ("neu %d/%d: %s"):format(idx, #(db.opt.steps or {}), tostring(txt))) end
     last.key, last.idx, last.txt, last.since = key, idx, txt, GetTime()
+    last.s, last.offR = s, nil
     last.xp0, last.lvlPlan = XPTotal(), s and s.lvl
     -- s.t ist die Zeit seit Routen Start, Dauer = Abstand zum Schritt davor
     local prev = idx and db.opt.steps[idx - 1]
@@ -730,6 +748,9 @@ local function Tick()
   end
   -- haengt: kommt dem Ziel 90 Sekunden nicht naeher (nicht im Kampf, nicht tot, nicht auf Reise)
   local d = Dist()
+  -- 1.3.1a (P119, Log 15:15:00 HAENGT 4 s nach der Landung, die Flugzeit zaehlte mit): unterwegs (Flug, Schiff, Zeppelin,
+  -- Tiefenbahn, Laden) die Zeit anhalten, nach der Ankunft neu anfangen
+  if d and ns.UwHold and ns.UwHold("haengt") then last.bestD, last.bestT, last.bestWalk = nil, nil, nil; d = nil end
   if d then
     -- 17.4: bei Sammel und Kill Zielen zaehlt Fortschritt (5/10 -> 6/10) als weiter kommen, Mobs suchen im Gebiet ist kein Haengen
     local prog = type(last.txt) == "string" and last.txt:match("(%d+)/%d+") or nil
@@ -745,6 +766,8 @@ local function Tick()
       and not (ns.WaitsForRide and ns.WaitsForRide()) then
       last.slowWarn = true
       L("HAENGT", ("90s nicht naeher ans Ziel, noch %d Yards: %s"):format(math.floor(d), tostring(last.txt)))
+      -- 1.3zzi (P133 Teil d): Ort merken und teilen (nur Karte und grobe Zelle)
+      if ns.HangNote then pcall(ns.HangNote) end
       if CUR then CUR.stuck = (CUR.stuck or 0) + 1 end
     end
   end
@@ -833,6 +856,8 @@ local function Hooks()
           L("RECHNEN", ("Auswahl: %d passen vom Level, %d in der Auswahl%s%s"):format(lv, ns.optCands or 0,
             #t > 0 and ("; raus: " .. table.concat(t, ", ")) or "", #sel > 0 and ("; nicht genommen: " .. table.concat(sel, ", ")) or ""))
         end)
+        -- 1.3p (P96 Punkt 2): die Route aus dieser Rechnung bekommt ihren Anlass mit (sonst "ohne bekannten Anlass")
+        SetWhy("Rechnung fertig, Anlass " .. why)
         if done then return done(...) end
       end, opts)
     end
@@ -1100,7 +1125,8 @@ function ns.TestLogStart()
     local function Sig()
       local cver, cbuild = GetBuildInfo()
       local t = {
-        ("Addon %s"):format(tostring(ver)),
+        -- 1.3zu (P125, K 23:32): Bau Kennung aus der toc (X-Bau), nur im Log, Vorab und Schluss heissen beide 1.3
+        ("Addon %s%s"):format(tostring(ver), (function() local ok, b = pcall(meta, ADDON, "X-Bau"); return (ok and b and b ~= "") and (" (Bau " .. b .. ")") or "" end)()),
         ("Log %s"):format(tostring(V(ADDON .. "_Log") or "-")),
         ("Farming %s"):format(tostring(V(ADDON .. "_Farming") or "-")),
         ("Questie %s"):format(tostring(V("Questie") or "-")),
@@ -1218,6 +1244,8 @@ function ns.TestLogEvent(e, a1, a2, a3)
     L("QUEST", ("aus dem Log %s"):format(tostring(a1)))
   elseif e == "PLAYER_LEVEL_UP" then
     L("LEVEL", ("Level %s nach %s"):format(tostring(a1), ns.Clock and ns.Clock(GetTime() - lvlStart) or math.floor(GetTime() - lvlStart)))
+    -- 1.3zze (K 04:30): Anteile vom fertigen Level in Sekunden
+    if ns.ActLogText and tonumber(a1) then L("ZEIT", ("Level %d Anteile %s"):format(tonumber(a1) - 1, ns.ActLogText(tonumber(a1) - 1))) end
     lvlStart = GetTime()
   elseif e == "PLAYER_DEAD" then
     deadAt = GetTime()

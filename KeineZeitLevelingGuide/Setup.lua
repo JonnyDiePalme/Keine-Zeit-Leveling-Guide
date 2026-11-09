@@ -708,7 +708,7 @@ local function Build()
     local p = Page()
     local h = H1(p, TR"Fertig, so findest du alles")
     local items = {
-      { TR"Charakterfenster, Taste C", TR"Unten der Reiter Keine Zeit Leveling Guide. Oder /klg für das grosse Fenster." },
+      { TR"Knopf an der Minimap", TR"Klick öffnet ein Menü: grosses Fenster, Pfeil, Mini Fenster, Pause. Oder /klg." },
       { TR"Mini Fenster", TR"Sagt dir den nächsten Schritt. Mit der Maus ziehen zum Verschieben." },
       { TR"Pfeil", TR"Grün geradeaus, gelb seitlich, rot hinter dir. Darunter steht, was dort zu tun ist." },
       { TR"Im Chat: /klg", TR"/klg hilfe öffnet die Hilfe, /klg zeigt alle Befehle." },
@@ -824,7 +824,7 @@ local function Build()
         db.bigShownAuto = true
         C_Timer.After(1, function()
           ns.ShowBig()
-          if ns.Print then ns.Print(TR"Das ist das grosse Fenster. Später öffnest du es mit der Taste C (Reiter Keine Zeit Leveling Guide im Charakterfenster), mit /klg oder im Mini Fenster unter Menü, Grosses Fenster.") end
+          if ns.Print then ns.Print(TR"Das ist das grosse Fenster. Später öffnest du es mit /klg, mit dem Knopf an der Minimap oder im Mini Fenster unter Menü, Grosses Fenster.") end
           local bf = _G.TaurenRouteBig
           if bf and bf.HookScript and not bf.fwSetupHook then
             bf.fwSetupHook = true
@@ -900,7 +900,7 @@ end
 ns.ShowWelcome = ns.ShowSetup
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(ev, "PLAYER_LOGIN")
 ev:SetScript("OnEvent", function()
   C_Timer.After(9, function()
     if ns.db and not ns.db.setupDone then ns.ShowSetup() end

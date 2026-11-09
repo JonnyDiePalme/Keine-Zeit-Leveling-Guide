@@ -26,29 +26,66 @@ local function Bags(fn)
   end
 end
 
+-- 1.3w (P106, S 03:17): zu welchen Quests im Log gehoert ein Item (Questziel, Start Item, wird gebraucht oder abgegeben).
+-- ns.itemQuests[itemID] = { { qid, title }, ... }. Dazu pro Charakter gemerkt (db.questItemSeen), damit der Tooltip spaeter
+-- "nicht mehr benoetigt" sagen kann, wenn die Quest abgegeben oder abgebrochen ist. Alles aus Questie und dem Questlog
+ns.itemQuests = {}
+local SEEN_MAX = 400
+local function Seen(id, qid, title)
+  local db = ns.db
+  if not (db and id and qid) then return end
+  db.questItemSeen = db.questItemSeen or {}
+  local t = db.questItemSeen
+  if not t[id] then
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    if n >= SEEN_MAX then
+      local oldK, oldT
+      for k, v in pairs(t) do if not oldT or (v.at or 0) < oldT then oldK, oldT = k, v.at or 0 end end
+      if oldK then t[oldK] = nil end
+    end
+  end
+  t[id] = { qid = qid, title = title, at = time and time() or 0 }
+end
 local function Rebuild()
   local qdb = QDB()
   if not qdb then return end
-  local need = {}
+  local need, iq = {}, {}
+  local function AddQ(id, qid, title)
+    if type(id) ~= "number" or id <= 0 then return end
+    iq[id] = iq[id] or {}
+    for _, e in ipairs(iq[id]) do if e.qid == qid then return end end
+    table.insert(iq[id], { qid = qid, title = title })
+    Seen(id, qid, title)
+  end
   local log = ns.logProgress or {}
   for qid, p in pairs(log) do
     local title = p.title or (TR"Quest " .. qid)
     local objs = QQ(qdb, qid, "objectives")
-    for _, c in ipairs(type(objs) == "table" and objs[3] or {}) do need[c[1]] = TR"Questziel: " .. title end
-    for _, id in ipairs(QQ(qdb, qid, "requiredSourceItems") or {}) do need[id] = TR"gebraucht für " .. title end
+    for _, c in ipairs(type(objs) == "table" and objs[3] or {}) do need[c[1]] = TR"Questziel: " .. title; AddQ(c[1], qid, title) end
+    for _, id in ipairs(QQ(qdb, qid, "requiredSourceItems") or {}) do need[id] = TR"gebraucht für " .. title; AddQ(id, qid, title) end
     local src = QQ(qdb, qid, "sourceItemId")
-    if type(src) == "number" and src > 0 then need[src] = TR"gebraucht für " .. title end
+    if type(src) == "number" and src > 0 then need[src] = TR"gebraucht für " .. title; AddQ(src, qid, title) end
+    -- Start Item der Quest (Quest Anfang aus einem Gegenstand)
+    local sb = QQ(qdb, qid, "startedBy")
+    for _, it in ipairs(type(sb) == "table" and sb[3] or {}) do AddQ(it, qid, title) end
   end
+  ns.itemQuests = iq
   -- Items in der Tasche, die eine Quest starten
   local complete = (Questie and Questie.db and Questie.db.char and Questie.db.char.complete) or {}
+  -- 1.3zd (P112): Quests, die ein Item in der Tasche startet, fuer die Route merken (ns.bagStartQ[qid] = itemID)
+  local bagQ = {}
   Bags(function(id)
-    if not need[id] then
-      local q = QI(qdb, id, "startQuest")
-      if type(q) == "number" and q > 0 and not complete[q] and not log[q] then
-        need[id] = TR"startet die Quest " .. (QQ(qdb, q, "name") or q)
-      end
+    local q = QI(qdb, id, "startQuest")
+    if type(q) == "number" and q > 0 and not complete[q] and not log[q] then
+      bagQ[q] = bagQ[q] or id
+      if not need[id] then need[id] = TR"startet die Quest " .. (QQ(qdb, q, "name") or q) end
     end
   end)
+  local changed = false
+  for q in pairs(bagQ) do if not (ns.bagStartQ and ns.bagStartQ[q]) then changed = true end end
+  ns.bagStartQ = bagQ
+  if changed and next(bagQ) and ns.OffRouteReplan then ns.OffRouteReplan("item") end
   -- Items fuer spaetere Quests aus der Route (unterwegs gesammelt oder zu kaufen)
   local later = {}
   local db = ns.db
@@ -171,14 +208,80 @@ if C_Timer and C_Timer.NewTicker then
 end
 
 -- Tooltip
+-- 1.3w (P106): pro Quest im Log eine Zeile "Quest: Name (3/8)" in Addon Farbe. Ist das Item fuer keine offene Quest mehr da,
+-- aber war es fuer eine (db.questItemSeen): "Nicht mehr benötigt (Quest abgegeben)" bzw "(Quest abgebrochen)". Zeigt
+-- Questie die Quest schon im Tooltip, kommt unsere Zeile nicht doppelt. Im Kampf nur die gemerkten Daten, kein Questlog Lesen
+local function QuestDone(qid)
+  if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
+    local ok, v = pcall(C_QuestLog.IsQuestFlaggedCompleted, qid)
+    if ok and v then return true end
+  end
+  local c = Questie and Questie.db and Questie.db.char and Questie.db.char.complete
+  return c and c[qid] and true or false
+end
+local function Progress(qid, itemName)
+  if not (itemName and C_QuestLog and C_QuestLog.GetQuestObjectives) then return nil end
+  if InCombatLockdown and InCombatLockdown() then return nil end
+  local ok, objs = pcall(C_QuestLog.GetQuestObjectives, qid)
+  if not ok or type(objs) ~= "table" then return nil end
+  for _, o in ipairs(objs) do
+    if type(o.text) == "string" and o.text:find(itemName, 1, true) and o.numRequired and o.numRequired > 0 then
+      return ("%d/%d"):format(o.numFulfilled or 0, o.numRequired)
+    end
+  end
+end
+local function TipHas(tt, txt)
+  local nm = tt.GetName and tt:GetName()
+  if not (nm and txt) then return false end
+  for i = 2, math.min(30, tt:NumLines() or 0) do
+    local fs = _G[nm .. "TextLeft" .. i]
+    local t = fs and fs:GetText()
+    if t and t:find(txt, 1, true) then return true end
+  end
+  return false
+end
+local function OnTipId(tt, id)
+  if not id then return end
+  local db = ns.db
+  local acc = (ns.T and ns.T.AccHex and ns.T.AccHex()) or "7fd1b9"
+  if type(acc) == "string" and #acc > 6 then acc = acc:sub(-6) end
+  local list = db and db.questItemTip ~= false and ns.itemQuests[id]
+  local name = ns.Api and ns.Api.GetItemInfo and ns.Api.GetItemInfo(id)
+  if list and #list > 0 then
+    for _, e in ipairs(list) do
+      if not TipHas(tt, e.title) then
+        local pr = Progress(e.qid, name)
+        tt:AddLine(("|cff%s%s%s%s|r"):format(acc, TR"Quest: ", e.title or "?", pr and (" (" .. pr .. ")") or ""), 1, 1, 1, true)
+      end
+    end
+  elseif db and db.questItemTip ~= false and not ns.neededItems[id] then
+    local s = db.questItemSeen and db.questItemSeen[id]
+    if s and s.qid and not (ns.logProgress and ns.logProgress[s.qid]) then
+      local why = QuestDone(s.qid) and TR"Quest abgegeben" or TR"Quest abgebrochen"
+      tt:AddLine(("|cffff9030%s (%s)|r"):format(TR"Nicht mehr benötigt", why), 1, 0.6, 0.2, true)
+      tt:AddLine(("|cff9d9d9d%s|r"):format(s.title or ""), 0.6, 0.6, 0.6, true)
+    end
+  end
+  -- alter Schutz Hinweis: nur fuer Gruende ausserhalb vom Questlog (spaetere Quest der Route, Start Item in der Tasche)
+  local why = db and db.protectItems ~= false and ns.neededItems[id]
+  if why and not (list and #list > 0) then tt:AddLine(TR"|cffff5050Keine Zeit Leveling Guide: nicht verkaufen, " .. why .. "|r", 1, 0.3, 0.3, true) end
+end
 local function OnTip(tt)
-  if not (ns.db and ns.db.protectItems ~= false) then return end
+  if not (tt and tt.GetItem) then return end
   local _, link = tt:GetItem()
   local id = link and tonumber(link:match("item:(%d+)"))
-  local why = id and ns.neededItems[id]
-  if why then tt:AddLine(TR"|cffff5050Keine Zeit Leveling Guide: nicht verkaufen, " .. why .. "|r", 1, 0.3, 0.3, true) end
+  OnTipId(tt, id)
 end
-if GameTooltip and GameTooltip.HookScript then pcall(GameTooltip.HookScript, GameTooltip, "OnTooltipSetItem", OnTip) end
+-- neuere Clients: TooltipDataProcessor (kein OnTooltipSetItem mehr), sonst der alte Hook. Nur einer von beiden
+if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType and Enum.TooltipDataType.Item then
+  TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tt, data)
+    if tt ~= GameTooltip and tt ~= ItemRefTooltip then return end
+    local id = data and type(data.id) == "number" and data.id or nil
+    if id then pcall(OnTipId, tt, id) else pcall(OnTip, tt) end
+  end)
+elseif GameTooltip and GameTooltip.HookScript then
+  pcall(GameTooltip.HookScript, GameTooltip, "OnTooltipSetItem", function(tt) pcall(OnTip, tt) end)
+end
 
 -- beim Haendler: verschwindet ein gebrauchtes Item, sofort warnen (Rueckkauf moeglich)
 local atMerchant, snapshot = false, {}
@@ -467,14 +570,14 @@ end
 -- Events
 ------------------------------------------------------------
 local f = CreateFrame("Frame")
-f:RegisterEvent("PLAYER_LOGIN")
-f:RegisterEvent("QUEST_LOG_UPDATE")
-f:RegisterEvent("BAG_UPDATE_DELAYED")
-f:RegisterEvent("MERCHANT_SHOW")
-f:RegisterEvent("MERCHANT_CLOSED")
-f:RegisterEvent("DELETE_ITEM_CONFIRM")
-f:RegisterEvent("QUEST_COMPLETE")
-f:RegisterEvent("QUEST_FINISHED")
+ns.RegEv(f, "PLAYER_LOGIN")
+ns.RegEv(f, "QUEST_LOG_UPDATE")
+ns.RegEv(f, "BAG_UPDATE_DELAYED")
+ns.RegEv(f, "MERCHANT_SHOW")
+ns.RegEv(f, "MERCHANT_CLOSED")
+ns.RegEv(f, "DELETE_ITEM_CONFIRM")
+ns.RegEv(f, "QUEST_COMPLETE")
+ns.RegEv(f, "QUEST_FINISHED")
 f:SetScript("OnEvent", function(_, event, a1)
   if not ns.db then return end
   if event == "PLAYER_LOGIN" then
@@ -558,7 +661,7 @@ function ns.BagKill()
 end
 do
   local vf = CreateFrame("Frame")
-  vf:RegisterEvent("MERCHANT_SHOW"); vf:RegisterEvent("MERCHANT_CLOSED"); vf:RegisterEvent("BAG_UPDATE")
+  ns.RegEv(vf, "MERCHANT_SHOW"); ns.RegEv(vf, "MERCHANT_CLOSED"); ns.RegEv(vf, "BAG_UPDATE")
   vf:SetScript("OnEvent", function(_, e)
     if e == "MERCHANT_SHOW" then bagVendor = true
     elseif e == "MERCHANT_CLOSED" then bagVendor = false; bagFree = ns.FreeSlots and ns.FreeSlots() or nil
@@ -593,7 +696,7 @@ ns.BAG_HINT_FREE = 3
 do
   local last = -1000
   local bf = CreateFrame("Frame")
-  bf:RegisterEvent("BAG_UPDATE_DELAYED")
+  ns.RegEv(bf, "BAG_UPDATE_DELAYED")
   bf:SetScript("OnEvent", function()
     local db = ns.db
     if not (db and db.bagPlan ~= false and db.optMode and db.opt and db.opt.steps) then return end
@@ -706,9 +809,9 @@ local function CheckWeapon()
   end
 end
 local wf = CreateFrame("Frame")
-wf:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
-wf:RegisterEvent("PLAYER_LEVEL_UP")
-wf:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(wf, "PLAYER_EQUIPMENT_CHANGED")
+ns.RegEv(wf, "PLAYER_LEVEL_UP")
+ns.RegEv(wf, "PLAYER_LOGIN")
 wf:SetScript("OnEvent", function() C_Timer.After(3, CheckWeapon) end)
 
 ------------------------------------------------------------
@@ -785,8 +888,8 @@ end
 local lastCity
 local cityAt = {}
 local cf = CreateFrame("Frame")
-cf:RegisterEvent("ZONE_CHANGED_NEW_AREA")
-cf:RegisterEvent("ZONE_CHANGED")
+ns.RegEv(cf, "ZONE_CHANGED_NEW_AREA")
+ns.RegEv(cf, "ZONE_CHANGED")
 cf:SetScript("OnEvent", function()
   if not ns.db or ns.db.shopHint == false then return end
   C_Timer.After(2, function()

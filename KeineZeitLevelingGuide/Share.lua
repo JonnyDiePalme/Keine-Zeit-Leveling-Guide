@@ -285,6 +285,7 @@ local function Window()
   if win then return win end
   local f = CreateFrame("Frame", "TaurenRouteShare", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
   f:SetSize(520, 340)
+  f:SetClampedToScreen(true) -- 1.3zk (Pr 13:00 Layout WIN_NOCLAMP)
   f:SetPoint("CENTER")
   f:SetFrameStrata("FULLSCREEN")
   if ns.Skin then ns.Skin(f, "window") end

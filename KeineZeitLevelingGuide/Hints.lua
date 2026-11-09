@@ -192,8 +192,46 @@ function ns.HintList()
 end
 
 -- nur der wichtigste
+-- 1.3b (P80, K 23:40, Log 22:39 bis 22:44: "Reserve Quest ... liegt nicht mehr am Weg" und "4 neue Zauber lernen bei Lehrer"
+-- kamen nach jedem Ladebildschirm neu): solche Hinweise einmal zeigen und das merken, auch ueber Ladebildschirm und Reload
+-- (db.hintSeen). Lehrer je Level, Reserve je Quest. Gezeigt wird der Hinweis HINT_SEEN_SHOW_S lang ab dem ersten Mal, danach
+-- ist er fuer dieses Level bzw diese Quest still. Klick oder x geht wie bisher
+local HINT_SEEN_SHOW_S, HINT_SEEN_MAX = 120, 200
+local function SeenKey(h)
+  if type(h) ~= "table" then return nil end
+  if h.kind == "trainer" and not h.near then
+    local L = UnitLevel and UnitLevel("player")
+    return L and ("trainer:" .. L) or nil
+  end
+  if h.kind == "reserve" then return h.rq and ("reserve:" .. tostring(h.rq)) or ("reserve:" .. tostring(h.text)) end
+  return nil
+end
+function ns.HintSeenHide(h)
+  local key = SeenKey(h)
+  local db = ns.db
+  if not (key and db) then return false end
+  db.hintSeen = db.hintSeen or {}
+  local now = time and time() or 0
+  local t = db.hintSeen[key]
+  if not t then
+    local n = 0
+    for _ in pairs(db.hintSeen) do n = n + 1 end
+    if n >= HINT_SEEN_MAX then db.hintSeen = {} end
+    db.hintSeen[key] = now
+    return false
+  end
+  return now - t > HINT_SEEN_SHOW_S
+end
+function ns.HintListShown()
+  local out = {}
+  for _, h in ipairs(ns.HintList and ns.HintList() or {}) do
+    if not ns.HintSeenHide(h) then out[#out + 1] = h end
+  end
+  return out
+end
+
 function ns.TopHint()
-  return ns.HintList()[1]
+  return ns.HintListShown()[1]
 end
 
 -- Klick auf den Hinweis
@@ -234,7 +272,7 @@ end
 -- Buecher erst bei der echten Abgabe zaehlen: eine Quest abgegeben, waehrend du beim Bibliothekar stehst
 do
   local bf = CreateFrame("Frame")
-  bf:RegisterEvent("QUEST_TURNED_IN")
+  ns.RegEv(bf, "QUEST_TURNED_IN")
   bf:SetScript("OnEvent", function(_, _, qid, xp)
     local db = ns.db
     if not (db and ns.BOOK_TURNIN and ns.WorldDist and ns.PlayerMap) then return end

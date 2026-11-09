@@ -61,7 +61,7 @@ function ns.GearScan(done)
     local r = false
     if not Complete(qid) then
       local ok, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
-      local rc, rr = Q(qid, "requiredClasses"), Q(qid, "requiredRaces")
+      local rc, rr = Q(qid, "requiredClasses"), ns.DKRaces(qid, Q(qid, "requiredRaces"))
       local fine = ok and rl and rl <= L + AHEAD and ql and ql >= L - 12
       if fine and rc and rc > 0 and classID and not HasBit(rc, classID - 1) then fine = false end
       if fine and rr and rr > 0 and raceID and not ns.RaceOK(rr, raceID) then fine = false end
@@ -163,7 +163,7 @@ function ns.GearScan(done)
               -- die erste, die fuer dich machbar ist
               local pick
               for _, p in ipairs(ps) do
-                local rc, rr = Q(p, "requiredClasses"), Q(p, "requiredRaces")
+                local rc, rr = Q(p, "requiredClasses"), ns.DKRaces(p, Q(p, "requiredRaces"))
                 local okC = not (rc and rc > 0 and classID and not HasBit(rc, classID - 1))
                 local okR = not (rr and rr > 0 and raceID and not ns.RaceOK(rr, raceID))
                 if okC and okR then pick = p; break end
@@ -280,4 +280,97 @@ function ns.GearLines(q)
   end
   if ns.GearSkipped(q.id) then table.insert(out, TR"|cff9d9d9dNicht ausgewählt: Haken setzen, dann kommt sie mit Route berechnen in die Route.|r") end
   return out
+end
+
+-- 1.3c (P85): besondere Ziele (ns.SPECIALS, Daten in FesteDaten.lua), zb der Schlafsack. Eigene Zusatz Route ueber die ganze
+-- Reihe (Objekte, Kontinent Wechsel, Navi mit Flug und Schiff fuer weite Schritte), nie automatisch in der Leveling Route.
+-- Die Kette kommt aus den Daten: von der letzten Quest rueckwaerts ueber die Vorquests (Questie plus Daten Korrektur).
+-- Vorquests "eine davon" (zb Horde 79007 oder Allianz 79008) kommen alle in die Auswahl, die Route nimmt die, die fuer dich geht
+local function QPre(qid)
+  local QDB = ns.QDBAccess and ns.QDBAccess()
+  local single, group
+  if QDB then
+    local ok1, v1 = pcall(QDB.QueryQuestSingle, qid, "preQuestSingle")
+    local ok2, v2 = pcall(QDB.QueryQuestSingle, qid, "preQuestGroup")
+    single, group = ok1 and v1 or nil, ok2 and v2 or nil
+  end
+  if ns.DKPreSingle then single = ns.DKPreSingle(qid, single) end
+  if ns.DKPreGroup then group = ns.DKPreGroup(qid, group) end
+  local out = {}
+  for _, id in ipairs(type(single) == "table" and single or {}) do out[#out + 1] = id end
+  for _, id in ipairs(type(group) == "table" and group or {}) do out[#out + 1] = id end
+  return out
+end
+local SPECIAL_CHAIN_MAX = 30
+function ns.SpecialChain(key)
+  local sp = ns.SPECIALS and ns.SPECIALS[key]
+  if not (sp and sp.lastQuest) then return nil end
+  local set, todo, n = {}, { sp.lastQuest }, 0
+  while #todo > 0 and n < SPECIAL_CHAIN_MAX do
+    local q = table.remove(todo)
+    if not set[q] then
+      set[q] = true; n = n + 1
+      for _, p in ipairs(QPre(q)) do if not set[p] then todo[#todo + 1] = p end end
+    end
+  end
+  return set, n
+end
+local function Done(qid)
+  if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
+    local ok, v = pcall(C_QuestLog.IsQuestFlaggedCompleted, qid)
+    if ok then return ns.Plain and ns.Plain(v) or v end
+  end
+  return false
+end
+function ns.SpecialHave(key)
+  local sp = ns.SPECIALS and ns.SPECIALS[key]
+  if not sp then return false end
+  if sp.lastQuest and Done(sp.lastQuest) then return true end
+  local c = sp.item and ns.Api and ns.Api.GetItemCount and ns.Api.GetItemCount(sp.item)
+  return (tonumber(c) or 0) > 0
+end
+function ns.SpecialAvailable(key)
+  local sp = ns.SPECIALS and ns.SPECIALS[key]
+  if not sp then return false end
+  if sp.forever and not ns.FOREVER then return false end
+  return true
+end
+function ns.SpecialName(key)
+  local sp = ns.SPECIALS and ns.SPECIALS[key]
+  if not sp then return "?" end
+  local nm = sp.item and ((C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(sp.item)) or (GetItemInfo and GetItemInfo(sp.item)))
+  return (type(nm) == "string" and nm ~= "") and nm or TR"Schlafsack"
+end
+function ns.SpecialVendor(key)
+  local sp = ns.SPECIALS and ns.SPECIALS[key]
+  local v = sp and sp.vendor
+  if not (v and v.map and v.x and v.y) then return end
+  local nm = v.npc and ns.NpcName and ns.NpcName(v.npc, nil) or TR"Händler"
+  if ns.ZielNavi then ns.ZielNavi(v.map, v.x, v.y, nm, "vendor") end
+end
+function ns.SpecialRoute(key)
+  if not ns.SpecialAvailable(key) then return end
+  local name = ns.SpecialName(key)
+  if ns.SpecialHave(key) then ns.Print((TR"%s hast du schon."):format(name)); return end
+  local set, n = ns.SpecialChain(key)
+  if not set or n == 0 then ns.Print(TR"Keine Quests für dieses Ziel gefunden."); return end
+  -- schon erledigte Quests der Reihe brauchen keinen Schritt (die Route kennt sie selbst), offene bleiben
+  local L = UnitLevel("player")
+  -- 1.3f (P85, Pr 02:42: Ziel Level L+3 = 17, die Reihe hat Questlevel 22 bis 32): bis zum hoechsten Questlevel der Kette
+  local QDB = ns.QDBAccess and ns.QDBAccess()
+  local top = L + 3
+  for qid in pairs(set) do
+    local ok, ql = false, nil
+    if QDB then ok, ql = pcall(QDB.QueryQuestSingle, qid, "questLevel") end
+    if ok and type(ql) == "number" and ql + 1 > top then top = ql + 1 end
+  end
+  ns.Print((TR"%s holen: Route über %d Quests wird berechnet. Danach geht die Leveling Route weiter, wo du warst."):format(name, n))
+  if ns.TestLog then ns.TestLog("RECHNEN", ("Besonderes Ziel %s: %d Quests in der Reihe"):format(tostring(key), n)) end
+  ns.Optimize(math.min(60, top), function(opt)
+    if opt and ns.db then ns.db.optMode = true end
+    if ns.RefreshBig then ns.RefreshBig() end
+  end, { gearQ = set, special = key, minLevel = ns.SPECIALS[key].level, title = (TR"%s holen"):format(name) })
+  -- 1.3l (Pr 13:45: 79974 bis 79976 nie in der Route): vorher maxTime 7200, das Zeit Budget nahm von hinten ganze Quests
+  -- weg, also genau die letzten der Reihe. Die Reihe laeuft ueber viele Level, darum hier kein Zeit Budget
+  if ns.RefreshBig then ns.RefreshBig() end
 end

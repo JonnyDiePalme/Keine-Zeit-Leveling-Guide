@@ -205,10 +205,12 @@ function ns.GroupLines(qids, max)
   local want = {}
   for _, id in ipairs(qids or {}) do want[id] = true end
   local rows = {}
-  for who, g in pairs(ns.group) do
+  for who, g in pairs(ns.GroupAll()) do
     for qid, q in pairs(g.quests) do
       if log[qid] or want[qid] then
-        local prog = q.done and TR"|cff40ff40fertig|r" or table.concat(q.objs, " ")
+        local nums = {}
+        for _, o in ipairs(q.objs or {}) do nums[#nums + 1] = o:match("(%d+/%d+)$") or o end
+        local prog = q.done and TR"|cff40ff40fertig|r" or table.concat(nums, " ")
         local title = (log[qid] and log[qid].title) or (TR"Quest " .. qid)
         if #title > 22 then title = ns.U8Sub(title, 21) .. "." end
         table.insert(rows, { pri = (want[qid] and 0 or 2) + (q.done and 1 or 0),
@@ -223,10 +225,104 @@ function ns.GroupLines(qids, max)
   return out
 end
 
+-- 1.3zd (P111, S 07:04 und 07:08): Quest Stand von Mitspielern OHNE unser Addon ueber Questie lesen. Questie tauscht in
+-- der Gruppe die Questlogs aus (QuestieComms.remoteQuestLogs[qid][Name] = Ziele mit fulfilled/required). Nur lesen,
+-- nur wer jetzt in der Gruppe ist und sich nicht selbst ueber unser Addon meldet. Namen der Ziele aus unserer Questie
+-- Datenbank (nie fremder Text), Zahlen begrenzt. Ohne Questie oder ohne Daten: leer, alles laeuft wie vorher
+ns.QG = ns.QG or { CACHE_S = 5, MAXQ = 80, MAXOBJ = 10 }
+local qgCache, qgAt, qgSig = {}, -999, nil
+local function QComms()
+  if not (QuestieLoader and QuestieLoader.ImportModule) then return nil end
+  local ok, m = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestieComms")
+  if ok and type(m) == "table" and type(m.remoteQuestLogs) == "table" then return m end
+end
+local function QGObjName(t, id)
+  local qdb = ns.QDBAccess and ns.QDBAccess()
+  if not (qdb and type(id) == "number") then return nil end
+  local c = type(t) == "string" and t:sub(1, 1) or (type(t) == "number" and string.char(t)) or ""
+  local f = (c == "m" and qdb.QueryNPCSingle) or (c == "i" and qdb.QueryItemSingle) or (c == "o" and qdb.QueryObjectSingle) or nil
+  if not f then return nil end
+  local ok, v = pcall(f, id, "name")
+  if ok and type(v) == "string" and v ~= "" then return (v:gsub("|", "")) end
+end
+function ns.QuestieGroup()
+  if not (Enabled() and IsInGroup and IsInGroup()) then return {} end
+  local now = GetTime()
+  if now - qgAt < ns.QG.CACHE_S then return qgCache end
+  qgAt = now
+  local out = {}
+  local qc = QComms()
+  if qc then
+    local units = {}
+    local n = (GetNumGroupMembers and GetNumGroupMembers()) or 0
+    local pre = (IsInRaid and IsInRaid()) and "raid" or "party"
+    for i = 1, n do
+      local u = pre .. i
+      local nm = UnitName(u)
+      if nm and not ns.Api.U(UnitIsUnit, u, "player") then units[Short(nm)] = u end
+    end
+    for qk, byP in pairs(qc.remoteQuestLogs) do
+      local qid = tonumber(qk)
+      if qid and qid > 0 and type(byP) == "table" then
+        for pn, objs in pairs(byP) do
+          local who = type(pn) == "string" and Short(pn) or nil
+          local u = who and units[who]
+          if u and not ns.group[who] then
+            local e = out[who]
+            if not e then
+              local okC, _, _, cid = pcall(UnitClass, u)
+              local okR, _, _, rid = pcall(UnitRace, u)
+              if not okC then cid = nil end
+              if not okR then rid = nil end
+              local lv = UnitLevel(u)
+              if ns.Plain then lv = ns.Plain(lv) end
+              e = { quests = {}, n = 0, lvl = tonumber(lv), cid = cid, rid = rid, unit = u, questie = true, seen = now }
+              out[who] = e
+            end
+            if e.n < ns.QG.MAXQ then
+              local list, done = {}, true
+              for _, o in ipairs(type(objs) == "table" and objs or {}) do
+                if #list >= ns.QG.MAXOBJ then break end
+                local f, r = tonumber(type(o) == "table" and o.fulfilled), tonumber(type(o) == "table" and o.required)
+                if f and r and r > 0 and r < 1000 then
+                  f = math.max(0, math.min(math.floor(f), math.floor(r)))
+                  local nm = QGObjName(o.type, o.id)
+                  list[#list + 1] = (nm and (nm .. ": ") or "") .. f .. "/" .. math.floor(r)
+                  if f < r then done = false end
+                end
+              end
+              e.quests[qid] = { objs = list, done = done, t = now }
+              e.n = e.n + 1
+            end
+          end
+        end
+      end
+    end
+  end
+  local cnt = 0
+  for _ in pairs(out) do cnt = cnt + 1 end
+  local sig = cnt
+  for who, e in pairs(out) do sig = sig .. who .. e.n end
+  if ns.TestLog and qgSig ~= sig then
+    local parts = {}
+    for who, e in pairs(out) do parts[#parts + 1] = ("%s %d Quests"):format(who, e.n) end
+    ns.TestLog("GRUPPE", "Questie Stand ohne unser Addon: " .. (#parts > 0 and table.concat(parts, ", ") or (qc and "keiner" or "Questie Austausch fehlt")))
+  end
+  qgCache, qgSig = out, sig
+  return out
+end
+-- alle Mitspieler mit Quest Stand: unser Addon (ns.group) und Questie (nur lesen). Nur zum Lesen, nicht speichern
+function ns.GroupAll()
+  local all = {}
+  for who, g in pairs(ns.group or {}) do all[who] = g end
+  for who, g in pairs(ns.QuestieGroup()) do if not all[who] then all[who] = g end end
+  return all
+end
+
 -- wartet jemand noch? (fuer Abgabe Hinweise)
 function ns.GroupNotDone(qid)
   local list = {}
-  for who, g in pairs(ns.group) do
+  for who, g in pairs(ns.GroupAll()) do
     local q = g.quests[qid]
     if q and not q.done then table.insert(list, who) end
   end
@@ -290,13 +386,14 @@ function ns.ToggleGroupSync()
 end
 
 local f = CreateFrame("Frame")
-f:RegisterEvent("PLAYER_LOGIN")
-f:RegisterEvent("CHAT_MSG_ADDON")
-f:RegisterEvent("GROUP_ROSTER_UPDATE")
-f:RegisterEvent("QUEST_LOG_UPDATE")
-f:RegisterEvent("PLAYER_LEVEL_UP")
-f:RegisterEvent("LEARNED_SPELL_IN_TAB")
-f:RegisterEvent("BAG_UPDATE_DELAYED")
+ns.RegEv(f, "PLAYER_LOGIN")
+ns.RegEv(f, "CHAT_MSG_ADDON")
+ns.RegEv(f, "GROUP_ROSTER_UPDATE")
+ns.RegEv(f, "QUEST_LOG_UPDATE")
+ns.RegEv(f, "PLAYER_LEVEL_UP")
+ns.RegEv(f, "LEARNED_SPELL_IN_TAB")
+ns.RegEv(f, "LEARNED_SPELL_IN_SKILL_LINE") -- 1.3zl: Name im neueren Client
+ns.RegEv(f, "BAG_UPDATE_DELAYED")
 local wasGrouped = false
 f:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
   if event == "PLAYER_LOGIN" then
@@ -317,7 +414,7 @@ f:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
     if now ~= wasGrouped and ns.QuestieFull and ns.QuestieScan then ns.QuestieFull(); ns.QuestieScan() end
     wasGrouped = now
     if ns.RefreshHud then ns.RefreshHud() end
-  elseif event == "LEARNED_SPELL_IN_TAB" or event == "BAG_UPDATE_DELAYED" then
+  elseif event == "LEARNED_SPELL_IN_TAB" or event == "LEARNED_SPELL_IN_SKILL_LINE" or event == "BAG_UPDATE_DELAYED" then
     -- 20.3d: nur die Portal Nachricht, und nur wenn sie sich geaendert hat
     -- 20.3o (Da Pruefung Nr 16): bei viel Loot hoechstens alle 10 s pruefen (Taschen Ereignis kommt sehr oft)
     if Enabled() and Channel() and not ns.portsPending then

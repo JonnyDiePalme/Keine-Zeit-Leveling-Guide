@@ -212,6 +212,38 @@ end
 -- 1.2i (P70, K 17:00: "Annehmen Der Zorn von Rath'mael" ging nicht, HAENGT 43 yd): beim NPC vom jetzigen Schritt bietet
 -- er eine Quest zum Annehmen nicht an (Vorquest fehlt, andere Fassung der Quest auf Forever ...): Quest aus der Route nehmen
 -- statt davor zu haengen, mit Grund ins Log (fehlende Vorquest laut Questie, wenn bekannt). Nur fuer den NPC dieses Schritts
+-- 1.3u (P101 Punkt 1, S Log 98094 Darthalia: "NPC bietet sie nicht an" 3 mal, nach jeder neuen Route wieder drin):
+-- gemerkt pro Charakter in db.offerNo[qid] = { lvl, pre, at }. Gilt, bis du ein Level hoeher bist, die fehlende Vorquest
+-- erledigt ist oder OFFER_NO_MAX_S vorbei sind. Die Route plant sie so lange nicht ein (Optimizer, ns.OfferNo)
+local OFFER_NO_MAX_S = 3600
+-- 1.3ze (Pr 07:35 Befund 1: NPC bietet nie an, Route lief nach jedem Level wieder hin): ab der OFFER_NO_LONG_N ten Ablehnung
+-- derselben Quest laenger merken, OFFER_NO_LONG_L Level oder OFFER_NO_LONG_S Sekunden (Vorquest fertig gibt immer frei)
+local OFFER_NO_LONG_N, OFFER_NO_LONG_L, OFFER_NO_LONG_S = 2, 3, 3 * 3600
+function ns.OfferNo(qid)
+  local t = qid and ns.db and ns.db.offerNo and ns.db.offerNo[qid]
+  -- 1.3zzm (P133 Teil f): ohne eigene Erfahrung zaehlt, was andere Spieler gemeldet haben (Teilen.lua ns.OfferNoShared)
+  if not t then return ns.OfferNoShared and ns.OfferNoShared(qid) or false end
+  if t.free then return false end
+  local L = UnitLevel and UnitLevel("player") or 0
+  local now = time and time() or 0
+  local long = (t.n or 1) >= OFFER_NO_LONG_N
+  local lvlFree = (t.lvl or 0) + (long and OFFER_NO_LONG_L or 1)
+  if L >= lvlFree or (t.pre and QDone(t.pre)) or now - (t.at or 0) > (long and OFFER_NO_LONG_S or OFFER_NO_MAX_S) then
+    -- frei, aber die Zahl der Ablehnungen bleibt (beim naechsten Mal laenger)
+    t.free = true
+    if ns.TestLog then ns.TestLog("SCHRITT", ("Quest %d wieder einplanbar (Level, Vorquest oder Zeit, Ablehnungen %d)"):format(qid, t.n or 1)) end
+    return false
+  end
+  return true
+end
+local function OfferNoSet(qid, pre)
+  if not (qid and ns.db) then return end
+  ns.db.offerNo = ns.db.offerNo or {}
+  local old = ns.db.offerNo[qid]
+  ns.db.offerNo[qid] = { lvl = UnitLevel and UnitLevel("player") or 0, pre = pre and pre.id or nil, at = time and time() or 0,
+    n = ((old and old.n) or (old and 1) or 0) + 1 }
+end
+
 local function OptOfferCheck(ids, nothing)
   if not (ns.db and ns.db.optMode and ns.OptCurrentAct and ns.OptDropQuest) then return end
   local st = ns.db.opt and ns.db.opt.steps and ns.db.opt.steps[ns.db.opt.idx or 1]
@@ -221,15 +253,51 @@ local function OptOfferCheck(ids, nothing)
   -- sicher nur mit Quest Nummern (Gossip) oder wenn der NPC gar nichts zum Annehmen anbietet (Namen vergleichen waere
   -- unsicher, Schreibweisen weichen ab)
   if not (nothing or (ids and next(ids))) then return end
+  -- 1.3u (P101 Punkt 2, S Log 20:01 Kampf um Hillsbrad 527/528): im selben Schritt steht noch eine Abgabe, die im Log ist.
+  -- Erst nach der Abgabe bietet der NPC die Folgequest an, darum jetzt nicht pruefen (das Fenster kommt danach neu)
   for _, a in ipairs(st.acts or {}) do
-    local who = a.k == "A" and a.qid and (ns.NpcName and ns.NpcName(a.npc, a.who) or a.who)
-    if who and who == nm and not (ns.logProgress and ns.logProgress[a.qid]) and not (ids and ids[a.qid]) then
-      local pre = ns.MissingPre and ns.MissingPre(a.qid)
-      local why = pre and ((TR"Vorquest fehlt: %s"):format(tostring(pre.name or pre.id or "?"))) or TR"NPC bietet sie nicht an"
-      if ns.TestLog then ns.TestLog("SCHRITT", ("Annehmen geht nicht: %s bei %s (%s), Quest raus"):format(tostring(a.quest), nm, why)) end
-      ns.OptDropQuest(a.qid, why)
+    if a.k == "T" and a.qid and ns.logProgress and ns.logProgress[a.qid] then
+      if ns.TestLog then ns.TestLog("SCHRITT", ("Annehmen Pruefung wartet: erst Abgabe %s"):format(tostring(a.quest))) end
+      return
     end
   end
+  -- 1.3v (P102 Punkt 3, S Log 02:01: 2842 "bietet sie nicht an" und 6 s spaeter angenommen): nicht sofort, sondern nach
+  -- OFFER_RECHECK_S nochmal schauen. Nur wenn das Fenster beim selben NPC dann noch offen ist und die Quest weiter fehlt,
+  -- kommt sie raus und wird gemerkt. Fenster zu oder Quest jetzt da = nichts
+  local cand = {}
+  for _, a in ipairs(st.acts or {}) do
+    local who = a.k == "A" and a.qid and (ns.NpcName and ns.NpcName(a.npc, a.who) or a.who)
+    if who and who == nm and not (ns.logProgress and ns.logProgress[a.qid]) and not (ids and ids[a.qid]) then cand[#cand + 1] = a end
+  end
+  if #cand == 0 then return end
+  local gossip = ids ~= nil
+  C_Timer.After(OFFER_RECHECK_S, function()
+    local nm2 = ns.Api.U(UnitName, "npc")
+    if nm2 ~= nm then
+      if ns.TestLog then ns.TestLog("SCHRITT", ("Annehmen Pruefung bei %s: Fenster zu, nichts gemerkt"):format(nm)) end
+      return
+    end
+    local now = {}
+    local anyAvail = false
+    if gossip and C_GossipInfo and C_GossipInfo.GetAvailableQuests then
+      for _, q in ipairs(C_GossipInfo.GetAvailableQuests() or {}) do if q.questID then now[q.questID] = true; anyAvail = true end end
+      for _, q in ipairs(C_GossipInfo.GetActiveQuests() or {}) do if q.questID then now[q.questID] = true end end
+    elseif GetNumAvailableQuests then
+      anyAvail = GetNumAvailableQuests() > 0
+    end
+    for _, a in ipairs(cand) do
+      local still = not (ns.logProgress and ns.logProgress[a.qid]) and not now[a.qid] and (gossip or not anyAvail)
+      if still then
+        local pre = ns.MissingPre and ns.MissingPre(a.qid)
+        local why = pre and ((TR"Vorquest fehlt: %s"):format(tostring(pre.name or pre.id or "?"))) or TR"NPC bietet sie nicht an"
+        if ns.TestLog then ns.TestLog("SCHRITT", ("Annehmen geht nicht: %s bei %s (%s), Quest raus, gemerkt bis Level, Vorquest oder 1 Std"):format(tostring(a.quest), nm, why)) end
+        OfferNoSet(a.qid, pre)
+        ns.OptDropQuest(a.qid, why)
+      elseif ns.TestLog then
+        ns.TestLog("SCHRITT", ("Annehmen Pruefung bei %s: %s jetzt da, bleibt"):format(nm, tostring(a.quest)))
+      end
+    end
+  end)
 end
 
 -- Gossip Fenster (normale NPCs mit Text)
@@ -295,13 +363,13 @@ local function HandleGreeting()
 end
 
 local f = CreateFrame("Frame")
-f:RegisterEvent("GOSSIP_SHOW")
-f:RegisterEvent("QUEST_GREETING")
-f:RegisterEvent("QUEST_DETAIL")
-f:RegisterEvent("QUEST_PROGRESS")
-f:RegisterEvent("QUEST_COMPLETE")
-f:RegisterEvent("QUEST_ACCEPTED")
-f:RegisterEvent("QUEST_TURNED_IN")
+ns.RegEv(f, "GOSSIP_SHOW")
+ns.RegEv(f, "QUEST_GREETING")
+ns.RegEv(f, "QUEST_DETAIL")
+ns.RegEv(f, "QUEST_PROGRESS")
+ns.RegEv(f, "QUEST_COMPLETE")
+ns.RegEv(f, "QUEST_ACCEPTED")
+ns.RegEv(f, "QUEST_TURNED_IN")
 f:SetScript("OnEvent", function(_, event, ...)
   if not ns.db then return end
   if event == "GOSSIP_SHOW" then
@@ -340,6 +408,11 @@ f:SetScript("OnEvent", function(_, event, ...)
     else
       qid = a
       idx = C_QuestLog and C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(a)
+    end
+    -- 1.3v (P102 Punkt 3): angenommen = wird offensichtlich angeboten, Merker weg
+    if qid and ns.db and ns.db.offerNo and ns.db.offerNo[qid] then
+      ns.db.offerNo[qid] = nil
+      if ns.TestLog then ns.TestLog("SCHRITT", ("Quest %d doch angenommen, Merker \"bietet sie nicht an\" weg"):format(qid)) end
     end
     local title = idx and LogEntry(idx)
     if not title and qid and C_QuestLog and C_QuestLog.GetTitleForQuestID then
@@ -388,8 +461,48 @@ end
 
 -- XP aller fertigen Quests im Log, als waeren sie jetzt abgegeben
 -- gibt: XP gesamt, Level danach, Anteil im Level danach
+-- 1.3x (P108 Punkt 2, S 03:41: zweiter Teil im Balken fehlt): lief nur mit GetQuestLogTitle. Den gibt es im Forever
+-- Client (1.60) nicht mehr, darum war die Summe immer 0. Jetzt auch ueber C_QuestLog.GetInfo und IsComplete
+local function LogQuest(i)
+  if GetQuestLogTitle then
+    local _, qlevel, _, isHeader, _, isComplete, _, qid = GetQuestLogTitle(i)
+    return qid, qlevel, isHeader, (isComplete == 1 or isComplete == true)
+  end
+  if C_QuestLog and C_QuestLog.GetInfo then
+    local info = C_QuestLog.GetInfo(i)
+    if not info then return end
+    local qid = info.questID
+    local done = qid and C_QuestLog.IsComplete and C_QuestLog.IsComplete(qid)
+    return qid, info.level, info.isHeader, done and true or false
+  end
+end
+-- Wert aus dem Spiel, je Quest und Level einmal gemerkt (Auswahl im Questlog nur kurz und nicht im Kampf umstellen)
+local rewardXP = {}
+local function GameRewardXP(qid, logIndex)
+  if not (qid and GetQuestLogRewardXP) then return nil end
+  local L = UnitLevel and UnitLevel("player") or 0
+  local c = rewardXP[qid]
+  if c and c.L == L then return c.v end
+  local v
+  if SelectQuestLogEntry and GetQuestLogSelection and logIndex then
+    if InCombatLockdown and InCombatLockdown() then return c and c.v or nil end
+    local prev = GetQuestLogSelection()
+    pcall(SelectQuestLogEntry, logIndex)
+    local ok, r = pcall(GetQuestLogRewardXP)
+    if prev and prev > 0 then pcall(SelectQuestLogEntry, prev) end
+    v = ok and r or nil
+  else
+    local ok, r = pcall(GetQuestLogRewardXP, qid)
+    v = ok and r or nil
+  end
+  v = v and (ns.Plain and ns.Plain(v) or v) or nil
+  if type(v) ~= "number" then v = nil end
+  rewardXP[qid] = { L = L, v = v }
+  return v
+end
+ns.GameRewardXP = GameRewardXP
 function ns.PendingQuestXP()
-  if not GetQuestLogTitle or not ns.QuestXPAt then return 0 end
+  if not ns.QuestXPAt then return 0 end
   local L = UnitLevel("player") or 1
   if L >= 60 then return 0 end
   local cur = tonumber(UnitXP("player")) or 0
@@ -402,9 +515,12 @@ function ns.PendingQuestXP()
   end
   local sum, lv, xp = 0, L, cur
   for i = 1, (NumEntries() or 0) do
-    local _, qlevel, _, isHeader, _, isComplete, _, qid = GetQuestLogTitle(i)
-    if not isHeader and (isComplete == 1 or isComplete == true) and qid then
-      local g = ns.QuestXPAt(qid, qlevel, lv) or 0
+    local qid, qlevel, isHeader, isComplete = LogQuest(i)
+    if not isHeader and isComplete and qid then
+      -- 1.3z (P110 Punkt 5, S 05:18 "2450 XP, ist aber 5800"): die Belohnung zuerst aus dem Spiel (Forever gibt mehr als
+      -- die Daten), nur ohne Wert aus dem Spiel die Rechnung aus den Daten
+      local g = GameRewardXP(qid, i)
+      if not g or g <= 0 then g = ns.QuestXPAt(qid, qlevel, lv) or 0 end
       sum = sum + g
       xp = xp + g
       local need = Need(lv)
@@ -609,8 +725,8 @@ end
 -- bei Aenderungen im Log neu pruefen, gebremst
 local pending
 local qf = CreateFrame("Frame")
-qf:RegisterEvent("QUEST_LOG_UPDATE")
-qf:RegisterEvent("PLAYER_LEVEL_UP")
+ns.RegEv(qf, "QUEST_LOG_UPDATE")
+ns.RegEv(qf, "PLAYER_LEVEL_UP")
 qf:SetScript("OnEvent", function()
   if not ns.db or pending then return end
   pending = true
@@ -710,8 +826,8 @@ function ns.ZoneProgressLines(max)
 end
 
 local lf = CreateFrame("Frame")
-lf:RegisterEvent("QUEST_LOG_UPDATE")
-lf:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(lf, "QUEST_LOG_UPDATE")
+ns.RegEv(lf, "PLAYER_LOGIN")
 lf:SetScript("OnEvent", function()
   ns.ReadLog()
   -- Questziel fertig? Sofort weiter, nicht erst beim naechsten Takt

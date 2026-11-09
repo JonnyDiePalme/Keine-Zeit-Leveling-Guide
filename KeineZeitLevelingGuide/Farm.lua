@@ -9,6 +9,13 @@ local TR = ns.TR
 local CELL = 0.035       -- Rastergroesse auf der Zonenkarte
 local RESPAWN = 330      -- Sekunden bis ein Mob wieder da ist (Classic draussen ca 5 bis 6 Min)
 local LOOT_SEC = 2       -- Pluendern pro Kill
+-- 1.3zi (Pr 09:05 farm_v13zh: Schaetzung 1,4 bis 3,8 mal zu hoch, vor allem Kills je Std): Korrektur Faktor auf die Kills je
+-- Std. Start EST_F, danach aus deinen eigenen Messungen gelernt (db.farmCal, ab CAL_MIN_S Farmzeit und CAL_MIN_KILLS)
+local FCAL = { EST_F = 0.6, MIN = 0.25, MAX = 1.5, CAL_MIN_S = 600, CAL_MIN_KILLS = 10 }
+local function FarmCal()
+  local c = ns.db and tonumber(ns.db.farmCal)
+  return c or FCAL.EST_F
+end
 local CALLER = "ForeverWegweiser"
 
 local function Plain(v) if ns.Plain then return ns.Plain(v) end return v end
@@ -337,13 +344,13 @@ local function CountTargetKill()
 end
 
 local lf = CreateFrame("Frame")
-lf:RegisterEvent("LOOT_READY")
-lf:RegisterEvent("LOOT_OPENED")
-lf:RegisterEvent("LOOT_CLOSED")
-lf:RegisterEvent("PLAYER_TARGET_CHANGED")
-lf:RegisterEvent("PLAYER_MONEY")
-lf:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-if lf.RegisterUnitEvent then lf:RegisterUnitEvent("UNIT_HEALTH", "target") else lf:RegisterEvent("UNIT_HEALTH") end
+ns.RegEv(lf, "LOOT_READY")
+ns.RegEv(lf, "LOOT_OPENED")
+ns.RegEv(lf, "LOOT_CLOSED")
+ns.RegEv(lf, "PLAYER_TARGET_CHANGED")
+ns.RegEv(lf, "PLAYER_MONEY")
+ns.RegEv(lf, "UNIT_SPELLCAST_SUCCEEDED")
+if lf.RegisterUnitEvent then ns.RegUEv(lf, "UNIT_HEALTH", "target") else ns.RegEv(lf, "UNIT_HEALTH") end
 lf:SetScript("OnEvent", function(_, e, unit, _, spellID)
   if e == "LOOT_READY" or e == "LOOT_OPENED" then
     pcall(ReadLoot)
@@ -468,6 +475,22 @@ local function Estimate(m)
   return Formula(m), TR"Formel"
 end
 
+-- 1.3zzd (P133): alle gelernten Mobs (id, Kupfer pro Kill ohne Kuerschnern, Kills) zum Teilen
+function ns.NpcLearnedAll()
+  local db = DB()
+  local t = db and db.loot or {}
+  local k
+  return function()
+    while true do
+      local r
+      k, r = next(t, k)
+      if k == nil then return nil end
+      local v, n = Learned(r, false)
+      if v then return k, v, n end
+    end
+  end
+end
+
 -- Kupfer pro Kill, Gewicht 0 bis 1 wie sicher (1 = gelernt)
 function ns.NpcValue(id, m, skin)
   local db = DB()
@@ -479,6 +502,18 @@ function ns.NpcValue(id, m, skin)
     est, how = cm.m + cm.v, "cMaNGOS"
     if skin then for item, n in pairs(cm.s) do est = est + n * (ns.ItemValue(item) or 0) end end
   elseif how == TR"Formel" then est = est + (ns.DropValue(id)) end
+  -- 1.3zzd (P133): ohne eigene Beute ein geteilter Wert anderer Spieler (Median), als Schaetzung (Gewicht 0)
+  -- 1.3zzf (K 04:44): dazwischen die Startdaten gelernt: geteilt ab 2 Absendern, sonst gelernt, sonst geteilt von 1
+  if not (r and math.max(r.k or 0, r.kc or 0) > 0) then
+    local sv, sn = nil, 0
+    if ns.SharedValue then sv, sn = ns.SharedValue("k", id) end
+    local gv = ns.GelerntMob and ns.GelerntMob(id)
+    local pick = (sv and (sn or 0) >= ns.GELERNT.MIN_SENDERS) and sv or gv or sv
+    if pick then
+      est = pick
+      if skin and cm then for item, n in pairs(cm.s) do est = est + n * (ns.ItemValue(item) or 0) end end
+    end
+  end
   if r then
     local v, k = Learned(r, skin)
     if v then
@@ -606,7 +641,7 @@ function ns.FarmSpots(done)
         local walk = spacing * 0.6 / 7
         local own = 3600 / (kt + walk + LOOT_SEC)
         local cap = cnt * 3600 / RESPAWN
-        local kph = math.min(own, cap)
+        local kph = math.min(own, cap) * FarmCal()
         local names = {}
         for id, n in pairs(per) do table.insert(names, { id = id, n = n, name = npcInfo[id].name }) end
         table.sort(names, function(a, b) return a.n > b.n end)
@@ -784,6 +819,13 @@ function ns.FarmStop()
   if not s then return end
   local total, el, gph = ns.FarmMeasured()
   ns.farmSess = nil
+  -- 1.3zi: Schaetzung an der Messung lernen (halber Schritt, begrenzt)
+  if gph and s.est and s.est > 0 and el >= FCAL.CAL_MIN_S and (s.kills or 0) >= FCAL.CAL_MIN_KILLS and ns.db then
+    local c0 = FarmCal()
+    local c1 = math.max(FCAL.MIN, math.min(FCAL.MAX, c0 * math.sqrt(gph / s.est)))
+    ns.db.farmCal = c1
+    if ns.TestLog then ns.TestLog("FARM", ("Schaetzung gelernt: gemessen %d, geschaetzt %d je Std, Faktor %.2f auf %.2f"):format(math.floor(gph), math.floor(s.est), c0, c1)) end
+  end
   ns.Print((TR"Farmen beendet: %s in %d Min (Geld %s, Items %s), %d Kills%s."):format(ns.Money(total), math.floor(el / 60 + 0.5),
     ns.Money(s.copper), ns.Money(s.items), s.kills, gph and (", " .. ns.Money(gph) .. TR" pro Stunde") or ""))
   local o = ns.db and ns.db.opt

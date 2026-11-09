@@ -100,6 +100,6 @@ function ns.SetFontScale(v)
 end
 do
   local ff = CreateFrame("Frame")
-  ff:RegisterEvent("PLAYER_ENTERING_WORLD")
+  ns.RegEv(ff, "PLAYER_ENTERING_WORLD")
   ff:SetScript("OnEvent", function() ns.ApplyFontScale() end)
 end

@@ -1,4 +1,4 @@
-## Interface: 16000, 16001, 16002, 16100
+## Interface: 16001
 ## Title: Keine Zeit Leveling Guide Test Log
 ## Notes: Test Log fuer Keine Zeit Leveling Guide in einer eigenen Datei (verschluesselt, anonym). Nur fuer Tester.
 ## Author: jonnydiepalme

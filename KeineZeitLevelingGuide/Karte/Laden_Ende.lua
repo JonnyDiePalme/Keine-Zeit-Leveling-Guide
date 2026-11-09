@@ -7,10 +7,12 @@ do
   ns.TAXI = FWW_AUTO_TAXI and FWW_AUTO_TAXI[cl] or nil
   ns.AUSLOESER = FWW_AUTO_AUSLOESER and FWW_AUTO_AUSLOESER[cl] or nil
   ns.FRIEDHOF = FWW_AUTO_FRIEDHOF and FWW_AUTO_FRIEDHOF[cl] or nil
+  -- 1.3zf (Ka Stand 170, K 07:48): Ersatz Punkte fuer Orte ohne Weg (Wasser: Ufer, ex = -1: unerreichbar)
+  ns.ERSATZ = type(FWW_AUTO_ERSATZ) == "table" and FWW_AUTO_ERSATZ[cl] or nil
   -- 19.31: Daten in einem neueren Format, als der Code kennt: auch Flug, Ausloeser und Friedhof nicht nehmen
   local inf, K = ns.KARTE_INFO, ns.Karte
   local fm = type(inf) == "table" and tonumber(inf.format)
-  if fm and K and K.FORMAT_MAX and fm > K.FORMAT_MAX then ns.TAXI, ns.AUSLOESER, ns.FRIEDHOF = nil, nil, nil end
+  if fm and K and K.FORMAT_MAX and fm > K.FORMAT_MAX then ns.TAXI, ns.AUSLOESER, ns.FRIEDHOF, ns.ERSATZ = nil, nil, nil, nil end
 end
 -- 19.31: Server Daten (Quest XP und Geld), nur wenn das Format bekannt ist
 do
@@ -46,6 +48,7 @@ ns.KARTE_SAVE = nil
 FWW_AUTO_KARTE_RAW, FWW_AUTO_KARTE, FWW_AUTO_KARTE_INFO = S.raw, S.tab, S.info
 FWW_AutoKarte, FWW_AutoKarteFrei = S.f, S.fr
 FWW_AUTO_TAXI, FWW_AUTO_AUSLOESER, FWW_AUTO_FRIEDHOF = S.taxi, S.aus, S.fh
+FWW_AUTO_ERSATZ = S.er
 FWW_AUTO_SERVER, FWW_AUTO_SERVER_INFO = S.srv, S.srvi
 FWW_AUTO_ZAUBER = S.zb
 -- 19.31 (Editor Addon): FWW_EDITOR_API und die alten Namen FWW_AutoKarte, FWW_AutoKarteFrei, FWW_AUTO_KARTE_INFO zum Lesen (siehe Karte.lua)

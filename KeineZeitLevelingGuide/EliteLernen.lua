@@ -103,7 +103,7 @@ end
 
 if CreateFrame then
   local f = CreateFrame("Frame")
-  f:RegisterEvent("PLAYER_DEAD")
+  ns.RegEv(f, "PLAYER_DEAD")
   f:SetScript("OnEvent", function() pcall(OnDeath) end)
 end
 if ns.Ticker then ns.Ticker(60, function() pcall(Tick) end)

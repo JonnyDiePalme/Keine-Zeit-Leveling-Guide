@@ -103,7 +103,7 @@ end
 -- Knopf am Haendler Fenster
 local btn
 local mf = CreateFrame("Frame")
-mf:RegisterEvent("MERCHANT_SHOW")
+ns.RegEv(mf, "MERCHANT_SHOW")
 mf:SetScript("OnEvent", function()
   if not (Active() and MerchantFrame) then if btn then btn:Hide() end; return end
   if not btn then

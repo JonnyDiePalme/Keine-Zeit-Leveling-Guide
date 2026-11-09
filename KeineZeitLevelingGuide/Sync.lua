@@ -16,6 +16,8 @@ local PREFIX = "FWWege"
 local TAG = "FW1"
 -- 17.4: gemessene Flugzeiten (Flights.lua), eigene Kennung und eigener Praefix: aeltere Versionen sehen sie nicht
 local FTAG, FPREFIX = "FWF", "FWFlug"
+-- 1.3h (P91): Berufs Raten (Berufe.lua), eigene Kennung und eigener Praefix
+local RTAG, RPREFIX = "FWR", "FWRate"
 local floor = math.floor
 local EMPTY = {}
 local CA, CD = W.CA, W.CD
@@ -29,6 +31,10 @@ ns.SyncStats = S
 local chanState = "off"   -- off, join, ok, secret (nicht lesbar), broken (geht nicht)
 local joinedAt
 local sendsNoEcho = 0
+-- 1.3zj (Pr 10:25, K 10:44 Punkt 2): eigene Sendungen ohne Echo zaehlen erst nach NOECHO.WAIT_S, ab NOECHO.N davon ist der
+-- Kanal kaputt, auch wenn fremde Nachrichten lesbar sind (sonst sendet das Addon fuer immer ins Leere)
+local NOECHO = { N = 3, WAIT_S = 15 }
+local sendAt = {}
 local cq, gq = {}, {}     -- Warteschlangen: Kanal (nur bei Klick oder Taste) und Gilde/Gruppe
 local lastChan = 0
 
@@ -203,7 +209,7 @@ local function HW()
   local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
   if not send then return end
   local ok = pcall(send, m.text, "CHANNEL", nil, id)
-  if ok then S.sent = S.sent + 1; sendsNoEcho = sendsNoEcho + 1 end
+  if ok then S.sent = S.sent + 1; sendsNoEcho = sendsNoEcho + 1; sendAt[#sendAt + 1] = now end
 end
 ns.SyncHW = HW
 
@@ -363,21 +369,39 @@ local function Fallback(kind)
     ns.Print(TR"Wege teilen: Auf diesem Server kann Keine Zeit Leveling Guide den versteckten Kanal nicht nutzen. Wege gehen jetzt nur über Gilde und Gruppe.")
   end
 end
+-- 1.3h (P91, K 04:00): KANAL Zeile: Name (gekuerzt), beigetreten ja nein, Nummer. Einmal je Ergebnis und Sitzung
+local kanalLogged
+local function KanalLog(what)
+  if not ns.TestLog then return end
+  local id = ChanId()
+  local key = what .. tostring(id)
+  if kanalLogged == key then return end
+  kanalLogged = key
+  ns.TestLog("KANAL", ("Name %s***, %s, beigetreten %s, Nummer %s"):format(CHAN:sub(1, 3), what, id and "ja" or "nein", tostring(id or "-")))
+end
+-- 1.3zy (P128, K 01:50 und 01:55, S Log 19:03 bis 23:17: 4 Std "Kanal 0", keine KANAL Zeile): die alte Sperre (syncNoChan,
+-- 7 Tage still) ist weg. Bei jedem Einloggen einmal neu versuchen, jedes Ergebnis steht im Log. Faellt der Kanal in der
+-- Sitzung aus (geheim oder kaputt), bleibt er bis zum naechsten Einloggen aus
+local joinTried = false
 local function Join()
-  if not Enabled() then return end
+  if not Enabled() then KanalLog("aus: Einstellung Wege teilen aus"); return end
   local db = ns.db
   local nc = db.syncNoChan
-  if nc and nc.build == Build() and time() - (nc.t or 0) < 7 * 86400 then chanState = nc.kind or "secret"; return end
-  if chanState == "secret" or chanState == "broken" then return end
-  if ChanId() then chanState = "ok"; HideChan(); joinedAt = joinedAt or GetTime(); return end
+  if nc and not joinTried then
+    KanalLog(("neuer Versuch, vorher aus seit %s, Grund %s"):format(date and date("%d.%m. %H:%M", nc.t or 0) or "?", tostring(nc.kind)))
+    db.syncNoChan = nil
+  end
+  joinTried = true
+  if chanState == "secret" or chanState == "broken" then KanalLog("aus in dieser Sitzung: " .. chanState); return end
+  if ChanId() then chanState = "ok"; HideChan(); joinedAt = joinedAt or GetTime(); KanalLog("schon drin"); return end
   local join = JoinTemporaryChannel or JoinChannelByName
-  if not join then chanState = "broken"; return end
+  if not join then chanState = "broken"; KanalLog("nicht beigetreten: keine Beitritts Funktion im Client"); return end
   chanState = "join"
   joinedAt = GetTime()
   pcall(join, CHAN)
   C_Timer.After(3, function()
-    if ChanId() then chanState = "ok"; HideChan()
-    elseif chanState == "join" then chanState = "off" end
+    if ChanId() then chanState = "ok"; HideChan(); KanalLog("neu verbunden")
+    elseif chanState == "join" then chanState = "off"; KanalLog("Beitritt ging nicht") end
   end)
 end
 ns.SyncJoin = Join
@@ -385,8 +409,17 @@ ns.SyncJoin = Join
 -- nach 10 Minuten im Kanal: nichts lesbar und (geheime Werte oder das eigene Echo kommt nie) -> nur Gilde und Gruppe
 local function CheckChan()
   if chanState ~= "ok" or not joinedAt then return end
-  if GetTime() - joinedAt < 600 or S.readable > 0 then return end
-  if S.secret > 0 then Fallback("secret") elseif sendsNoEcho >= 3 then Fallback("broken") end
+  local now, old = GetTime(), 0
+  for _, t in ipairs(sendAt) do if now - t >= NOECHO.WAIT_S then old = old + 1 end end
+  -- 1.3zy (P128 Punkt 3): kommt etwas Lesbares im Kanal an (von anderen), geht er, auch wenn das eigene Echo fehlt
+  if old >= NOECHO.N and (S.readable or 0) == 0 then
+    if ns.TestLog then ns.TestLog("SYNC", ("Kanal: %d eigene Sendungen ohne Echo und nichts lesbar, Kanal gilt als kaputt"):format(old)) end
+    KanalLog("aus: kein Echo und nichts lesbar")
+    Fallback("broken")
+    return
+  end
+  if now - joinedAt < 600 or S.readable > 0 then return end
+  if S.secret > 0 then KanalLog("aus: Kanal Werte geheim"); Fallback("secret") elseif sendsNoEcho >= NOECHO.N then KanalLog("aus: kein Echo nach 10 Min"); Fallback("broken") end
 end
 
 function ns.ToggleShareWays()
@@ -409,13 +442,16 @@ function ns.ToggleShareWays()
 end
 
 function ns.SyncState() return chanState, #cq, #gq end
+-- 1.3zy (P128): fuer die NACHRICHT Zeile im Log
+function ns.SyncChanInfo() return chanState, S.readable or 0, S.secret or 0 end
 
 -- andere Daten ueber denselben Weg (17.4: Flugzeiten): Kanal bei Klick oder Taste, Gilde und Gruppe mit eigenem Praefix
 function ns.SyncQueue(text, kind)
   if not Enabled() or type(text) ~= "string" then return end
   local t = GetTime()
   if chanState == "ok" or chanState == "join" then cq[#cq + 1] = { text = text, t = t } end
-  gq[#gq + 1] = { text = text, t = t, prefix = kind == "flights" and FPREFIX or nil }
+  gq[#gq + 1] = { text = text, t = t, prefix = (kind == "flights" and FPREFIX) or (kind == "rates" and RPREFIX)
+    or (kind == "data" and ns.DATA_SHARE and ns.DATA_SHARE.PREFIX) or nil }
 end
 
 -- Flugzeiten empfangen: gleiche Sperren wie bei den Wegen (stumm, ignoriert, doppelt ueber Kanal und Gilde)
@@ -435,6 +471,48 @@ local function OnFlights(text, sender)
   if ok and took then S.flights = (S.flights or 0) + took end
 end
 ns.SyncFlightsIn = OnFlights
+-- 1.3h (P91): Raten empfangen, gleiche Sperren wie Flugzeiten. Je Absender hoechstens RATE_IN_MAX in der Stunde
+local RATE_IN_MAX = 20
+local rateIn = {}
+local function OnRates(text, sender)
+  if not Enabled() or not ns.ProfRatesReceive then return end
+  sender = Norm(sender)
+  if not sender or sender == Me() or muted[sender] then return end
+  local db = ns.db
+  local ig = db.syncIgnore and db.syncIgnore[sender]
+  if ig and time() - ig < 30 * 86400 then return end
+  local now = GetTime()
+  local dk = sender .. "\1" .. text
+  if seen[dk] and now - seen[dk] < 900 then return end
+  seen[dk] = now
+  local r = rateIn[sender]
+  if not r or now - r.t > 3600 then r = { t = now, n = 0 }; rateIn[sender] = r end
+  r.n = r.n + 1
+  if r.n > RATE_IN_MAX then if ns.MsgReject then ns.MsgReject("Raten: zu viele") end return end
+  local ok, took, why = pcall(ns.ProfRatesReceive, text, Hash(sender:lower()) % 4096)
+  if ok and took then
+    S.rates = (S.rates or 0) + 1
+    S.senders[sender] = true
+  elseif ns.MsgReject then ns.MsgReject("Raten: " .. tostring(ok and why or "Fehler")) end
+end
+ns.SyncRatesIn = OnRates
+-- 1.3zzd (P133): geteilte Daten (Teilen.lua), gleiche Sperren wie Raten, Absender nur als Kennzahl
+local function OnData(text, sender)
+  if not Enabled() or not ns.DataShareReceive then return end
+  sender = Norm(sender)
+  if not sender or sender == Me() or muted[sender] then return end
+  local db = ns.db
+  local ig = db.syncIgnore and db.syncIgnore[sender]
+  if ig and time() - ig < 30 * 86400 then return end
+  local now = GetTime()
+  local dk = sender .. "\1" .. text
+  if seen[dk] and now - seen[dk] < 900 then return end
+  seen[dk] = now
+  local ok, took, why = pcall(ns.DataShareReceive, text, Hash(sender:lower()) % 4096)
+  if ok and took then S.senders[sender] = true
+  elseif ns.MsgReject then ns.MsgReject("Daten: " .. tostring(ok and why or "Fehler")) end
+end
+ns.SyncDataIn = OnData
 -- fuer Tests
 ns.SyncGuildTick, ns.SyncCheckChan = GuildTick, CheckChan
 function ns.SyncQueues() return cq, gq end
@@ -505,10 +583,10 @@ local function SetupKeys()
 end
 
 local ef = CreateFrame("Frame")
-ef:RegisterEvent("PLAYER_ENTERING_WORLD")
-ef:RegisterEvent("CHAT_MSG_CHANNEL")
-ef:RegisterEvent("CHAT_MSG_ADDON")
-ef:RegisterEvent("PLAYER_REGEN_ENABLED")
+ns.RegEv(ef, "PLAYER_ENTERING_WORLD")
+ns.RegEv(ef, "CHAT_MSG_CHANNEL")
+ns.RegEv(ef, "CHAT_MSG_ADDON")
+ns.RegEv(ef, "PLAYER_REGEN_ENABLED")
 ef:SetScript("OnEvent", function(_, ev, ...)
   if ev == "CHAT_MSG_CHANNEL" then
     if not Enabled() then return end
@@ -519,25 +597,38 @@ ef:SetScript("OnEvent", function(_, ev, ...)
     S.readable = S.readable + 1
     if type(text) ~= "string" then return end
     if text:sub(1, 3) == FTAG then
-      if Norm(sender) == Me() then S.echo = S.echo + 1; sendsNoEcho = 0; return end
+      if Norm(sender) == Me() then S.echo = S.echo + 1; sendsNoEcho = 0; sendAt = {}; return end
       ns.SyncFlightsIn(text, sender)
       return
     end
+    if ns.DATA_SHARE and text:sub(1, 3) == ns.DATA_SHARE.TAG then
+      if Norm(sender) == Me() then S.echo = S.echo + 1; sendsNoEcho = 0; sendAt = {}; return end
+      OnData(text, sender)
+      return
+    end
+    if text:sub(1, 3) == RTAG then
+      if Norm(sender) == Me() then S.echo = S.echo + 1; sendsNoEcho = 0; sendAt = {}; return end
+      OnRates(text, sender)
+      return
+    end
     if text:sub(1, 3) ~= TAG then return end
-    if Norm(sender) == Me() then S.echo = S.echo + 1; sendsNoEcho = 0; return end
+    if Norm(sender) == Me() then S.echo = S.echo + 1; sendsNoEcho = 0; sendAt = {}; return end
     OnPayload(text, sender)
   elseif ev == "CHAT_MSG_ADDON" then
     local prefix, text, _, sender = ...
-    if Secret(prefix) or (prefix ~= PREFIX and prefix ~= FPREFIX) then return end
+    local DP = ns.DATA_SHARE and ns.DATA_SHARE.PREFIX
+    if Secret(prefix) or (prefix ~= PREFIX and prefix ~= FPREFIX and prefix ~= RPREFIX and prefix ~= DP) then return end
     if Secret(text) or Secret(sender) then return end
     if prefix == FPREFIX then ns.SyncFlightsIn(text, sender); return end
+    if prefix == RPREFIX then OnRates(text, sender); return end
+    if prefix == DP then OnData(text, sender); return end
     OnPayload(text, sender)
   elseif ev == "PLAYER_REGEN_ENABLED" then
     if inited and not kf then SetupKeys() end
   elseif ev == "PLAYER_ENTERING_WORLD" then
     if inited then return end
     inited = true
-    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX); pcall(C_ChatInfo.RegisterAddonMessagePrefix, FPREFIX) end
+    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX); pcall(C_ChatInfo.RegisterAddonMessagePrefix, FPREFIX); pcall(C_ChatInfo.RegisterAddonMessagePrefix, RPREFIX); if ns.DATA_SHARE then pcall(C_ChatInfo.RegisterAddonMessagePrefix, ns.DATA_SHARE.PREFIX) end end
     SetupFilters()
     SetupKeys()
     if WorldFrame and WorldFrame.HookScript then WorldFrame:HookScript("OnMouseDown", function() pcall(HW) end) end

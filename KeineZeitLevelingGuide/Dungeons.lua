@@ -236,7 +236,27 @@ local function Q(id, k)
   -- 19.34 (Pruefer 09:42 LEICHT 4): Vorquest Ketten mit der Daten Korrektur (vorquest_fehlt), wie die Route
   if k == "preQuestSingle" and ns.DKPreSingle then return ns.DKPreSingle(id, v) end
   if k == "preQuestGroup" and ns.DKPreGroup then return ns.DKPreGroup(id, v) end -- 19.34 (vorquest_1934): negative Id
+  -- 1.3q (Daten 13): Quest fehlt in Questie ganz, Name aus der Korrektur (Questie geht vor)
+  if k == "name" and ns.DKMissQuest then
+    local fq = ns.DKMissQuest(id, v ~= nil)
+    if fq then return fq.name end
+  end
   return v
+end
+-- 1.3q: Questlevel und Mindestlevel, fuer Quests ohne Questie Eintrag aus der Korrektur. Gibt ok, ql, rl wie pcall
+local function QLv(qid)
+  local ok, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
+  if ok and ql then return ok, ql, rl end
+  local fq = ns.DKMissQuest and ns.DKMissQuest(qid, false)
+  if fq and fq.level then return true, fq.level, fq.min or fq.level end
+  return ok, ql, rl
+end
+-- 1.3q: Geber aus der Korrektur, nur wenn Questie keinen hat (by leer). Gibt Name, Zone (uiMap), x, y, innen
+local function DKGiverOf(qid, by)
+  local has = by and ((by[1] and by[1][1]) or (by[2] and by[2][1])) and true or false
+  local g = ns.DKGiver and ns.DKGiver(qid, has)
+  if not g then return nil end
+  return g.name, g.map, g.x, g.y, g.innen
 end
 local function N(id, k) local ok, v = pcall(QDB.QueryNPCSingle, id, k); if ok then return v end end
 local function O(id, k)
@@ -263,7 +283,7 @@ end
 local function Allowed(qid)
   local _, _, classID = UnitClass("player")
   local _, _, raceID = UnitRace("player")
-  local rc, rr = Q(qid, "requiredClasses"), Q(qid, "requiredRaces")
+  local rc, rr = Q(qid, "requiredClasses"), ns.DKRaces(qid, Q(qid, "requiredRaces"))
   if rc and rc > 0 and classID and not HasBit(rc, classID - 1) then return false end
   if rr and rr > 0 and raceID and not ns.RaceOK(rr, raceID) then return false end
   return true
@@ -344,13 +364,31 @@ function ns.BuildDungeonIndex(done)
       if d and Allowed(qid) then table.insert(d.quests, qid) end
     end
     if i < #ids then C_Timer.After(0, SafeStep); return end
+    -- 1.3q (Daten 13): Quests, die Questie gar nicht hat, aus der Korrektur in ihren Dungeon (nur eigene Fraktion)
+    if ns.DKMissQuestIds then
+      local fac = UnitFactionGroup and UnitFactionGroup("player")
+      for _, qid in ipairs(ns.DKMissQuestIds()) do
+        local okN, nm = pcall(QDB.QueryQuestSingle, qid, "name")
+        local fq = ns.DKMissQuest(qid, okN and nm ~= nil)
+        if fq and fq.dungeon and (not fq.fac or fq.fac == fac) then
+          for _, d in ipairs(list) do
+            if d.key == fq.dungeon or d.name == fq.dungeon then
+              local dup = false
+              for _, q0 in ipairs(d.quests) do if q0 == qid then dup = true end end
+              if not dup then table.insert(d.quests, qid); d.dkQ = d.dkQ or {}; d.dkQ[qid] = true end
+              break
+            end
+          end
+        end
+      end
+    end
     -- unbekannte Dungeons: Level aus den Quests, ohne Quests weglassen
     for k = #list, 1, -1 do
       local d = list[k]
       if d.auto then
         local lo, hi
         for _, qid in ipairs(d.quests) do
-          local ok, ql = pcall(QLib.GetEffectiveQuestLevel, qid)
+          local ok, ql = QLv(qid)
           if ok and ql then lo = math.min(lo or ql, ql); hi = math.max(hi or ql, ql) end
         end
         if lo then d.min, d.max = math.max(1, lo - 3), hi + 2 else table.remove(list, k) end
@@ -387,8 +425,8 @@ function ns.BuildDungeonIndex(done)
     for _, d in ipairs(raids) do table.insert(both, d) end
     for _, d in ipairs(both) do
       table.sort(d.quests, function(a, b)
-        local okA, la = pcall(QLib.GetEffectiveQuestLevel, a)
-        local okB, lb = pcall(QLib.GetEffectiveQuestLevel, b)
+        local okA, la = QLv(a)
+        local okB, lb = QLv(b)
         return (okA and la or 0) < (okB and lb or 0)
       end)
     end
@@ -437,7 +475,7 @@ local function Who(by)
 end
 
 function ns.QuestReqLevel(qid)
-  local ok, ql, rl = pcall(function() return QLib.GetEffectiveQuestLevel(qid) end)
+  local ok, ql, rl = QLv(qid)
   if ok then return ql, rl end
 end
 
@@ -450,7 +488,7 @@ function ns.QuestStatus(qid)
     if p and p.complete then return "ready", TR"|cff40ff40fertig, abgeben|r" end
     return "log", TR"|cff4dccffim Log|r"
   end
-  local okL, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
+  local okL, ql, rl = QLv(qid)
   local L = UnitLevel("player")
   if okL and rl and L < rl then return "level", (TR"|cffff5050ab Level %d|r"):format(rl) end
   local repOk, repTxt = true, nil
@@ -692,7 +730,7 @@ function ns.DungeonCounts(d)
     local st = ns.QuestStatus(qid)
     if st == "done" then done = done + 1 else
       open = open + 1
-      local ok, _, rl = pcall(function() return QLib.GetEffectiveQuestLevel(qid) end)
+      local ok, _, rl = QLv(qid)
       if ok and rl and rl > need then need = rl end
     end
   end
@@ -716,12 +754,20 @@ function ns.QuestName(qid) if QDB then return Q(qid, "name") end end
 -- Alles zu einer Quest fuer die Detail Seite
 function ns.DungeonQuestInfo(qid)
   if not QDB then return { name = TR"Quest " .. qid } end
-  local okL, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
+  local okL, ql, rl = QLv(qid)
   local st, stText = ns.QuestStatus(qid)
   local by, fin = Q(qid, "startedBy"), Q(qid, "finishedBy")
   local gName, gZone = Who(by)
   local fName, fZone = Who(fin)
   local gm, gx, gy = Where(by)
+  -- 1.3q: Geber aus der Korrektur (nur wenn Questie keinen hat)
+  local kn, km, kx, ky, kin = DKGiverOf(qid, by)
+  local gZoneText
+  if kn then
+    gName, gZone = kn, km
+    if km and kx then gm, gx, gy = km, kx, ky end
+    if kin then gZoneText = (TR"im Dungeon %s"):format(kin) end
+  end
   local chain = ns.QuestChain(qid)
   local cnames = {}
   for i, id in ipairs(chain) do cnames[i] = { id = id, name = Q(id, "name") or (TR"Quest " .. id), st = (ns.QuestStatus(id)) } end
@@ -729,7 +775,7 @@ function ns.DungeonQuestInfo(qid)
   if type(text) == "table" then text = table.concat(text, " ") end
   return {
     id = qid, name = Q(qid, "name") or (TR"Quest " .. qid), level = okL and ql or 0, req = okL and rl or 0,
-    st = st, stText = stText, giver = gName, giverZone = gZone and ns.ZoneName(gZone), ender = fName, enderZone = fZone and ns.ZoneName(fZone),
+    st = st, stText = stText, giver = gName, giverZone = gZoneText or (gZone and ns.ZoneName(gZone)), ender = fName, enderZone = fZone and ns.ZoneName(fZone),
     gm = gm, gx = gx, gy = gy, chain = cnames, text = type(text) == "string" and text or nil,
   }
 end
@@ -746,7 +792,7 @@ function ns.DungeonLines(d)
     local st = ns.QuestStatus(qid)
     if st ~= "done" then
       open = open + 1
-      local okL, _, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
+      local okL, _, rl = QLv(qid)
       if okL and rl and rl > need then need = rl end
       if st == "rep" and ns.RepCheck then local _, t = ns.RepCheck(qid); if t then reps[t] = true end end
       if st == "pre" then pres = pres + 1 end
@@ -782,13 +828,22 @@ function ns.DungeonLines(d)
   local shown = {}
   for _, qid in ipairs(d.quests) do
     if not shown[qid] then
-      local okL, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
+      local okL, ql, rl = QLv(qid)
       local _, st = ns.QuestStatus(qid)
       table.insert(out, ("|cffffffff[%d] %s|r  %s"):format(okL and ql or 0, Q(qid, "name") or (TR"Quest " .. qid), st))
-      local gName, gZone = Who(Q(qid, "startedBy"))
+      local sb = Q(qid, "startedBy")
+      local gName, gZone = Who(sb)
       local fName, fZone = Who(Q(qid, "finishedBy"))
-      table.insert(out, (TR"     |cff9d9d9dGeber: %s%s, Abgabe: %s%s|r"):format(gName, gZone and (" (" .. ns.ZoneName(gZone) .. ")") or "",
+      local gTxt = gZone and (" (" .. ns.ZoneName(gZone) .. ")") or ""
+      -- 1.3q: Geber aus der Korrektur (nur wenn Questie keinen hat)
+      local kn, km, _, _, kin = DKGiverOf(qid, sb)
+      if kn then
+        gName = kn
+        gTxt = kin and (" (" .. (TR"im Dungeon %s"):format(kin) .. ")") or (km and (" (" .. ns.ZoneName(km) .. ")") or "")
+      end
+      table.insert(out, (TR"     |cff9d9d9dGeber: %s%s, Abgabe: %s%s|r"):format(gName, gTxt,
         fName, fZone and (" (" .. ns.ZoneName(fZone) .. ")") or ""))
+      if d.dkQ and d.dkQ[qid] then table.insert(out, TR"     |cff9d9d9dNur aus dem Dungeon Journal: Ziele unbekannt, nicht in der Route.|r") end
       local chain = ns.QuestChain(qid)
       if #chain > 1 then
         local parts = {}
@@ -809,6 +864,42 @@ end
 ------------------------------------------------------------
 -- Route: Vorquests und Annehmen, Eingang, Abgeben
 ------------------------------------------------------------
+-- 1.3zc (Pr 07:00, K 07:02): DUNGEON Zeilen kamen bei jedem Nachfuehren (alle 20 s), jetzt nur wenn sich der Text aendert
+local dungLogLast = {}
+local function DungLogOnce(name, key, text)
+  if not ns.TestLog then return end
+  local k = tostring(name) .. "|" .. key
+  if dungLogLast[k] == text then return end
+  dungLogLast[k] = text
+  ns.TestLog("DUNGEON", text)
+end
+
+-- 1.3zg (Pr 08:15, alle Dungeons): nur Quests, die du annehmen kannst (Klasse, Volk, Beruf wie die Leveling Route), und
+-- je Dungeon Quest hoechstens ns.DUNG_PRE_MAX offene Vorquests draussen (58er Dungeons hatten 25 bis 30 Quests mit Ketten)
+ns.DUNG_PRE_MAX = ns.DUNG_PRE_MAX or 1
+local dungProf
+local function DungCanTake(qid)
+  local _, _, cid = UnitClass("player")
+  local _, _, rid = UnitRace("player")
+  local rc = Q(qid, "requiredClasses")
+  if type(rc) == "number" and rc > 0 and cid and ns.HasBit and not ns.HasBit(rc, cid - 1) then return false, "Klasse" end
+  local rr = Q(qid, "requiredRaces")
+  if ns.DKRaces then rr = ns.DKRaces(qid, rr) end
+  if type(rr) == "number" and rr > 0 and rid and ns.RaceOK and not ns.RaceOK(rr, rid) then return false, "Volk" end
+  local sk = Q(qid, "requiredSkill")
+  if type(sk) == "table" and sk[1] then
+    if dungProf == nil then
+      local ok, m = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestieProfessions")
+      dungProf = ok and m or false
+    end
+    if dungProf and dungProf.HasProfessionAndSkillLevel then
+      local ok, hp, hl = pcall(dungProf.HasProfessionAndSkillLevel, dungProf, sk)
+      if ok and not (hp and hl) then return false, "Beruf" end
+    end
+  end
+  return true
+end
+
 function ns.DungeonRoute(d)
   local tools = ns.OptTools and ns.OptTools()
   if not tools or not d.entrance then return nil, TR"keine Daten" end
@@ -821,6 +912,10 @@ function ns.DungeonRoute(d)
   local any = setmetatable({}, { __index = function() return true end })
   local L = UnitLevel("player")
   local nodes, byQ = {}, {}
+  -- 1.3zu (P121, S Log 19:03 bis 22:09 Stadt Dalaran: 3x "Annehmen Heart of Disruption" beim gleichen Geber): gleiche Quest
+  -- (gleicher Name beim gleichen Geber) nur einmal annehmen. Die erste aus der Liste bleibt (Questie Reihenfolge), nimmst
+  -- du eine andere ID davon an, zaehlt sie als dieselbe (ActDone, Zwilling)
+  local seenAN = {}
   local function Node(kind, q, map, x, y, dur, extra)
     local c, wx, wy = tools.World(map, x, y)
     if not c then return nil end
@@ -849,23 +944,89 @@ function ns.DungeonRoute(d)
     if st == "done" then return nil end
     -- jetzt nicht annehmbar (Level zu tief, Ruf fehlt): gar nicht einplanen, sonst haengt die Route am Annehmen
     if st == "level" or st == "rep" then byQ[qid] = false; return nil end
+    -- 1.3q: Quest nur aus der Korrektur (Questie hat sie nicht): Ziele unbekannt, nicht in die Route
+    if d.dkQ and d.dkQ[qid] then byQ[qid] = false; return nil end
+    -- 1.3zu (P121): der Geber hat sie dir nicht angeboten (ns.OfferNo, Quest.lua): nicht wieder einplanen
+    if st ~= "log" and st ~= "ready" and ns.OfferNo and ns.OfferNo(qid) then
+      byQ[qid] = false
+      DungLogOnce(d.name, "offerNo" .. qid, ("%s: Quest %d wurde nicht angeboten, nicht in der Route"):format(tostring(d.name), qid))
+      return nil
+    end
+    if st ~= "log" and st ~= "ready" then
+      local okT, why = DungCanTake(qid)
+      if not okT then
+        byQ[qid] = false
+        -- 1.3zx (Pr 01:35: alle 20 s die gleiche Zeile aus DungTick): nur bei Aenderung ins Log
+        DungLogOnce(d.name, "take" .. qid, ("%s: Quest %d nicht annehmbar (%s), nicht in der Route"):format(tostring(d.name), qid, tostring(why)))
+        return nil
+      end
+    end
+    local chain = ns.QuestChain(qid)
+    if isDungeonQuest and st ~= "log" and st ~= "ready" then
+      local open = 0
+      for _, pid in ipairs(chain) do
+        if pid == qid then break end
+        if ns.QuestStatus(pid) ~= "done" then open = open + 1 end
+      end
+      if open > ns.DUNG_PRE_MAX then
+        byQ[qid] = false
+        DungLogOnce(d.name, "pre" .. qid, ("%s: Quest %d braucht %d offene Vorquests (hoechstens %d), nicht in der Route"):format(tostring(d.name), qid, open, ns.DUNG_PRE_MAX))
+        return nil
+      end
+    end
     local q = { id = qid, name = Q(qid, "name") or (TR"Quest " .. qid) }
     local e = {}
     byQ[qid] = e
     -- Vorquests zuerst (geht eine davon noch nicht, faellt die ganze Quest weg)
-    local chain = ns.QuestChain(qid)
     local prevT
+    local preTs = {}
     for _, pid in ipairs(chain) do
       if pid == qid then break end
       local pe = AddQuest(pid, false)
       if not pe and ns.QuestStatus(pid) ~= "done" then byQ[qid] = false; return nil end
       if pe and pe.T then prevT = pe.T end
     end
+    -- 1.3zg (Pr 08:15: Uldaman 726 braucht 725, Todesminen 92752 Gruppe 92751): die Kette nimmt nur die erste Vorquest.
+    -- Hier alle: Gruppe = jede erledigt oder eingeplant, Einzeln = eine davon. Sonst faellt die Quest weg
     if st ~= "log" and st ~= "ready" then
-      local m, x, y, who = Place(Q(qid, "startedBy"))
-      if not m then return nil end
-      e.A = Node("A", q, m, x, y, 8, { who = who })
-      if prevT and e.A then table.insert(e.A.preds, prevT) end
+      local function PreOK(pid)
+        if ns.QuestStatus(pid) == "done" then return true end
+        local pe = AddQuest(pid, false)
+        if pe and pe.T then preTs[#preTs + 1] = pe.T end
+        return pe ~= nil
+      end
+      local pg = Q(qid, "preQuestGroup")
+      for _, pid in ipairs(type(pg) == "table" and pg or {}) do
+        if type(pid) == "number" and pid > 0 and not PreOK(pid) then byQ[qid] = false; return nil end
+      end
+      local ps = Q(qid, "preQuestSingle")
+      if type(ps) == "table" and #ps > 0 then
+        local anyP = false
+        for _, pid in ipairs(ps) do if type(pid) == "number" and pid > 0 and PreOK(pid) then anyP = true; break end end
+        if not anyP then byQ[qid] = false; return nil end
+      end
+    end
+    if st ~= "log" and st ~= "ready" then
+      local sb = Q(qid, "startedBy")
+      local m, x, y, who = Place(sb)
+      -- 1.3q: Geber aus der Korrektur, wenn Questie keinen hat. Geber im Dungeon: Annehmen drinnen, kein eigener Schritt
+      local kn, km, kx, ky, kin = nil, nil, nil, nil, nil
+      if not m then kn, km, kx, ky, kin = DKGiverOf(qid, sb) end
+      if not m and kn and km and kx then m, x, y, who = km, kx, ky, kn end
+      if not m and not (kn and kin and isDungeonQuest) then byQ[qid] = false; return nil end
+      if m then
+        local anKey = tostring(q.name) .. "|" .. tostring(who)
+        local twin = seenAN[anKey]
+        if twin and twin ~= qid then
+          byQ[qid] = false
+          DungLogOnce(d.name, "dupA" .. qid, ("%s: Quest %d gleich wie %d (%s bei %s), nur einmal in der Route"):format(tostring(d.name), qid, twin, tostring(q.name), tostring(who)))
+          return nil
+        end
+        seenAN[anKey] = qid
+        e.A = Node("A", q, m, x, y, 8, { who = who })
+        if prevT and e.A then table.insert(e.A.preds, prevT) end
+        for _, pt in ipairs(preTs) do if e.A and pt ~= prevT then table.insert(e.A.preds, pt) end end
+      end
     end
     -- fertig im Log: nur noch abgeben, nicht nochmal zum Eingang
     if isDungeonQuest and st ~= "ready" then
@@ -897,7 +1058,7 @@ function ns.DungeonRoute(d)
 
   local count = 0
   for _, qid in ipairs(d.quests) do
-    local okL, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
+    local okL, ql, rl = QLv(qid)
     -- nur was bis zum Dungeon Level machbar ist
     if not (okL and rl and rl > math.max(L + 3, d.max)) then
       if AddQuest(qid, true) then count = count + 1 end
@@ -918,19 +1079,41 @@ function ns.DungeonRoute(d)
   local done, order = {}, {}
   local cur = { c = pc, wx = pwx, wy = pwy, map = mapID, x = px, y = py }
   local left = #nodes
+  -- 1.3zu (P122, S Bild 23:22 Kloster aus Orgrimmar: Zeppelin UC, Annehmen, Zeppelin Org, Donnerfels, Zeppelin UC): erst alles,
+  -- was auf dem jetzigen Kontinent bereit ist, dann einmal den Kontinent wechseln. Gilt fuer alle Dungeons
   while left > 0 do
-    local best, bd
+    local best, bd, sameC = nil, nil, false
     for _, n in ipairs(nodes) do
       if not done[n] then
         local ready = true
         for _, p in ipairs(n.preds) do if not done[p] then ready = false; break end end
         if ready then
+          local same = n.c == cur.c
           local dd = Dist(cur, n)
-          if not bd or dd < bd then best, bd = n, dd end
+          if (same and not sameC) or (same == sameC and (not bd or dd < bd)) then best, bd, sameC = n, dd, same end
         end
       end
     end
-    if not best then break end
+    -- 1.3v (P102 Punkt 5, S Log Gnomeregan: nur Annehmen in der Route, Eingang, Ziele und Abgaben fehlten): bleibt die
+    -- Reihenfolge haengen (Vorgaenger im Kreis oder nie erreichbar), nicht abbrechen, sondern den Knoten mit den wenigsten
+    -- offenen Vorgaengern nehmen und es ins Log schreiben
+    if not best then
+      local bn
+      for _, n in ipairs(nodes) do
+        if not done[n] then
+          local open = 0
+          for _, p in ipairs(n.preds) do if not done[p] then open = open + 1 end end
+          local dd = Dist(cur, n)
+          if not best or open < bn or (open == bn and dd < bd) then best, bn, bd = n, open, dd end
+        end
+      end
+      if not best then break end
+      if ns.TestLog then
+        local miss = {}
+        for _, p in ipairs(best.preds) do if not done[p] then miss[#miss + 1] = tostring(p.kind) .. " " .. tostring(p.qid) end end
+        DungLogOnce(d.name, "hang" .. tostring(best.kind) .. tostring(best.qid), ("%s: Reihenfolge haengt, nehme %s %s trotzdem (offen: %s)"):format(tostring(d.name), tostring(best.kind), tostring(best.qid), table.concat(miss, ", ")))
+      end
+    end
     done[best] = true
     table.insert(order, best)
     cur = best
@@ -957,13 +1140,15 @@ function ns.DungeonRoute(d)
     t = t + Dist(prev, n) / speed + n.dur
     local acts
     if n.kind == "D" then
-      acts = n.acts
+      acts = n.acts or {}
     elseif n.kind == "O" then
       acts = { { k = "O", qid = n.qid, quest = n.quest, obj = n.obj, count = n.count } }
     else
       acts = { { k = n.kind, qid = n.qid, quest = n.quest, who = n.who } }
     end
-    if last and last.map == n.map and Dist(last, n) < 25 then
+    if #acts == 0 then
+      -- 1.3zg (Pr 08:15 Lua Fehler MiniRoute 79): Eingang ohne Ziele (alles schon fertig) wird kein eigener Schritt
+    elseif last and last.map == n.map and Dist(last, n) < 25 then
       for _, a in ipairs(acts) do table.insert(last.acts, a) end
     else
       last = { map = n.map, x = n.x, y = n.y, c = n.c, wx = n.wx, wy = n.wy, acts = {}, t = t, lvl = L, dungeon = (n.kind == "D") and d.name or nil }
@@ -973,6 +1158,12 @@ function ns.DungeonRoute(d)
     prev = n
   end
   for _, s in ipairs(steps) do s.c, s.wx, s.wy = nil, nil, nil end
+  if ns.TestLog then
+    local kc = {}
+    for _, n in ipairs(order) do kc[n.kind] = (kc[n.kind] or 0) + 1 end
+    DungLogOnce(d.name, "sum", ("%s: %d Schritte, Annehmen %d, Eingang %d, Ziele draussen %d, Abgaben %d (Knoten %d, in Reihenfolge %d)"):format(
+      tostring(d.name), #steps, kc.A or 0, kc.D or 0, kc.O or 0, kc.T or 0, #nodes, #order))
+  end
   return steps, { title = TR"Dungeon: " .. d.name, quests = count, sec = t, target = d.max }
 end
 

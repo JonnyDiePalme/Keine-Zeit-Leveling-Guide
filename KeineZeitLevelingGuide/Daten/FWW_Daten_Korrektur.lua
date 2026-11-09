@@ -1,17 +1,22 @@
 -- Forever Wegweiser Daten Korrektur (schreibt der Daten Chat, liest das Addon). Nur Daten, kein Code.
--- Stand 2026-11-06 20:20 Daten 9 (Pr: 95216 braucht 451; Daten 8: Rath'mael Reihe 356, 99156, 92422). Davor 2026-11-01 13:25 Daten 7. Quellen: QuestieDB 1.0.7 (QuestieDB_Vanilla.toc und QuestieDB_Forever.toc aus _classic_era_\Interface\AddOns,
+-- Stand 2026-11-07 20:45 Daten 15 (Pr, P101: 98095 braucht 98094, Masoj gibt seine Quest erst nach Darthalias Befehl). Daten 14 (Pr: 6185 kein_gegner_npc 11878, Nathanos ist nur zu finden, kein Kampf Ziel). Daten 13 (Pr, S 17:05: Lueckenfueller aus Dungeon Abgleich, fehlt_quest 95787, fehlt_geber 78699 95250 95775 95795 95809 96395 96987; Questie geht immer vor). Daten 12 (Pr: neues Feld fraktion fuer 1198, P96). Daten 11 (Pr: 8 Forever Dungeon Vorquests aus Abgleich mit DungeonJournal, je nur die eine Pflicht Vorquest: 92457, 92458, 95682, 95776, 95809, 98815, 98823, 98824). Daten 10 (Pr: Schlafsack Reihe 79007/79008, 79192, 79980, 79974, 79975, 79976). Daten 9: 95216 braucht 451; Daten 8: Rath'mael Reihe 356, 99156, 92422). Davor 2026-11-01 13:25 Daten 7. Quellen: QuestieDB 1.0.7 (QuestieDB_Vanilla.toc und QuestieDB_Forever.toc aus _classic_era_\Interface\AddOns,
 -- bzw. Sim Claude\ForeverWegweiser_Sim\daten\realf\rdb_forever.lua als entpackte Forever Fassung), VMaNGOS 1.12 (mangos.sqlite aus dem Gelaende
 -- Cache, deckt nur Vanilla Inhalte ab, keine Forever eigenen Zonen/Quests) als zweite Quelle fuer Drops, Elite und Vorquests.
 -- Aufbau: alle = gilt fuer Era und Forever, era und forever = nur dort (ueberschreibt alle fuer dieselbe Nummer).
 -- quest[id]: ueberspringen (allein nicht planen), kein_gegner_npc (Kill oder Sprech Ziel ist kein Gegner),
 --   dropper_nicht_fuers_level (diese Mobs nicht fuers Gegner Level und nicht als Ziel Ort nehmen, es gibt passende),
+--   fehlt_quest (NEU Daten 13, nur Lueckenfueller: Quest fehlt in Questie ganz. Felder name, level, min, fraktion, geber, map, x, y, dungeon.
+--     Nur nutzen, wenn Questie die Quest NICHT kennt. Ziele sind unbekannt, also nur fuer Dungeon Liste und Hinweis, nicht als Route Schritt),
+--   fehlt_geber (NEU Daten 13, nur Lueckenfueller: Questgeber fehlt in Questie. Felder name, objekt (true = Objekt statt NPC), map, x, y
+--     (uiMap 0 bis 1) oder innen = Dungeon Name (Geber steht drin, dann Eingang nehmen). Nur nutzen, wenn Questie keinen Geber hat),
+--   fraktion ("Alliance" oder "Horde": nur diese Seite darf die Quest sehen, wenn Questie keine Rassen Maske hat; NEU Daten 12, braucht Co),
 --   vorquest_fehlt (Liste zusaetzlicher Vorquest IDs, die die Route beim Annehmen nicht kennt, VMaNGOS verlangt sie; ODER mit vorhandenen Vorquests).
 -- item[id]: nur_objekt (nur aus Objekt, keine Gegner), dropper_entfernen (Mob droppt das nicht), kein_kampf (von freundlichem NPC).
 -- npc[id]: kein_gegner (dieser NPC ist in keiner Quest ein echtes Kampf Ziel, auch wenn er als Kill oder Sprech Ziel auftaucht).
 -- Jeder Eintrag hat grund und quelle in FWW_Daten_Korrektur_Gruende.md. Unbekannte Felder ignorieren, Datei kann fehlen.
 FWW_DATEN_KORREKTUR = {
   format = 1,
-  stand = "2026-11-06 20:20 Daten 9",
+  stand = "2026-11-07 20:45 Daten 15",
   alle = {
     quest = {
       [10] = { vorquest_fehlt = { 82 } },
@@ -109,6 +114,7 @@ FWW_DATEN_KORREKTUR = {
       [1134] = { dropper_nicht_fuers_level = { 4015, 5928 } },
       [1150] = { vorquest_fehlt = { 1149 } },
       [1183] = { vorquest_fehlt = { 1182 } },
+      [1198] = { fraktion = "Alliance" },
       [1204] = { dropper_nicht_fuers_level = { 4399 } },
       [1206] = { dropper_nicht_fuers_level = { 4380 } },
       [1249] = { kein_gegner_npc = { 4962 }, vorquest_fehlt = { 1248 } },
@@ -206,6 +212,7 @@ FWW_DATEN_KORREKTUR = {
       [6001] = { kein_gegner_npc = { 12144 } },
       [6002] = { kein_gegner_npc = { 12144 } },
       [6128] = { dropper_nicht_fuers_level = { 3236 } },
+      [6185] = { kein_gegner_npc = { 11878 } },
       [6385] = { vorquest_fehlt = { 6384 } },
       [6441] = { dropper_nicht_fuers_level = { 4619, 10647 } },
       [6646] = { dropper_nicht_fuers_level = { 11659 } },
@@ -344,6 +351,8 @@ FWW_DATEN_KORREKTUR = {
   },
   forever = {
     quest = {
+
+      -- Schlafsack Reihe (Co P85, 1.3): Questie hat keine Vorquest, Kette ueber Start und Ziel Objekte belegt
       [38] = { dropper_nicht_fuers_level = { 462, 1809, 4154, 4158, 115, 573 } },
       [102] = { dropper_nicht_fuers_level = { 125, 453, 506, 566 } },
       [278] = { dropper_nicht_fuers_level = { 2476 } },
@@ -364,7 +373,15 @@ FWW_DATEN_KORREKTUR = {
       [5145] = { dropper_nicht_fuers_level = { 5317, 12477, 12478, 12498, 1047, 1050, 1756, 10363, 10683, 12476, 12479 } },
       [8412] = { dropper_nicht_fuers_level = { 1811 } },
       [65610] = { dropper_nicht_fuers_level = { 3931 } },
+      [78699] = { fehlt_geber = { name = "Dead Drop", objekt = true, map = 1421, x = 0.471, y = 0.711 } },
+      [79192] = { vorquest_fehlt = { 79007, 79008 } },
+      [79974] = { vorquest_fehlt = { 79980 } },
+      [79975] = { vorquest_fehlt = { 79974 } },
+      [79976] = { vorquest_fehlt = { 79975 } },
+      [79980] = { vorquest_fehlt = { 79192 } },
       [92422] = { vorquest_fehlt = { 99156 } },
+      [92457] = { vorquest_fehlt = { 92432 } },
+      [92458] = { vorquest_fehlt = { 92432 } },
       [92466] = { dropper_nicht_fuers_level = { 252076, 252666 } },
       [92472] = { vorquest_fehlt = { 92470 } },
       [92514] = { kein_gegner_npc = { 254089 } },
@@ -378,6 +395,14 @@ FWW_DATEN_KORREKTUR = {
       [93963] = { kein_gegner_npc = { 7937, 2784, 7999 } },
       [94267] = { dropper_nicht_fuers_level = { 11659 } },
       [94466] = { dropper_nicht_fuers_level = { 3458 } },
+      [95216] = { vorquest_fehlt = { 451 } },
+      [95250] = { fehlt_geber = { name = "Captain Truman", innen = "Ruins of Lordaeron" } },
+      [95682] = { vorquest_fehlt = { 95663 } },
+      [95775] = { fehlt_geber = { name = "Kin'weelay", map = 1434 } },
+      [95776] = { vorquest_fehlt = { 95773 } },
+      [95787] = { fehlt_quest = { name = "Take Two With Water", level = 40, min = 30, fraktion = "Alliance", geber = "Loremaster Dibbs", map = 1424, x = 0.506, y = 0.571, dungeon = "The Drowned City" } },
+      [95795] = { fehlt_geber = { name = "Daewyn Songblade", innen = "Excavation Site: Wetlands" } },
+      [95809] = { vorquest_fehlt = { 95647 }, fehlt_geber = { name = "Ardin Grassman", innen = "Excavation Site: Wetlands" } },
       [96031] = { kein_gegner_npc = { 1466 } },
       [96044] = { kein_gegner_npc = { 1241 } },
       [96045] = { kein_gegner_npc = { 1246 } },
@@ -390,6 +415,7 @@ FWW_DATEN_KORREKTUR = {
       [96058] = { kein_gegner_npc = { 1702 } },
       [96059] = { kein_gegner_npc = { 11065 } },
       [96102] = { kein_gegner_npc = { 2855 } },
+      [96395] = { fehlt_geber = { name = "Ghostly Attendant", innen = "Hall of Thanes" } },
       [96626] = { kein_gegner_npc = { 1430 } },
       [96629] = { kein_gegner_npc = { 1699 } },
       [96634] = { kein_gegner_npc = { 6286 } },
@@ -397,6 +423,7 @@ FWW_DATEN_KORREKTUR = {
       [96655] = { kein_gegner_npc = { 3191 }, vorquest_fehlt = { 95998, 96101, 96604, 96605, 96606, 96607, 96608 } },
       [96658] = { kein_gegner_npc = { 265944 } },
       [96661] = { kein_gegner_npc = { 3067 } },
+      [96987] = { fehlt_geber = { name = "Rexxie Copperclutch", innen = "City of Dalaran" } },
       [97899] = { kein_gegner_npc = { 11046 } },
       [97900] = { kein_gegner_npc = { 3174 } },
       [97901] = { kein_gegner_npc = { 11066 } },
@@ -461,13 +488,15 @@ FWW_DATEN_KORREKTUR = {
       [97971] = { kein_gegner_npc = { 257024 } },
       [97972] = { kein_gegner_npc = { 251991 } },
       [97973] = { kein_gegner_npc = { 251991 } },
+      [98095] = { vorquest_fehlt = { 98094 } },
       [98284] = { kein_gegner_npc = { 257020 } },
       [98285] = { kein_gegner_npc = { 251684 } },
       [98286] = { kein_gegner_npc = { 257020 } },
       [98287] = { kein_gegner_npc = { 11026 } },
-
+      [98815] = { vorquest_fehlt = { 484 } },
+      [98823] = { vorquest_fehlt = { 95664 } },
+      [98824] = { vorquest_fehlt = { 95810 } },
       [99156] = { vorquest_fehlt = { 356 } },
-      [95216] = { vorquest_fehlt = { 451 } },
     },
     item = {
       [2447] = { nur_objekt = true, dropper_entfernen = { 275703, 275708, 276099 } },

@@ -134,6 +134,14 @@ local function NautTimes(l, side)
   local cycle = math.fmod(since, rtt)
   local wait = math.fmod(off - cycle, rtt)
   if wait < 0 then wait = wait + rtt end
+  -- 1.3v (P105 Punkt 3, S 03:04 "Timer der Schiff Abfahrt stimmt nicht"): rohe Nauticus Werte merken, das Navi schreibt
+  -- sie mit der Vorschau ins Log (since = Nauticus GetKnownCycle, off = Zeit der Plattform im Umlauf, rtt = Umlauf)
+  -- 1.3za: dazu die Zeit der anderen Plattform (q), um zu sehen, ob Seite a und b vertauscht sind
+  local okQ, offQ = false, nil
+  if q and q.index then okQ, offQ = pcall(N.GetCycleByIndex, N, id, q.index) end
+  ns.lastNautRaw = { id = id, side = side, idx = p.index, since = since, off = off, rtt = rtt, wait = wait, at = GetTime(),
+    idxQ = q and q.index, offQ = okQ and type(offQ) == "number" and offQ or nil,
+    sync = (type(N.lastSync) == "number" and N.lastSync) or (type(N.syncTime) == "number" and N.syncTime) or nil }
   local ride
   if q and q.index then
     local okA, arr = pcall(N.GetCycleByIndex, N, id, q.index - 1)
@@ -165,11 +173,13 @@ end
 
 -- live: wann faehrt das naechste ab (nil wenn Nauticus den Takt nicht kennt)
 function ns.TravelDeparts(linkId, side, li)
-  if li and LINKS[li] then local w = NautTimes(LINKS[li], side); return w end
+  -- 1.3zu (P123): dazu Fahrzeit und Umlauf (fuer die Abfahrt bei spaeterer Ankunft)
+  if li and LINKS[li] then return NautTimes(LINKS[li], side) end
+  -- 1.3zz (Pr 02:33, Block Abfahrten leer am Steg): Navi Abschnitte geben die Verbindung selbst mit
+  if type(linkId) == "table" then return NautTimes(linkId, side) end
   for _, l in ipairs(LINKS) do
     if l.id == linkId then
-      local wait = NautTimes(l, side)
-      return wait
+      return NautTimes(l, side)
     end
   end
 end
@@ -436,7 +446,7 @@ end
 local portedAt = -999
 do
   local pf = CreateFrame("Frame")
-  pf:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+  ns.RegEv(pf, "UNIT_SPELLCAST_SUCCEEDED")
   pf:SetScript("OnEvent", function(_, _, unit, _, spellID)
     if unit == "player" and (spellID == 8690 or spellID == 556 or spellID == 3567 or spellID == 3566 or spellID == 3563
       or spellID == 3565 or spellID == 3562 or spellID == 3561 or spellID == 18960) then portedAt = GetTime() end
@@ -474,7 +484,7 @@ ns.Ticker(1, function()
 end)
 
 local f = CreateFrame("Frame")
-f:RegisterEvent("PLAYER_ENTERING_WORLD")
+ns.RegEv(f, "PLAYER_ENTERING_WORLD")
 f:SetScript("OnEvent", function()
   local inst, typ = Inst()
   local fromMap = lastPos and lastPos[1]
@@ -497,7 +507,7 @@ end)
 
 -- Abklingzeit vom Ruhestein messen (Forever kann sie anders haben als Classic)
 local hf = CreateFrame("Frame")
-hf:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+ns.RegEv(hf, "UNIT_SPELLCAST_SUCCEEDED")
 hf:SetScript("OnEvent", function(_, _, unit, _, spellID)
   if unit ~= "player" then return end
   spellID = ns.Api.Num(spellID)

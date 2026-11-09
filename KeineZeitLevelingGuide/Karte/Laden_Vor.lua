@@ -8,10 +8,12 @@ local ADDON, ns = ...
 -- 1.2e (P47): nur Forever, kein Era Teil mehr
 ns.KARTE_CLIENT = "forever"
 ns.KARTE_SAVE = { raw = FWW_AUTO_KARTE_RAW, tab = FWW_AUTO_KARTE, info = FWW_AUTO_KARTE_INFO, f = FWW_AutoKarte, fr = FWW_AutoKarteFrei,
-  taxi = FWW_AUTO_TAXI, aus = FWW_AUTO_AUSLOESER, fh = FWW_AUTO_FRIEDHOF, srv = FWW_AUTO_SERVER, srvi = FWW_AUTO_SERVER_INFO, zb = FWW_AUTO_ZAUBER }
+  taxi = FWW_AUTO_TAXI, aus = FWW_AUTO_AUSLOESER, fh = FWW_AUTO_FRIEDHOF, er = FWW_AUTO_ERSATZ, srv = FWW_AUTO_SERVER, srvi = FWW_AUTO_SERVER_INFO, zb = FWW_AUTO_ZAUBER }
 FWW_AUTO_KARTE_RAW, FWW_AUTO_KARTE, FWW_AUTO_KARTE_INFO = {}, {}, nil
 -- 19.21: Flugdaten, Ausloeser (Dungeon Eingaenge) und Friedhoefe (Werkzeug Stand 49), je Client in Flug/Ausloeser/Friedhof.lua
 FWW_AUTO_TAXI, FWW_AUTO_AUSLOESER, FWW_AUTO_FRIEDHOF = nil, nil, nil
+-- 1.3zf (Ka Stand 170): Ersatz Punkte (Karte\Forever\Ersatz.lua)
+FWW_AUTO_ERSATZ = nil
 -- 19.31: Server Daten 1.12 (Werkzeug Stand 58, Karte\Server.lua, gleich fuer beide Clients): Quest XP und Geld
 FWW_AUTO_SERVER, FWW_AUTO_SERVER_INFO = nil, nil
 -- 19.31: Zauber fuers Reisetempo und XP Buffs (Werkzeug Stand 60, Karte\Zauber.lua, gleich fuer beide Clients)

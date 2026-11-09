@@ -135,3 +135,16 @@ ns.PAINT_XLINK = {
   {1422,0.3581,0.7424,1422,0.3849,0.7141}, {1422,0.6749,0.8503,1422,0.6829,0.8045}, {1423,0.0735,0.4111,1423,0.1418,0.3042}, {1424,0.6417,0.4154,1424,0.6047,0.4012}, {1426,0.3351,0.7054,1426,0.3591,0.6214}, {1429,0.7243,0.7250,1429,0.7715,0.7206},
   {1429,0.2999,0.7773,1429,0.2687,0.7729}, {1434,0.3751,0.1247,1434,0.3978,0.0939}, {1434,0.3841,0.2313,1434,0.4052,0.2392},
 }
+
+-- 1.3c (P85, S 00:05 und Wunsch 01.11.: Schlafsack Reihe als eigener Punkt, nur Forever): besondere Ziele. Je Eintrag nur
+-- Daten: Belohnung (Item), die letzte Quest der Reihe (die Kette davor kommt aus Questie plus Daten Korrektur Daten 10,
+-- vorquest_fehlt), ab welchem Level es in Mein Weg steht, und ein Haendler, der es auch verkauft (Rueckfall)
+ns.SPECIALS = {
+  schlafsack = {
+    item = 211527,            -- Cozy Sleeping Bag
+    lastQuest = 79976,        -- letzte Quest der Reihe (Belohnung)
+    level = 14,               -- in Mein Weg ab Level 14
+    forever = true,
+    vendor = { npc = 214954, map = 1434, x = 0.285, y = 0.758 }, -- Rix Xizzix, Schlingendorntal
+  },
+}

@@ -191,6 +191,60 @@ local function HasRaw(ui)
   local a = ns.AUTO_KARTE
   if type(a) == "table" then return a[ui] ~= nil end
 end
+-- 1.3zf (K 07:16 und 07:48, Ka Stand 170 Ersatz.lua, Format absprache\wege_logik.md 07:32): je Ort ohne Weg (Quest
+-- Geber, Gegner, Objekt) der naechste erreichbare Punkt. ns.ERSATZ[ui] = { x, y, ex, ey, yd, art, grund, ... } je 7 Werte,
+-- Karten Koordinaten 0..1. grund w = tiefes Wasser (ex/ey ist ein Ufer Punkt), m = Wand/Fels, a = abgehaengt. ex = -1:
+-- unerreichbar (nie als Ziel). K.Ersatz sucht den Eintrag bis K.ERSATZ_MATCH_YD um x/y. Ohne Datei: nichts, wie vorher
+K.ERSATZ_MATCH_YD = 5
+K.ERSATZ_CELL = 0.01
+local ersIdx = {}
+local function ErsIndex(ui)
+  local idx = ersIdx[ui]
+  if idx ~= nil then return idx end
+  local E = ns.ERSATZ
+  local l = type(E) == "table" and E[ui]
+  if type(l) ~= "table" or #l < 7 then ersIdx[ui] = false; return false end
+  idx = {}
+  local C = K.ERSATZ_CELL
+  for i = 1, #l - 6, 7 do
+    local x, y = tonumber(l[i]), tonumber(l[i + 1])
+    if x and y then
+      local k = math.floor(x / C) * 1000 + math.floor(y / C)
+      local b = idx[k] or {}
+      b[#b + 1] = i
+      idx[k] = b
+    end
+  end
+  ersIdx[ui] = idx
+  return idx
+end
+-- gibt ex, ey, yd, grund zurueck; ex = -1 heisst unerreichbar. nil = kein Eintrag
+function K.Ersatz(ui, x, y)
+  if not (ui and x and y) or x ~= x or y ~= y then return nil end
+  local idx = ErsIndex(ui)
+  if not idx then return nil end
+  local l = ns.ERSATZ[ui]
+  local w, h = Yards(ui)
+  local C = K.ERSATZ_CELL
+  local cx, cy = math.floor(x / C), math.floor(y / C)
+  local best, bd
+  for dx = -1, 1 do
+    for dy = -1, 1 do
+      for _, i in ipairs(idx[(cx + dx) * 1000 + (cy + dy)] or {}) do
+        local d = math.sqrt(((l[i] - x) * w) ^ 2 + ((l[i + 1] - y) * h) ^ 2)
+        if d <= K.ERSATZ_MATCH_YD and (not bd or d < bd) then best, bd = i, d end
+      end
+    end
+  end
+  if not best then return nil end
+  return tonumber(l[best + 2]), tonumber(l[best + 3]), tonumber(l[best + 4]), l[best + 6]
+end
+-- Ufer bzw erreichbarer Ersatz Punkt (nur wenn es einen gibt, nicht bei unerreichbar)
+function K.Ufer(ui, x, y)
+  local ex, ey, yd = K.Ersatz(ui, x, y)
+  if ex and ex >= 0 and ey then return ex, ey, yd end
+end
+
 function K.HasZone(ui)
   if not (ui and K.Ok()) then return false end
   ui = Parent(ui)
@@ -384,6 +438,29 @@ local function BuildFields(ui, d)
       if a and b and v and v >= 1 and v <= 8 then cl[a * 90 + b] = v - 1 end
     end
     for k, v in pairs(ConvSet(ui, cl)) do if not B[k] then F.cliff[k] = v end end
+  end
+  -- 1.3e (P66, Ka Stand 168 cH, abs wege_logik 00:32): Fallhoehe in yd je Klippen Feld, je 3 Zeichen (Feld wie c, Hoehe
+  -- PAINT_ABC Index 1 bis 89). LineFree laesst eine Klippe bergab nur frei, wenn die Hoehe hoechstens JumpMax ist
+  local ch = d.cH
+  if ch and D then
+    local hs = {}
+    for p = 1, #ch - 2, 3 do
+      local a, b, v = D[byte(ch, p)], D[byte(ch, p + 1)], D[byte(ch, p + 2)]
+      if a and b and v and v >= 1 then hs[a * 90 + b] = v end
+    end
+    F.cliffH = ConvSet(ui, hs)
+  end
+  -- 1.3r (P99, Ka Stand 169 fk, abs wege_logik 04:18): feine Sperre je Feld, 8 x 8 Unterfelder. Je 13 Zeichen: Feld
+  -- (2 Zeichen wie c), dann 11 Zeichen = 64 Bit, 6 Bit je Zeichen, erstes Zeichen Bit 0 bis 5. Bit = Zeile * 8 + Spalte
+  -- (Zeile 0 Norden, Spalte 0 Westen), 1 = zu. Gemerkt als Text je Feld, Bits erst beim Pruefen
+  local fk = d.fk
+  if fk and D then
+    local fs = {}
+    for p = 1, #fk - 12, 13 do
+      local a, b = D[byte(fk, p)], D[byte(fk, p + 1)]
+      if a and b then fs[a * 90 + b] = fk:sub(p + 2, p + 12) end
+    end
+    F.fine = ConvSet(ui, fs)
   end
   -- 19.9 Werkzeug Stand 36: Hang (viele steile Stellen, kein Berg). Das Netz meidet ihn, die Luftlinie ist dort nicht frei
   F.hang = {}
@@ -857,15 +934,59 @@ local function DirOf(dx, dy)
   return floor(math.atan2(dy, dx) / (math.pi / 4) + 0.5) % 8
 end
 local HANG_RUN = 2
+-- 1.3r (P99): feine Sperre (F.fine) entlang der Strecke abtasten, ca 1/8 Feld je Schritt (hoechstens FINE_MAX_STEPS).
+-- Das Unterfeld vom Start und vom Ziel zaehlt nicht (du stehst dort, das Ziel liegt dort). Eigene Spur im Feld (db.walk)
+-- und Freigaben (Overrides 2 und 3) heben die Sperre auf. db.feinSperre = false schaltet es aus
+local FINE_SUB, FINE_MAX_STEPS = 8, 600
+local function FineBit(str, bit)
+  local D = DEC or Dec()
+  local v = D and D[byte(str, floor(bit / 6) + 1) or 0]
+  if not v then return false end
+  return floor(v / 2 ^ (bit % 6)) % 2 == 1
+end
+local function SubOf(x, y)
+  local gx, gy = x / CELL, y / CELL
+  local cx, cy = floor(gx), floor(gy)
+  local col, row = floor((gx - cx) * FINE_SUB), floor((gy - cy) * FINE_SUB)
+  if col > FINE_SUB - 1 then col = FINE_SUB - 1 end
+  if row > FINE_SUB - 1 then row = FINE_SUB - 1 end
+  return cx, cy, row * FINE_SUB + col
+end
+local function FineFree(ui, x1, y1, x2, y2, F, ov)
+  local FI = F.fine
+  if not FI or not next(FI) then return true end
+  local db = ns.db
+  if db and db.feinSperre == false then return true end
+  local walked = db and db.walk and db.walk[ui] or EMPTY
+  local len = sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2)
+  local n = math.min(FINE_MAX_STEPS, math.max(1, math.ceil(len / (CELL / FINE_SUB))))
+  local scx, scy, sb = SubOf(x1, y1)
+  local ecx, ecy, eb = SubOf(x2, y2)
+  for i = 1, n - 1 do
+    local f = i / n
+    local cx, cy, bit = SubOf(x1 + (x2 - x1) * f, y1 + (y2 - y1) * f)
+    if cx >= 0 and cy >= 0 and cx < N and cy < N then
+      local k = Key(cx, cy)
+      local str = FI[k]
+      if str and not walked[k] and ov[k] ~= 2 and ov[k] ~= 3
+        and not (cx == scx and cy == scy and bit == sb) and not (cx == ecx and cy == ecy and bit == eb) and FineBit(str, bit) then
+        return false
+      end
+    end
+  end
+  return true
+end
+K.FineFree = FineFree
+
 local function LineFree(ui, x1, y1, x2, y2, F)
   F = F or ns.Felder(ui)
   local B, Wt, C, Hg = F.block, F.water, F.cliff, F.hang or EMPTY
-  if not (next(B) or next(Wt) or next(C) or next(Hg)) then return true end
+  if not (next(B) or next(Wt) or next(C) or next(Hg) or (F.fine and next(F.fine))) then return true end
   local ov = (W() and W().Overrides(ui)) or EMPTY
   local db = ns.db
   local own = db and db.walkDir and db.walkDir[ui] or EMPTY
   local s, t = Key(Cell(x1, y1)), Key(Cell(x2, y2))
-  if s == t then return true end
+  if s == t then return FineFree(ui, x1, y1, x2, y2, F, ov) end
   local dir = DirOf(x2 - x1, y2 - y1)
   -- alle Felder, durch die die echte Linie geht, der Reihe nach (nicht von Feldmitte zu Feldmitte): so ist ein Stueck
   -- der Linie nie schlechter als die ganze (sonst springt der Pfeil zwischen Luftlinie und Umweg hin und her)
@@ -931,7 +1052,7 @@ local function LineFree(ui, x1, y1, x2, y2, F)
       pk = k
     end
   end
-  return true
+  return FineFree(ui, x1, y1, x2, y2, F, ov)
 end
 K.LineFree = LineFree
 
@@ -1723,6 +1844,11 @@ end
 local reachSet = {}
 function K.ReachOK(ui, x, y)
   if not (ui and x and y) or x ~= x or y ~= y then return true end
+  -- 1.3zf (Ka K1): Ersatz Liste sagt unerreichbar (ex = -1) oder es gibt einen erreichbaren Ersatz Punkt
+  do
+    local ex = K.Ersatz(ui, x, y)
+    if ex then return ex >= 0 end
+  end
   local ck = ui .. ":" .. (ns.blockRev or 0)
   local S = reachSet[ck]
   if S == nil then
@@ -2967,7 +3093,7 @@ end
 do
   local f = CreateFrame and CreateFrame("Frame")
   if f then
-    f:RegisterEvent("PLAYER_ENTERING_WORLD")
+    ns.RegEv(f, "PLAYER_ENTERING_WORLD")
     -- 19.31 (Hardcore Fall): das Ereignis erst abmelden, wenn das Vorbereiten wirklich startet. Sind die Daten beim
     -- ersten Mal noch nicht bereit, beim naechsten Ereignis oder nach 5 s nochmal (hoechstens 6 mal)
     local tries = 0

@@ -197,8 +197,10 @@ local function MakeChart(parent, title)
   -- values: Zahlen, labels: Text unter den Balken (optional), hi: Index hervorheben
   function c.Set(values, labels, hi, col, emptyText)
     local n = #values
-    for _, b in ipairs(c.bars) do b:Hide() end
-    for _, l in ipairs(c.labels) do l:Hide() end
+    -- 1.3z (P110 Punkt 1, zweimal "jetzt"): Beschriftungen sind lueckenhaft (nur jede n-te), ipairs hoerte bei der ersten
+    -- Luecke auf und alte blieben stehen. Darum pairs
+    for _, b in pairs(c.bars) do b:Hide() end
+    for _, l in pairs(c.labels) do l:Hide() end
     local w, h = c.area:GetWidth(), c.area:GetHeight()
     if not w or w <= 0 or not h or h <= 0 then return end
     c.mid:ClearAllPoints()
@@ -516,7 +518,8 @@ local function Refresh()
     local labels = {}
     for i = 1, #g.rates do
       local ago = (#g.rates - i) * 2
-      labels[i] = (ago % 10 == 0) and (ago == 0 and TR"jetzt" or ("-" .. ago)) or nil
+      -- 1.3z (P110 Punkt 1): Uhrzeit statt "jetzt" und "-10" (S Bild: zweimal "jetzt")
+      labels[i] = (ago % 10 == 0) and (ago == 0 and TR"jetzt" or (date and time and date("%H:%M", time() - ago * 60) or ("-" .. ago))) or nil
     end
     local mx = charts.rate.Set(g.rates, labels, #g.rates, ACCENT, TR"Daten kommen nach 2 Minuten")
     charts.rate.info:SetText(mx and mx > 0 and (TR"max %s XP/Std"):format(g.num(mx)) or "")
@@ -930,6 +933,9 @@ local function BuildFunctions(parent, sfName, only, easyOnly)
     TR"Herumlaufende Elite oder viel stärkere Mobs: ihr Weg ist rot auf der Karte, nah dran kommt eine Warnung.")
   Toggle(TR"Wege teilen?", function() return db.shareWays ~= false end, function() ns.ToggleShareWays() end,
     TR"Deine gelaufenen Wege gehen frühestens nach 45 Minuten an andere Spieler mit dem Addon, ihre kommen zu dir. Aus: nichts senden, nichts empfangen.")
+  -- 1.3zzd (P133)
+  Toggle(TR"Daten teilen?", function() return db.shareData ~= false end, function() if ns.ToggleShareData then ns.ToggleShareData() end end,
+    TR"Gemessene Werte (zb Wert pro Kill) gehen an andere Spieler mit dem Addon, ihre kommen zu dir. Deine eigenen Messungen gehen immer vor. Nie Namen, Chat oder Position.")
   EndRow()
 
   Header(TR"Quests")
@@ -954,6 +960,11 @@ local function BuildFunctions(parent, sfName, only, easyOnly)
     if (tonumber(db.markScale) or std) > std then db.markScale = nil else db.markScale = ns.MARK_SCALE_BIG end
     if ns.MarkRescale then ns.MarkRescale() end
   end)
+  -- 1.3n (P95): Groesse nur vom Questgeber Marker (100 % = bis 1.3m, Standard 50 %)
+  EndRow()
+  ValRow(ns.GIVER_MARK_MIN or 0.2, ns.GIVER_MARK_MAX or 2, function() return (ns.GiverMarkScale and ns.GiverMarkScale()) or 0.5 end,
+    function(v) if ns.SetGiverMarkScale then ns.SetGiverMarkScale(v) end end,
+    TR"Grösse Questgeber Marker: %d%%", TR"Grösse Questgeber Marker", TR"Nur der Marker über Questgebern und Abgaben wird grösser oder kleiner. 100 % ist die alte Grösse, Standard 50 %.")
   -- 20.2 (P11): Raid Symbole sind nur noch ein Zusatz zu den eigenen Markern (Blizzard kann sie sperren)
   Toggle(TR"Dazu Raid Symbole setzen (Totenkopf, Stern)?", function() return db.raidIcons ~= false end, function() db.raidIcons = (db.raidIcons == false) end,
     TR"Nur allein und ausserhalb vom Kampf. Die eigenen Marker über Quest Mobs und Questgeber kommen immer, auch ohne Raid Symbole.")
@@ -966,6 +977,9 @@ local function BuildFunctions(parent, sfName, only, easyOnly)
     db.markBags = (db.markBags == false); if ns.MarkBags then ns.MarkBags() end end)
   Toggle(TR"Questitems schützen?", function() return db.protectItems ~= false end, function() db.protectItems = (db.protectItems == false) end,
     TR"Quest Items werden nicht verkauft oder weggeworfen.")
+  -- 1.3w (P106)
+  Toggle(TR"Quest im Item Tooltip zeigen?", function() return db.questItemTip ~= false end, function() db.questItemTip = (db.questItemTip == false) end,
+    TR"Im Tooltip steht, zu welcher Quest ein Item gehört (mit Stand). Ist die Quest abgegeben oder abgebrochen, steht dort, dass du es nicht mehr brauchst.")
   Toggle(TR"Belohnung vorschlagen?", function() return db.gearHints ~= false end, function() db.gearHints = (db.gearHints == false) end,
     TR"Bei der Abgabe wird die Belohnung markiert, die für dich am besten ist.")
   Toggle(TR"Feiertag Quests einplanen?", function() return db.eventQuests end, function() db.eventQuests = not db.eventQuests; if ns.AutoOptSoon then ns.AutoOptSoon() end end,
@@ -1659,6 +1673,67 @@ local function HBars(parent, rows)
 end
 
 -- ein Balken mit Anteilen (z.B. XP Quellen) und Legende
+-- 1.3y (P109 Punkt 1, S Bild: "Zeit je Zone" lief unten aus dem Fenster): Balken Liste mit eigenem Scrollbereich.
+-- Gleiche Set(list, col) wie HBars, hoechstens maxRows Zeilen, die Hoehe waechst mit der Liste
+local HBARS_ROW_H = 18
+local function HBarsScroll(parent, maxRows)
+  local sf = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+  local child = CreateFrame("Frame", nil, sf)
+  child:SetSize(10, 10)
+  sf:SetScrollChild(child)
+  local bars = HBars(child, maxRows)
+  bars:SetPoint("TOPLEFT"); bars:SetPoint("TOPRIGHT")
+  sf:SetScript("OnSizeChanged", function(self, w) if w and w > 0 then child:SetWidth(w); bars:SetWidth(w) end end)
+  function sf.Set(list, col)
+    local n = math.min(#list, maxRows)
+    child:SetHeight(math.max(10, n * HBARS_ROW_H + 4))
+    bars:SetHeight(math.max(10, n * HBARS_ROW_H + 4))
+    bars.Set(list, col)
+  end
+  return sf
+end
+
+-- 1.3z (P110 Punkt 2): Liste mit zwei Balken je Zeile (gruen Einnahmen vin, rot Ausgaben vout), scrollbar
+local function HBars2Scroll(parent, maxRows)
+  local sf = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+  local child = CreateFrame("Frame", nil, sf)
+  child:SetSize(10, 10)
+  sf:SetScrollChild(child)
+  local rows = {}
+  for i = 1, maxRows do
+    local r = {}
+    r.label = child:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+    r.label:SetPoint("TOPLEFT", 0, -(i - 1) * HBARS_ROW_H)
+    r.label:SetWidth(70); r.label:SetJustifyH("LEFT")
+    r.bi = child:CreateTexture(nil, "ARTWORK"); r.bi:SetPoint("TOPLEFT", 74, -(i - 1) * HBARS_ROW_H - 1); r.bi:SetHeight(7)
+    r.bo = child:CreateTexture(nil, "ARTWORK"); r.bo:SetPoint("TOPLEFT", 74, -(i - 1) * HBARS_ROW_H - 9); r.bo:SetHeight(7)
+    r.bi:SetColorTexture(0.25, 0.85, 0.35, 0.9); r.bo:SetColorTexture(1, 0.38, 0.3, 0.9)
+    r.val = child:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontDisableSmall"))
+    r.val:SetPoint("TOPRIGHT", child, "TOPRIGHT", 0, -(i - 1) * HBARS_ROW_H)
+    rows[i] = r
+  end
+  sf:SetScript("OnSizeChanged", function(_, w) if w and w > 0 then child:SetWidth(w) end end)
+  function sf.Set(list)
+    local mx = 0
+    for _, e in ipairs(list) do mx = math.max(mx, e.vin or 0, e.vout or 0) end
+    local w = math.max(10, (child:GetWidth() or 300) - 74 - 150)
+    local n = math.min(#list, maxRows)
+    child:SetHeight(math.max(10, n * HBARS_ROW_H + 4))
+    for i, r in ipairs(rows) do
+      local e = list[i]
+      if e and mx > 0 then
+        r.label:SetText(e.name); r.label:Show()
+        r.bi:SetWidth(math.max(1, (e.vin or 0) / mx * w)); r.bi:SetShown((e.vin or 0) > 0)
+        r.bo:SetWidth(math.max(1, (e.vout or 0) / mx * w)); r.bo:SetShown((e.vout or 0) > 0)
+        r.val:SetText(e.text or ""); r.val:Show()
+      else
+        r.label:Hide(); r.bi:Hide(); r.bo:Hide(); r.val:Hide()
+      end
+    end
+  end
+  return sf
+end
+
 local function StackBar(parent)
   local f = CreateFrame("Frame", nil, parent)
   f:SetHeight(40)
@@ -1717,8 +1792,8 @@ local function BuildBig()
   end
   big.FitBig = FitBig
   FitBig()
-  big:RegisterEvent("UI_SCALE_CHANGED")
-  big:RegisterEvent("DISPLAY_SIZE_CHANGED")
+  ns.RegEv(big, "UI_SCALE_CHANGED")
+  ns.RegEv(big, "DISPLAY_SIZE_CHANGED")
   big:SetScript("OnEvent", function() FitBig() end)
   big:SetPoint("CENTER")
   big:SetFrameStrata("DIALOG")
@@ -1924,7 +1999,29 @@ local function BuildBig()
   body:SetPoint("TOPLEFT", nav, "TOPRIGHT", 18, -16)
   body:SetPoint("BOTTOMRIGHT", big, "BOTTOMRIGHT", -PAD - 4, PAD + 2)
   big.pages = {}
-  local function Page(key)
+  -- 1.3z (P110 Punkt 1, S Bild: Statistik laeuft unten aus dem Fenster): Seiten mit scroll = true liegen in einem
+  -- Scrollbereich. Der Inhalt ist mindestens PAGE_SCROLL_MIN_H hoch, die ganze Seite scrollt. big.pages[key] bleibt der
+  -- Inhalt (alle Felder wie bisher), pg.sw ist der Rahmen, der angezeigt und verschoben wird
+  local PAGE_SCROLL_MIN_H, PAGE_SCROLL_BAR_W = 660, 24
+  local function Page(key, scroll)
+    if scroll then
+      local sf = CreateFrame("ScrollFrame", nil, body, "UIPanelScrollFrameTemplate")
+      sf:SetAllPoints(body)
+      sf:Hide()
+      local pg = CreateFrame("Frame", nil, sf)
+      pg:SetSize(400, PAGE_SCROLL_MIN_H)
+      sf:SetScrollChild(pg)
+      sf:SetScript("OnSizeChanged", function(_, w, h)
+        pg:SetWidth(math.max(100, (w or 0) - PAGE_SCROLL_BAR_W))
+        pg:SetHeight(math.max(PAGE_SCROLL_MIN_H, h or 0))
+      end)
+      pg.sw = sf
+      hooksecurefunc(pg, "SetShown", function(_, v) sf:SetShown(v and true or false) end)
+      hooksecurefunc(pg, "Show", function() sf:Show() end)
+      hooksecurefunc(pg, "Hide", function() sf:Hide() end)
+      big.pages[key] = pg
+      return pg
+    end
     local pg = CreateFrame("Frame", nil, body)
     pg:SetAllPoints(body)
     pg:Hide()
@@ -2745,7 +2842,7 @@ local function BuildBig()
 
   -- Performance: zwei Diagramme, XP pro Stunde je Zone, Text
   do
-    local pg = Page("perf")
+    local pg = Page("perf", true)
     -- Kacheln: Tempo dieser Session
     pg.tiles = {}
     for i = 1, 6 do pg.tiles[i] = MakeTile(pg) end
@@ -2782,16 +2879,41 @@ local function BuildBig()
 
   -- Statistik, Gold und Ruf (Knopf oben rechts in der Reiter Leiste)
   do
-    local pg = Page("statgold")
-    local bx = Box(pg, TR"Gold")
-    bx:SetAllPoints(pg)
-    pg.text = ScrollText(bx, "TaurenRouteBigStatGold", ns.FontName("GameFontHighlight"))
+    -- 1.3y (P109 Punkt 2): wie Gesamt aufgebaut. Oben Kacheln, dann Einnahmen und Ausgaben als farbige Balken nach Quelle,
+    -- unten links Ausgaben je Level als Balken (scrollbar), rechts die Details als Text
+    local pg = Page("statgold", true)
+    pg.tiles = {}
+    for i = 1, 4 do pg.tiles[i] = MakeTile(pg) end
+    pg:SetScript("OnSizeChanged", function(self, w)
+      local gap = 8
+      local tw = (w - gap * 3) / 4
+      for i = 1, 4 do
+        pg.tiles[i]:ClearAllPoints()
+        pg.tiles[i]:SetSize(tw, 54)
+        pg.tiles[i]:SetPoint("TOPLEFT", self, "TOPLEFT", (i - 1) * (tw + gap), 0)
+      end
+    end)
+    local ib = Box(pg, TR"Einnahmen nach Quelle")
+    ib:SetPoint("TOPLEFT", 0, -62); ib:SetPoint("TOPRIGHT", 0, -62); ib:SetHeight(72)
+    pg.inn = StackBar(ib)
+    pg.inn:SetPoint("TOPLEFT", 8, -24); pg.inn:SetPoint("TOPRIGHT", -8, -24)
+    local ob = Box(pg, TR"Ausgaben nach Art")
+    ob:SetPoint("TOPLEFT", 0, -142); ob:SetPoint("TOPRIGHT", 0, -142); ob:SetHeight(72)
+    pg.outb = StackBar(ob)
+    pg.outb:SetPoint("TOPLEFT", 8, -24); pg.outb:SetPoint("TOPRIGHT", -8, -24)
+    local lb = Box(pg, TR"Einnahmen und Ausgaben je Level")
+    lb:SetPoint("TOPLEFT", 0, -222); lb:SetPoint("BOTTOMRIGHT", pg, "BOTTOM", -4, 0)
+    pg.lvls = HBars2Scroll(lb, 60)
+    pg.lvls:SetPoint("TOPLEFT", 8, -24); pg.lvls:SetPoint("BOTTOMRIGHT", -28, 8)
+    local bx = Box(pg, TR"Details")
+    bx:SetPoint("TOPLEFT", pg, "TOP", 4, -222); bx:SetPoint("BOTTOMRIGHT")
+    pg.text = ScrollText(bx, "TaurenRouteBigStatGold", ns.FontName("GameFontHighlightSmall"))
     pg.text:SetPoint("TOPLEFT", 8, -24); pg.text:SetPoint("BOTTOMRIGHT", -26, 8)
   end
 
   -- Statistik
   do
-    local pg = Page("stats")
+    local pg = Page("stats", true)
     pg.tiles = {}
     for i = 1, 6 do pg.tiles[i] = MakeTile(pg) end
     pg:SetScript("OnSizeChanged", function(self, w)
@@ -2815,8 +2937,8 @@ local function BuildBig()
     pg.fc:SetPoint("TOPLEFT", 8, -24); pg.fc:SetPoint("BOTTOMRIGHT", -26, 8)
     local zb = Box(pg, TR"Zeit je Zone")
     zb:SetPoint("TOPLEFT", 0, -340); zb:SetPoint("BOTTOMRIGHT")
-    pg.ztime = HBars(zb, 12)
-    pg.ztime:SetPoint("TOPLEFT", 8, -24); pg.ztime:SetPoint("BOTTOMRIGHT", -8, 8)
+    pg.ztime = HBarsScroll(zb, 40)
+    pg.ztime:SetPoint("TOPLEFT", 8, -24); pg.ztime:SetPoint("BOTTOMRIGHT", -28, 8)
   end
 
   -- Berufe und Gold Berufe: Inhalt im Journal Stil (JPage), hier nur der Platz
@@ -3218,6 +3340,26 @@ local function BuildBig()
     none:SetPoint("RIGHT", scan, "LEFT", -6, 0)
     local all = FlatButton(rb, TR"Alle an", 70, 24)
     all:SetPoint("RIGHT", none, "LEFT", -6, 0)
+    -- 1.3c (P85): eigene Auswahl Schlafsack (nur Forever): Klick = Route ueber die Reihe, Rechtsklick = zum Haendler
+    if ns.SpecialAvailable and ns.SpecialAvailable("schlafsack") then
+      local sb = FlatButton(rb, TR"Schlafsack holen", 120, 24)
+      sb:SetPoint("RIGHT", all, "LEFT", -12, 0)
+      if sb.RegisterForClicks then sb:RegisterForClicks("LeftButtonUp", "RightButtonUp") end
+      sb:SetScript("OnClick", function(_, btn)
+        if btn == "RightButton" then if ns.SpecialVendor then ns.SpecialVendor("schlafsack") end
+        elseif ns.SpecialRoute then ns.SpecialRoute("schlafsack") end
+      end)
+      sb:HookScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:AddLine(ns.SpecialName and ns.SpecialName("schlafsack") or TR"Schlafsack")
+        GameTooltip:AddLine(TR"Klick: eigene Route über die ganze Quest Reihe (Objekte, Kontinent Wechsel, Flug und Schiff). Die Leveling Route geht danach weiter.", 1, 1, 1, true)
+        GameTooltip:AddLine(TR"Rechtsklick: zum Händler, der ihn verkauft.", 0.7, 0.7, 0.7, true)
+        GameTooltip:AddLine(TR"Kommt nicht von selbst in die Leveling Route, die Reihe gibt kaum EP.", 0.7, 0.7, 0.7, true)
+        GameTooltip:Show()
+      end)
+      sb:HookScript("OnLeave", function() GameTooltip:Hide() end)
+      pg.sleepBtn = sb
+    end
     -- Belohnungen als Zeilen mit Symbol, Maus drueber zeigt den Tooltip mit Vergleich
     pg.items = {}
     for k = 1, 6 do
@@ -3444,7 +3586,7 @@ local function BuildBig()
 
   -- Details: links Gesamt, Level und Zonen, rechts alles aufgeschluesselt
   do
-    local pg = Page("detail")
+    local pg = Page("detail", true)
     local lb = Box(pg, TR"Auswahl")
     lb:SetPoint("TOPLEFT"); lb:SetPoint("BOTTOMLEFT"); lb:SetWidth(230)
     local sf = CreateFrame("ScrollFrame", "TaurenRouteDetailList", lb, "UIPanelScrollFrameTemplate")
@@ -3611,6 +3753,8 @@ function ns.RefreshBig(auto)
     perf = "perf", detail = "stats", stats = "stats" }
   local lockKey = LOCKS[bigView]
   if lockKey and not ns.Unlocked(lockKey) then
+    -- 1.3zzn (Pr 07:03: Seite Leistung im Sim nie gefuellt): gesperrt im Modus Gefuehrt, einmal ins Log
+    if ns.TestLog and big.lockSaid ~= lockKey then big.lockSaid = lockKey; ns.TestLog("FENSTER", ("Seite %s gesperrt (Modus), Freischalten: ns.Unlocked(\"%s\")"):format(tostring(bigView), lockKey)) end
     for _, p in pairs(big.pages) do p:Hide() end
     if JournalShow then JournalShow(nil) end
     big.lockPage.Set(lockKey)
@@ -3737,7 +3881,8 @@ function ns.RefreshBig(auto)
     local labels = {}
     for i = 1, #g.rates do
       local ago = (#g.rates - i) * 2
-      labels[i] = (ago % 10 == 0) and (ago == 0 and TR"jetzt" or ("-" .. ago)) or nil
+      -- 1.3z (P110 Punkt 1): Uhrzeit statt "jetzt" und "-10" (S Bild: zweimal "jetzt")
+      labels[i] = (ago % 10 == 0) and (ago == 0 and TR"jetzt" or (date and time and date("%H:%M", time() - ago * 60) or ("-" .. ago))) or nil
     end
     local mx = pg.rate.Set(g.rates, labels, #g.rates, ACCENT, TR"Daten kommen nach 2 Minuten")
     pg.rate.info:SetText(mx and mx > 0 and (TR"max %s XP/Std"):format(num(mx)) or "")
@@ -3787,6 +3932,11 @@ function ns.RefreshBig(auto)
     if bl ~= "" then table.insert(head, bl) end
     for _, t in ipairs(tips) do table.insert(head, TR"|cff7fd1b9Tipp:|r " .. t) end
     if #head > 0 then table.insert(head, ""); for _, l in ipairs(lines) do table.insert(head, l) end; lines = head end
+    -- 1.3zze (K 04:33): Zeit nach Art oben, je Level ein Balken
+    local al = ns.ActLines and ns.ActLines() or {}
+    -- 1.3zzl (Pr 06:29: Zeile im Sim nicht gefunden): einmal je Anzahl ins Log, damit der Test es sieht
+    if ns.TestLog and #al ~= (pg.actLogged or -1) then pg.actLogged = #al; ns.TestLog("FENSTER", ("Leistung Zeit nach Art %d Zeilen in TaurenRouteBigPerf: %s"):format(#al, tostring(al[2] and al[2]:gsub("|T.-|t", "") or "keine"))) end
+    if #al > 0 then table.insert(al, ""); for _, l in ipairs(lines) do table.insert(al, l) end; lines = al end
     -- ohne Daten: ein Satz statt leerer Kacheln
     if not pt.xph and not pt.kph then
       for _, t in ipairs(tl) do t.value:SetText(""); t.label:SetText("") end
@@ -3814,6 +3964,17 @@ function ns.RefreshBig(auto)
     pg.text.Set(lines)
   elseif bigView == "statgold" then
     pg.text.Set(ns.GoldRepLines and ns.GoldRepLines() or {})
+    local gd = ns.GoldStatData and ns.GoldStatData() or { inn = {}, out = {}, levels = {} }
+    local M = ns.Money or tostring
+    local t = pg.tiles
+    local function TL(i, v, l) t[i].value:SetText(v); t[i].label:SetText(l) end
+    TL(1, gd.money and M(gd.money) or "?", TR"Gold jetzt")
+    TL(2, gd.perHour and ((gd.perHour >= 0 and "+" or "-") .. M(math.abs(gd.perHour))) or TR"ab 5 Min", TR"Pro Stunde (gesamt)")
+    TL(3, M(gd.sumIn or 0), TR"Einnahmen gesamt")
+    TL(4, M(gd.sumOut or 0), TR"Ausgaben gesamt")
+    pg.inn.Set(gd.inn)
+    pg.outb.Set(gd.out)
+    pg.lvls.Set(gd.levels)
   elseif bigView == "stats" then
     local c = bs.cnt or {}
     local t = pg.tiles
@@ -3839,7 +4000,7 @@ function ns.RefreshBig(auto)
     local fc = {}
     table.insert(fc, (TR"Erfasste Spielzeit: |cffffffff%s|r"):format(fmt(bs.totalTime or 0)))
     table.insert(fc, (TR"Schnitt: |cffffffff%s XP pro Stunde|r"):format(num(bs.rate or 0)))
-    table.insert(fc, (TR"Bis Level 60 fehlen: |cffffffff%s XP|r"):format(num(bs.xpTo60 or 0)))
+    table.insert(fc, (TR"Noch benötigt bis Level 60: |cffffffff%s EP|r"):format(num(bs.xpTo60 or 0)))
     if bs.eta60 then
       table.insert(fc, (TR"Bei diesem Tempo: |cff40ff40ca %s|r"):format(fmt(bs.eta60)))
       table.insert(fc, (TR"Bei 4 Std pro Tag: |cff40ff40ca %d Tage|r"):format(math.ceil(bs.eta60 / 3600 / 4)))
@@ -3991,13 +4152,17 @@ function ns.OpenCharPage()
   return true
 end
 
+-- 1.3k (P94, K 13:14): kein Reiter mehr im Charakterfenster. Build wird nicht mehr aufgerufen, damit bleiben Symbol,
+-- Seite und Upgrade Leiste am Charakterfenster weg (ns.OpenCharPage gibt false). Grosses Fenster: /klg oder Minimap Menue
+local CHAR_TAB_ON = false
 function ns.InitCharTab()
+  if not CHAR_TAB_ON then return end
   if CharacterFrame then
     Build()
   else
     -- Charakterfenster wird spaeter geladen
     local f = CreateFrame("Frame")
-    f:RegisterEvent("ADDON_LOADED")
+    ns.RegEv(f, "ADDON_LOADED")
     f:SetScript("OnEvent", function(self)
       if CharacterFrame then Build(); self:UnregisterAllEvents() end
     end)
@@ -4438,6 +4603,7 @@ local function ProfCommonZones()
   for id in pairs(sel.items) do
     nItems = nItems + 1
     local list = ns.ProfAreasCached and ns.ProfAreasCached(id)
+    if list and #list == 0 then list = nil end -- 1.3z: ohne bekannte Gebiete filtert eine Sache nichts
     if not list then missing = true
     else
       local here = {}
@@ -4449,22 +4615,45 @@ local function ProfCommonZones()
   return common, nItems, missing
 end
 -- hat die Sache eine Zone mit allen anderen gewaehlten gemeinsam? (nil = weiss noch nicht)
-local function ProfItemShares(id)
+-- 1.3v (P104, S 02:46 und 02:48): passt die Sache noch zu allen angehakten? Es braucht mindestens ein Gebiet, in dem sie
+-- zusammen mit ALLEN angehakten vorkommt (Schnitt aller Gebiete). Gibt true, false (und die Sachen, die sich beissen) oder
+-- nil (Gebiete noch nicht gerechnet, dann werden sie angestossen). Alles aus den Gebiets Daten, nichts fest
+local profAreaAsk = {}
+local function AreasOf(id, refresh)
+  local l = ns.ProfAreasCached and ns.ProfAreasCached(id)
+  if l then return l end
+  if ns.ProfAreas and not profAreaAsk[id] then
+    profAreaAsk[id] = true
+    ns.ProfAreas(id, function() profAreaAsk[id] = nil; if refresh then C_Timer.After(0, refresh) end end)
+  end
+  return nil
+end
+local function ProfItemShares(id, refresh)
   local sel = ns.ProfSel()
-  local mine = ns.ProfAreasCached and ns.ProfAreasCached(id)
-  if not mine then return nil end
+  local mine = AreasOf(id, refresh)
+  -- 1.3z (P110 Punkt 4, S Bild: ohne Haken alles grau): ohne bekannte Gebiete (leere Liste) ist es "unbekannt", nicht grau.
+  -- Angehakte Sachen ohne bekannte Gebiete filtern nichts. Nur echte andere Haken (ueber alle Berufe Reiter) zaehlen
+  if not mine or #mine == 0 then return nil end
+  local common = {}
+  for _, a in ipairs(mine) do common[a.map] = true end
+  local clash, unknown, any = {}, false, false
   for oid in pairs(sel.items) do
-    if oid ~= id then
-      local other = ns.ProfAreasCached and ns.ProfAreasCached(oid)
-      if not other then return nil end
-      local set = {}
-      for _, a in ipairs(other) do set[a.map] = true end
-      local any = false
-      for _, a in ipairs(mine) do if set[a.map] then any = true; break end end
-      if not any then return false end
+    local oit = oid ~= id and ns.ProfItem(oid)
+    if oit then
+      local other = AreasOf(oid, refresh)
+      if other and #other == 0 then other = nil end
+      if other then any = true end
+      if not other then unknown = true else
+        local set, pair = {}, false
+        for _, a in ipairs(other) do set[a.map] = true; if common[a.map] ~= nil then pair = true end end
+        for m in pairs(common) do if not set[m] then common[m] = nil end end
+        if not pair then clash[#clash + 1] = oid end
+      end
     end
   end
-  return true
+  if not any or next(common) then return true end
+  if unknown and #clash == 0 then return nil end
+  return false, clash
 end
 -- laufende Berufe Route in der gewaehlten Zone neu rechnen (Einstellungen wie beim letzten Planen)
 local function ProfReplanZone()
@@ -4514,10 +4703,20 @@ local function BuildBerufe(pg)
   local lb = T.Panel(pg, "inset")
   lb:SetPoint("TOPLEFT", row, "BOTTOMLEFT", 0, -8); lb:SetPoint("BOTTOMLEFT", pg, "BOTTOMLEFT", 0, 0); lb:SetWidth(300)
   pg.lhead = JText(lb, ns.FontName("GameFontNormal")); pg.lhead:SetPoint("TOPLEFT", 10, -8)
+  -- 1.3zm/zn (K 15:16, P110 Punkt 4): Haken filtern ueber alle Berufe Reiter (S 05:28). Ist hier etwas grau wegen Haken in einem
+  -- anderen Reiter, sagt es die Zeile unten links, und dieser Knopf nimmt alle Haken weg
+  pg.clashBtn = T.Button(lb, TR"Alle Haken weg", 104, 18)
+  pg.clashBtn:SetPoint("TOPRIGHT", lb, "TOPRIGHT", -8, -6)
+  pg.clashBtn:SetScript("OnClick", function() ns.ProfReset(); pg.hint:SetText(""); pg.hintClash = nil; pg.Fill() end)
+  pg.clashBtn:Hide()
   pg.hint = JText(lb, ns.FontName("GameFontNormalSmall"), 1, 0.55, 0.2)
   pg.hint:SetPoint("BOTTOMLEFT", 10, 8); pg.hint:SetPoint("RIGHT", lb, "RIGHT", -10, 0); pg.hint:SetJustifyH("LEFT")
+  -- 1.3zr (P120, K 19:12): Legende zur Farbe der Zahl, ueber der Hinweis Zeile
+  pg.legend = JText(lb, ns.FontName("GameFontDisableSmall"))
+  pg.legend:SetPoint("BOTTOMLEFT", 10, 24); pg.legend:SetPoint("RIGHT", lb, "RIGHT", -10, 0); pg.legend:SetJustifyH("LEFT")
+  pg.legend:SetWordWrap(true)
   local sf = CreateFrame("ScrollFrame", nil, lb, "UIPanelScrollFrameTemplate")
-  sf:SetPoint("TOPLEFT", 6, -28); sf:SetPoint("BOTTOMRIGHT", -26, 26)
+  sf:SetPoint("TOPLEFT", 6, -28); sf:SetPoint("BOTTOMRIGHT", -26, ns.PROF_LEGEND_H or 56)
   SkinScroll(sf)
   local child = CreateFrame("Frame", nil, sf)
   child:SetSize(260, 10)
@@ -4626,10 +4825,17 @@ local function BuildBerufe(pg)
         for _, e in ipairs(ns.profGold) do
           local k = tostring(e.id) .. ":" .. tostring(e.map)
           if not gold[k] or (e.gph or 0) > gold[k] then gold[k] = e.gph or 0 end
+          -- 1.3zv (P127): die anderen Gebiete dieser Sache als Schaetzung ("ca")
+          for zm, zg in pairs(e.zones or {}) do
+            local zk = tostring(e.id) .. ":" .. tostring(zm)
+            if not gold[zk] then gold[zk] = zg; gold["ca:" .. zk] = true end
+          end
         end
-      elseif ns.ProfGoldList and not pg.goldBusy then
-        pg.goldBusy = true
-        ns.ProfGoldList(function() pg.goldBusy = false; if pg:IsShown() and tab == "areas" then pg.FillRight() end end)
+      elseif ns.ProfGoldList and not (pg.goldBusy and GetTime() - pg.goldBusy < 60) then
+        -- 1.3v (P104): Merker mit Zeit, haengt die Rechnung, nach 60 s neu anstossen statt ewig "wird gerechnet"
+        pg.goldBusy = GetTime()
+        pg.goldFirst = pg.goldFirst or GetTime()
+        ns.ProfGoldList(function() pg.goldBusy = nil; if pg:IsShown() and tab == "areas" then pg.FillRight() end end)
       end
       pg.gold = gold
       -- erst den Cache, sonst rechnen lassen (Rueckruf spaeter, nie direkt, sonst ruft es sich selber auf)
@@ -4654,12 +4860,27 @@ local function BuildBerufe(pg)
       end
       -- 20.4b2: mehrere Sachen gewaehlt: nur Zonen, in denen alle vorkommen
       local common, nSel = ProfCommonZones()
-      if common and nSel > 1 then
+      -- 1.3z (P110 Punkt 4): auch mit einem Haken, wenn die angeschaute Sache selbst nicht angehakt ist
+      if common and (nSel > 1 or (nSel == 1 and not ns.ProfSel().items[curItem])) then
         local f = {}
         for _, a in ipairs(list) do if common[a.map] then f[#f + 1] = a end end
         if #f < #list then pg.note:SetText((pg.note:GetText() or "") .. "  " .. TR"Nur Gebiete, in denen alle gewählten Sachen vorkommen.") end
         list = f
       end
+      -- 1.3zzc (Pr 03:51, P129 noch rot: Wert nur dort, wo die Rechnung Punkte fand, sonst unbekannt): Gold je Stelle aus den
+      -- Gebieten mit Wert, fuer die anderen Gebiete "ca" = Gold je Stelle mal Stellen dort, hoechstens so viel wie das beste
+      local perN, bestG, nRef = 0, 0, 0
+      for _, a in ipairs(list) do
+        local g = gold[tostring(curItem) .. ":" .. tostring(a.map)]
+        if g and g > 0 and (a.n or 0) > 0 then perN = perN + g / a.n; nRef = nRef + 1; if g > bestG then bestG = g end end
+      end
+      if nRef > 0 then perN = perN / nRef end
+      -- ganz ohne Wert fuer diese Sache: Stueck pro Stunde im Schnitt dieses Berufs (aus den gerechneten Sachen) mal Preis
+      local profPH, nPH = 0, 0
+      for _, e in ipairs(ns.profGold or {}) do
+        if e.prof == it.prof and (e.perHour or 0) > 0 then profPH = profPH + e.perHour; nPH = nPH + 1 end
+      end
+      if nPH > 0 then profPH = profPH / nPH end
       for i, a in ipairs(list) do
         local r = RRow(i)
         r:ClearAllPoints(); r:SetPoint("TOPLEFT", rc, "TOPLEFT", 0, -(i - 1) * 24); r:SetPoint("RIGHT", rc, "RIGHT", 0, 0)
@@ -4674,15 +4895,53 @@ local function BuildBerufe(pg)
           if on then ProfReplanZone() end
         end)
         r.c[1]:SetText((ns.ZoneName and ns.ZoneName(a.map) or "?") .. (a.learned and " |cff7fd1b9(G)|r" or ""))
-        r.c[2]:SetText(a.lo and (TR"%d bis %d"):format(a.lo, a.hi or a.lo) or "?")
+        -- 1.3zm (K 14:27 Punkt 3: Donnerfels Level unbekannt): Stadt statt unbekannt, sonst Level aus den Zonen Daten
+        local zl = ns.zones and ns.zones[a.map]
+        local lo, hi = a.lo or (zl and zl.min), a.hi or (zl and zl.max)
+        r.c[2]:SetText(lo and (TR"%d bis %d"):format(lo, hi or lo) or ((ns.cityParent and ns.cityParent[a.map]) and TR"Stadt" or TR"unbekannt"))
         if fish then
           r.c[3]:SetText(("%d%s"):format(a.n or 0, a.need and (TR" |cff9d9d9d(Skill " .. a.need .. ")|r") or ""))
         else
           r.c[3]:SetText(tostring(a.n or 0))
         end
-        r.c[4]:SetText(STATUS_TXT[a.status] or a.status or "")
+        -- 1.3h (P90): eigene Rate (ab genug Funden) oder die anderer Spieler statt nur Status
+        local rt, rn, rsrc = nil, nil, nil
+        if ns.ProfOwnRate then rt, rn, rsrc = ns.ProfOwnRate(it.prof, a.map, curItem) end
+        if rt then
+          r.c[4]:SetText((rsrc == "own" and TR"eigene Rate %d%% (%d)" or TR"Spieler Rate %d%% (%d)"):format(math.floor(rt * 100 + 0.5), rn or 0))
+        elseif a.pct then
+          -- 1.3i (P89): Fang Rate aus den Fisch Daten
+          r.c[4]:SetText((TR"Rate laut Daten %d%%"):format(math.floor(a.pct + 0.5)))
+        else
+          r.c[4]:SetText(STATUS_TXT[a.status] or a.status or "")
+        end
         local gph = gold[tostring(curItem) .. ":" .. tostring(a.map)]
-        r.c[5]:SetText(gph and gph > 0 and ("|cff40ff40" .. (ns.Money and ns.Money(gph) or tostring(gph)) .. "|r") or (ns.profGold and "|cff9d9d9d-|r" or "..."))
+        -- 1.3h (P89): Platzhalter weg
+        -- 1.3zm (K 14:27 Punkt 2): nie dauerhaft "wird gerechnet": nach PROF_GOLD_WAIT_S ohne Ergebnis "keine Preise"
+        local waitOver = pg.goldFirst and GetTime() - pg.goldFirst > ns.PROF_GOLD_WAIT_S
+        local gEst = gold["ca:" .. tostring(curItem) .. ":" .. tostring(a.map)]
+        -- 1.3zza (P129): Angeln ohne Messung: Schaetzung aus der Fang Rate laut Daten und dem Preis
+        local price0 = ns.ItemValue and ns.ItemValue(curItem) or 0
+        -- 1.3zzg (P133 Teil b): gemessen geht vor der Rechnung: eigene Messung voll, geteilte als ca
+        local mph, msrc = nil, nil
+        if ns.ProfMeasured then mph, msrc = ns.ProfMeasured(curItem, a.map) end
+        if mph and mph > 0 and price0 > 0 then gph = mph * price0; gEst = (msrc ~= "eigen") or nil end
+        if not (gph and gph > 0) and fish and a.pct and a.pct > 0 and price0 > 0 then
+          gph = ns.PROF_FISH_CATCH_H * a.pct / 100 * price0
+          gEst = true
+        end
+        local whyNo
+        if not (gph and gph > 0) and not fish and perN > 0 and (a.n or 0) > 0 then
+          gph = math.min(bestG, perN * a.n)
+          gEst = true
+        elseif not (gph and gph > 0) and not fish and perN == 0 and profPH > 0 and price0 > 0 and (a.n or 0) > 0 then
+          gph = profPH * price0
+          gEst = true
+        elseif not (gph and gph > 0) and not fish and (a.n or 0) == 0 then
+          whyNo = TR"keine Stellen"
+        end
+        r.c[5]:SetText(gph and gph > 0 and ((gEst and "|cff9fdf9f" .. TR"ca " or "|cff40ff40") .. (ns.Money and ns.Money(gph) or tostring(gph)) .. "|r")
+          or ((ns.profGold or waitOver) and ("|cff9d9d9d" .. ((ns.profGold and price0 > 0) and (whyNo or TR"unbekannt") or TR"keine Preise") .. "|r") or TR"wird gerechnet"))
         r:Show()
       end
       rc:SetHeight(math.max(10, #list * 24))
@@ -4715,6 +4974,10 @@ local function BuildBerufe(pg)
         for _ in pairs(ns.ProfRecipeIndexNow and ns.ProfRecipeIndexNow() or {}) do nIdx = nIdx + 1 end
         if not al then
           note = TR"Keine Rezepte bekannt. Ohne AtlasLoot kennt Keine Zeit Leveling Guide nur Rezepte, die du gelernt hast: öffne einmal dein Berufsfenster (zb Kochen), dann merkt es sich die Rezepte."
+        elseif nIdx == 0 and ns.ALCraftState and ns.ALCraftState() ~= "geladen" then
+          -- 1.3zza (P131): ohne AtlasLoot Berufe Modul (Crafting) gibt es keine Rezepte aus AtlasLoot
+          note = (ns.ALCraftState() == "aus" and TR"Das AtlasLoot Berufe Modul (Crafting) ist aus. Einschalten im Addon Menü, oder öffne einmal dein Berufsfenster (zb Kochen), dann merkt sich Keine Zeit Leveling Guide deine Rezepte."
+            or TR"AtlasLoot ist an, aber ohne Berufe Modul (Crafting). Öffne einmal dein Berufsfenster (zb Kochen), dann merkt sich Keine Zeit Leveling Guide deine Rezepte.")
         elseif nIdx == 0 then
           note = TR"AtlasLoot ist an, aber seine Berufe Daten sind noch nicht geladen. Öffne einmal das AtlasLoot Fenster oder dein Berufsfenster, dann nochmal schauen."
         else
@@ -4722,7 +4985,8 @@ local function BuildBerufe(pg)
         end
         if ns.TestLog and pg.recLogged ~= curItem then
           pg.recLogged = curItem
-          ns.TestLog("BERUFE", ("Rezepte leer: Teil %s, Beruf %s, AtlasLoot %s, Rezept Index %d Zutaten, Filter %s"):format(tostring(curItem), tostring(curProf), al and "an" or "aus", nIdx, tostring(recFilter)))
+          ns.TestLog("BERUFE", ("Rezepte leer: Teil %s, Beruf %s, AtlasLoot %s, Berufe Modul %s, Rezept Index %d Zutaten, Filter %s"):format(tostring(curItem), tostring(curProf), al and "an" or "aus",
+            tostring(ns.ALCraftState and ns.ALCraftState() or "?"), nIdx, tostring(recFilter)))
         end
       end
       pg.note:SetText(note)
@@ -4764,6 +5028,16 @@ local function BuildBerufe(pg)
     pg.profTabs.Set(defs, curProf, true)
     -- Liste links
     pg.lhead:SetText(curProf == "fish" and (TR"Fische für deinen Skill") or (p.short .. TR": was du farmen willst"))
+    do
+      local C = ns.PROF_DIFF_COL or {}
+      local function c(k, t) return "|cff" .. (C[k] or "ffffff") .. t .. "|r" end
+      if p.kind == "node" then
+        pg.legend:SetText((TR"Zahl: %s, %s, %s bringen Punkte, %s keine mehr, %s zu tief. Grauer Name: passt nicht zu deinen Haken."):format(
+          c("orange", TR"orange"), c("yellow", TR"gelb"), c("green", TR"grün"), c("grey", TR"grau"), c("red", TR"rot")))
+      else
+        pg.legend:SetText((TR"%s: Skill noch zu tief. Grauer Name: passt nicht zu deinen Haken."):format(c("red", TR"Rot")))
+      end
+    end
     local items = ns.ProfItems(curProf)
     if not curItem then
       for _, it in ipairs(items) do if sel.items[it.id] then curItem = it.id; break end end
@@ -4779,7 +5053,7 @@ local function BuildBerufe(pg)
         rw.ic = rw:CreateTexture(nil, "ARTWORK"); rw.ic:SetSize(18, 18); rw.ic:SetPoint("LEFT", rw.cb, "RIGHT", 2, 0)
         rw.t = JText(rw, ns.FontName("GameFontHighlightSmall")); rw.t:SetPoint("LEFT", rw.ic, "RIGHT", 6, 0); rw.t:SetPoint("RIGHT", rw, "RIGHT", -44, 0)
         rw.t:SetJustifyH("LEFT"); rw.t:SetWordWrap(false)
-        rw.s = JText(rw, ns.FontName("GameFontDisableSmall")); rw.s:SetPoint("RIGHT", -4, 0)
+        rw.s = JText(rw, ns.FontName("GameFontHighlightSmall")); rw.s:SetPoint("RIGHT", -4, 0)
         rw.sel = rw:CreateTexture(nil, "BACKGROUND"); rw.sel:SetAllPoints()
         local ar, ag, ab = T.Acc(); rw.sel:SetColorTexture(ar, ag, ab, 0.16)
         local hl = rw:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.05)
@@ -4787,36 +5061,71 @@ local function BuildBerufe(pg)
       end
       rw:ClearAllPoints(); rw:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -(i - 1) * 25); rw:SetPoint("RIGHT", child, "RIGHT", 0, 0)
       local can, miss, none = ns.ProfCan(it)
+      -- 20.4b2 / 1.3v (P104): Sache ohne gemeinsames Gebiet mit allen angehakten: grau, Haken gesperrt, Tooltip sagt warum
+      -- 1.3zv (P126, S 23:36 "kupfererz etc ich kann nichts anklicken", zum 5. Mal): hier stand "false" als Startwert. Ohne
+      -- einen Haken wird ProfItemShares gar nicht gefragt, darum galt JEDE Zeile als "passt nicht" (noShare): Haken gesperrt,
+      -- Klick ohne Wirkung. Startwert jetzt nil (= unbekannt, nicht gesperrt)
+      local shares, clash = nil, nil
+      if ns.ProfSelCount() > 0 and not sel.items[it.id] then shares, clash = ProfItemShares(it.id, function() if pg:IsShown() then pg.Fill() end end) end
+      rw.noShare = shares == false
+      rw.clash = clash
       rw.cb:SetChecked(sel.items[it.id] and true or false)
-      rw.cb:SetScript("OnClick", function(self)
+      rw.cb:SetEnabled(not rw.noShare)
+      -- 1.3zv (P126): Haken und ganze Zeile setzen den Haken gleich, jeder Klick schreibt BERUF_HAKEN ins Log
+      local function Toggle(src)
+        local nm = ns.ProfItemName(it)
+        if rw.noShare then
+          rw.cb:SetChecked(false)
+          if ns.TestLog then ns.TestLog("BERUF_HAKEN", ("gesperrt %s (%d) per %s: passt nicht zu den anderen Haken"):format(tostring(nm), it.id, src)) end
+          curItem = it.id
+          pg.Fill()
+          return
+        end
         local ok, msg = ns.ProfToggleItem(it.id)
-        if ok == false then self:SetChecked(false); pg.hint:SetText(msg or "") else pg.hint:SetText("") end
+        local on = ns.ProfSel().items[it.id] and true or false
+        if ok == false then pg.hint:SetText(msg or "") else pg.hint:SetText("") end
+        if ns.TestLog then ns.TestLog("BERUF_HAKEN", ("%s %s (%d) per %s%s"):format(on and "an" or "aus", tostring(nm), it.id, src,
+          ok == false and (": " .. tostring(msg)) or (ok == nil and ": unbekannte Sache" or ""))) end
         curItem = it.id
         pg.Fill()
-      end)
-      rw:SetScript("OnClick", function() curItem = it.id; pg.Fill() end)
+      end
+      rw.cb:SetScript("OnClick", function() Toggle("Haken") end)
+      rw:SetScript("OnClick", function() Toggle("Zeile") end)
       rw.ic:SetTexture(ns.ProfItemIcon(it.id))
-      rw.ic:SetDesaturated(not can)
-      -- 20.4b2: Sache ohne gemeinsame Zone mit den anderen gewaehlten: grau, Tooltip sagt warum
-      local shares = ns.ProfSelCount() > 0 and not sel.items[it.id] and ProfItemShares(it.id)
-      rw.noShare = shares == false
-      local col = (can and not rw.noShare) and "|cffffffff" or "|cff7d7d7d"
+      -- 1.3zr (P120, K 19:12): Name und Symbol nur grau, wenn Haken in einem anderen Reiter es ausschliessen, sonst immer weiss.
+      -- Die Zahl rechts hat die Farbe wie im Spiel (ns.ProfDiff), rot = Skill noch zu tief
+      rw.ic:SetDesaturated(rw.noShare)
+      local col = rw.noShare and "|cff7d7d7d" or "|cffffffff"
+      local dk = ns.ProfDiff and ns.ProfDiff(it) or (can and "white" or "red")
+      local dc = "|cff" .. ((ns.PROF_DIFF_COL or {})[dk] or "ffffff")
       rw.t:SetText(col .. ns.ProfItemName(it) .. "|r")
       -- 20.3y (S Test 17:01: 2 Fischnamen abgeschnitten): lange Namen passend kuerzen, ganz im Tooltip
       if ns.FitText then ns.FitText(rw.t, rw.t:GetText() or "") end
       if it.lo and it.prof == "skin" then
-        rw.s:SetText((TR"Lvl %d-%d"):format(it.lo, it.hi))
+        rw.s:SetText(dc .. (TR"Lvl %d-%d"):format(it.lo, it.hi) .. "|r")
       elseif (it.skill or 0) > 0 then
-        rw.s:SetText(can and tostring(it.skill) or ("|cffff9030" .. it.skill .. "|r"))
+        rw.s:SetText(dc .. (dk == "red" and (TR"ab %d"):format(it.skill) or tostring(it.skill)) .. "|r")
       else
-        rw.s:SetText(it.lo and (TR"Lvl %d-%d"):format(it.lo, it.hi) or "")
+        rw.s:SetText(it.lo and (dc .. (TR"Lvl %d-%d"):format(it.lo, it.hi) .. "|r") or "")
       end
       rw.sel:SetShown(curItem == it.id)
       rw:SetScript("OnEnter", function(self)
         ns.TipOwner(self, "ANCHOR_RIGHT")
         if GameTooltip.SetItemByID then pcall(GameTooltip.SetItemByID, GameTooltip, it.id) else GameTooltip:AddLine(ns.ProfItemName(it)) end
         if not can then GameTooltip:AddLine(none and (TR"Noch nicht gelernt: " .. p.name) or (TR"Dir fehlen noch " .. miss .. TR" Skillpunkte."), 1, 0.55, 0.2, true) end
-        if self.noShare then GameTooltip:AddLine(TR"Kommt in keinem Gebiet zusammen mit den anderen gewählten Sachen vor.", 1, 0.55, 0.2, true) end
+        -- 1.3zza (K 03:28): sagen, ab wann man es anhaken und planen kann
+        if not can and (it.skill or 0) > 0 then GameTooltip:AddLine((TR"Anhaken und planen geht ab Skill %d."):format(it.skill), 1, 0.82, 0, true) end
+        -- 1.3zr (P120): was die Farbe der Zahl heisst
+        local dtx = ({ orange = TR"Orange: bringt immer einen Skillpunkt", yellow = TR"Gelb: bringt meist einen Skillpunkt",
+          green = TR"Grün: bringt selten einen Skillpunkt", grey = TR"Grau: bringt keine Skillpunkte mehr, abbauen geht" })[dk]
+        if dtx then GameTooltip:AddLine("|cff" .. ((ns.PROF_DIFF_COL or {})[dk] or "ffffff") .. dtx .. "|r", 1, 1, 1, true) end
+        if self.noShare then
+          GameTooltip:AddLine(TR"In dieser Kombination gibt es kein Gebiet.", 1, 0.55, 0.2, true)
+          local names = {}
+          for _, oid in ipairs(self.clash or {}) do local o = ns.ProfItem(oid); names[#names + 1] = o and ns.ProfItemName(o) or tostring(oid) end
+          if #names > 0 then GameTooltip:AddLine(TR"Beisst sich mit: " .. table.concat(names, ", "), 0.8, 0.8, 0.8, true)
+          else GameTooltip:AddLine(TR"Einzeln geht es, aber nicht mit allen angehakten zusammen.", 0.8, 0.8, 0.8, true) end
+        end
         GameTooltip:Show()
       end)
       rw:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -4824,6 +5133,35 @@ local function BuildBerufe(pg)
     end
     for i = #items + 1, #pg.rows do pg.rows[i]:Hide() end
     child:SetHeight(#items * 25 + 6)
+    -- 1.3zn (K 15:16): grau wegen Haken in anderen Reitern: Zeile mit Reiter und Namen, Knopf Alle Haken weg
+    do
+      local anyGrey = false
+      for i = 1, #items do if pg.rows[i] and pg.rows[i].noShare then anyGrey = true; break end end
+      local byProf, order = {}, {}
+      if anyGrey then
+        for oid in pairs(sel.items) do
+          local o = ns.ProfItem(oid)
+          if o and o.prof ~= curProf then
+            if not byProf[o.prof] then byProf[o.prof] = {}; order[#order + 1] = o.prof end
+            table.insert(byProf[o.prof], ns.ProfItemName(o))
+          end
+        end
+      end
+      if #order > 0 then
+        local parts = {}
+        for _, k in ipairs(order) do
+          local pp
+          for _, q in ipairs(ns.PROFS) do if q.key == k then pp = q end end
+          parts[#parts + 1] = (pp and pp.short or k) .. ": " .. table.concat(byProf[k], ", ")
+        end
+        pg.hint:SetText(TR"Grau wegen Haken bei " .. table.concat(parts, "; "))
+        pg.hintClash = true
+        pg.clashBtn:Show()
+      else
+        if pg.hintClash then pg.hint:SetText(""); pg.hintClash = nil end
+        pg.clashBtn:Hide()
+      end
+    end
     pg.FillRight()
   end
   sf:SetScript("OnSizeChanged", function(_, wd) if wd and wd > 0 then child:SetWidth(wd) end end)
@@ -5299,9 +5637,11 @@ end
 local JTHROTTLE = { berufe = 5, goldprof = 5, opt = 3 }
 -- Seiten mit Reitern: Statistik, Dungeons, Gold und Meine Route. Gesperrte Reiter (Modus Geführt) fehlen noch.
 local GROUPS = {
-  stat = { { "perf", TR"Jetzt" }, { "detail", TR"Pro Level", lock = "stats" }, { "stats", TR"Gesamt", lock = "stats" }, extra = true },
+  -- 1.3y (P109 Punkt 2): Gold als eigener Reiter statt Knopf rechts oben
+  stat = { { "perf", TR"Jetzt" }, { "detail", TR"Pro Level", lock = "stats" }, { "stats", TR"Gesamt", lock = "stats" }, { "statgold", TR"Gold", goldLock = true } },
   grp = { { "dungeons", TR"Dungeons" }, { "raids", TR"Raids", lock = "raids" }, { "pvp", TR"Schlachtfelder", lock = "pvp" } },
-  gold = { { "farm", TR"Mobs" }, { "gold", TR"Quests" } },
+  -- 1.3z (P110 Punkt 3, S: "Quest kann weg"): Reiter "Quests" (Gold Quests) in Gold raus, nur noch Mobs
+  gold = { { "farm", TR"Mobs" } },
   route = { { "opt", TR"Schritte" }, { "route", TR"Zonenplan" }, { "plan", TR"Planen", lock = "plan" } },
 }
 local OF = { perf = "stat", detail = "stat", stats = "stat", statgold = "stat", dungeons = "grp", raids = "grp", pvp = "grp",
@@ -5326,6 +5666,7 @@ JournalShow = function(view, s, auto)
     jhero.Pills({})
     if jhero.img ~= d[3] then jhero.img = d[3]; JImg(jhero, d[3]) end
     local p = big.pages[view]
+    p = p.sw or p
     p:ClearAllPoints()
     p:SetPoint("TOPLEFT", big.body, "TOPLEFT", 0, -(JH + 12))
     p:SetPoint("BOTTOMRIGHT", big.body, "BOTTOMRIGHT", 0, 0)
@@ -5348,12 +5689,14 @@ JournalShow = function(view, s, auto)
     tabBar:SetPoint("TOPLEFT", big.body, "TOPLEFT", 0, -top); tabBar:SetPoint("TOPRIGHT", big.body, "TOPRIGHT", 0, -top)
     local list = {}
     for _, d in ipairs(defs) do
-      if not (d.lock and not ns.Unlocked(d.lock)) then list[#list + 1] = { d[1], d[2] } end
+      local ok = not (d.lock and not ns.Unlocked(d.lock))
+      if d.goldLock then ok = (ns.Unlocked("gold") or ns.Unlocked("rep")) and true or false end
+      if ok then list[#list + 1] = { d[1], d[2] } end
     end
-    tabBar.Set(list, view == "statgold" and "perf" or view)
-    goldBtn:SetText(view == "statgold" and TR"Zurück zu Leveln" or TR"Gold")
-    goldBtn:SetShown(defs.extra and (ns.Unlocked("gold") or ns.Unlocked("rep")) and true or false)
+    tabBar.Set(list, view)
+    goldBtn:Hide()
     local p = big.pages[view]
+    if p and p.sw then p = p.sw end
     if p and not routeGrp or (routeGrp and view == "route" and p) then
       p:ClearAllPoints()
       p:SetPoint("TOPLEFT", big.body, "TOPLEFT", 0, -(top + 34))

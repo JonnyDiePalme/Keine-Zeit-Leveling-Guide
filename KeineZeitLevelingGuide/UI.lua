@@ -978,13 +978,15 @@ local function BuildHud0()
     end
     local small = (ns.db.hudSize == "small")
     -- Navi aktiv (17.5): das Mini Fenster zeigt den Navi Abschnitt statt dem Routen Schritt
-    local i = (ns.navi and ns.NaviHudInfo and ns.NaviHudInfo()) or (ns.HudInfo and ns.HudInfo()) or {}
+    local i = (not ns.db.paused) and ((ns.navi and ns.NaviHudInfo and ns.NaviHudInfo()) or (ns.HudInfo and ns.HudInfo())) or {}
+    -- 1.3.1a (P119): im Flug "Flug nach X, noch m:ss" und der Schritt danach
+    if not ns.db.paused and ns.UwHud then local okU, iu = pcall(ns.UwHud, i); if okU and iu then i = iu end end
     if ns.db.paused then
       i = { zone = i.zone, name = TR"Keine Zeit Leveling Guide pausiert", kind = TR"Pause", col = { 0.6, 0.6, 0.6 },
         progress = TR"Nichts wird gerechnet. Weiter: Menü, Weitermachen" }
     end
     local s = ns.Stats and ns.Stats() or {}
-    hud.zone:SetText(i.zone or "?")
+    hud.zone:SetText(i.zone or s.zone or "?")
     -- langer Zonen Name: kurz "Zone, 12/57", damit nichts abgeschnitten wird
     if i.zoneIdx and i.zoneTotal and not i.back then
       local fw, sw = hud.zone:GetWidth() or 0, hud.zone:GetStringWidth() or 0
@@ -1027,6 +1029,9 @@ local function BuildHud0()
       else hud.bHint:Hide() end
     end
     if hintTxt then table.insert(extra, "|cffffd100" .. hintTxt .. "|r") end
+    -- 1.3s (P100): Abfahrt von Zeppelin oder Schiff schon vorher zeigen (hoechstens 1 Quest Schritt davor)
+    local dpTxt = (not ns.db.paused) and ns.DepartPreview and ns.DepartPreview()
+    if dpTxt then table.insert(extra, "|cff66ccff" .. dpTxt .. "|r") end
     -- wichtige Hinweise zuerst und gut sichtbar
     -- Hinweis Fenster an: Warnungen, Hinweise, Neu und Ueberspringen stehen dort als eigene Karten
     local nw = ns.NoticeOn and ns.NoticeOn()
@@ -1064,7 +1069,7 @@ local function BuildHud0()
           elseif a.qid and here[a.qid] and a.k == "O" then
             t = nil
           else
-            t = ns.OptStepText({ acts = { a } })
+            t = ns.OptStepText({ acts = { a }, t = nx.t })   -- 1.3zu (P123): Abfahrt bei Ankunft
           end
           if t then
             t = t:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("\n.*", "")
@@ -1089,6 +1094,14 @@ local function BuildHud0()
             pos = pos + 1
           end
         end
+      end
+    end
+    -- 1.3zw (P123 Zusatz, S 23:41): eigener Block "Abfahrten" unten
+    if not small and not ns.db.paused and ns.AbfahrtLines then
+      local okA, al = pcall(ns.AbfahrtLines)
+      if okA and al and #al > 0 then
+        table.insert(extra, "|cff66ccff" .. TR"Abfahrten" .. "|r")
+        for _, l in ipairs(al) do table.insert(extra, "   |cffbbbbbb" .. l .. "|r") end
       end
     end
     -- 20.3z (S Wunsch 16:52, P11): beim Rechnen oben im Mini Fenster eine Sanduhr mit Stand, damit man sieht, dass etwas laeuft
@@ -1215,10 +1228,12 @@ local function BuildHud0()
         end
         local pct = math.floor((s.pendFrac or 0) * 100)
         hud.xbar.pend = { xp = s.pendXP, n = s.qDone or 0, lv = s.pendLevel, pct = pct }
+        -- 1.3x (P108): wie frueher "Level 29  55 % + 40 % Abgabe", reicht es fuer ein Level: "+ Abgabe > Level 30 12 %"
         if s.pendLevel > s.level then
-          hud.xtext:SetText((TR"Level %d  %d%%  |cffe0a0e0> %d  %d%%|r"):format(s.level, math.floor(s.xpFrac * 100), s.pendLevel, pct))
+          hud.xtext:SetText((TR"Level %d  %d%%  |cffe0a0e0+ Abgabe > %d  %d%%|r"):format(s.level, math.floor(s.xpFrac * 100), s.pendLevel, pct))
         else
-          hud.xtext:SetText((TR"Level %d  %d%%  |cffe0a0e0> %d%%|r"):format(s.level, math.floor(s.xpFrac * 100), pct))
+          local add = math.max(0, pct - math.floor(s.xpFrac * 100))
+          hud.xtext:SetText((TR"Level %d  %d%%  |cffe0a0e0+ %d%% Abgabe|r"):format(s.level, math.floor(s.xpFrac * 100), add))
         end
       end
       -- 1.1 (P56): mit offenen Abgaben gerechnet, reicht die Abgabe schon: "Lvl 16 nach Abgabe"
@@ -1267,7 +1282,9 @@ local function BuildHud0()
   ns.HudCoach = function() if hud:IsShown() then hud.Coach() end end
   C_Timer.After(6, function() if hud:IsShown() then hud.Coach() end end)
   ns.RefreshHud = function() Update(); if hud.ShowMenu then hud.ShowMenu() end; if ns.HudGroupUpdate then pcall(ns.HudGroupUpdate) end end
-  ns.Ticker(1, function() Update(); if ns.HudGroupUpdate then pcall(ns.HudGroupUpdate) end end)
+  -- 1.3x (P108, S 03:41): auch in der Pause, damit XP Balken, Level Prozent, XP pro Stunde, Zeit bis Level und Lauftempo
+  -- aktuell bleiben. In der Pause liest Update keine Route (siehe unten), nur die Werte vom Charakter
+  ns.Ticker(1, function() Update(); if not ns.db.paused and ns.HudGroupUpdate then pcall(ns.HudGroupUpdate) end end, false, true)
   hud.ShowMenu()
 
   if db.hudSize == "arrow" then db.hudSize = "small" end
@@ -1326,7 +1343,7 @@ local function LearnName(unit)
 end
 local nf = CreateFrame("Frame")
 for _, e in ipairs({ "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT", "NAME_PLATE_UNIT_ADDED", "GOSSIP_SHOW", "QUEST_DETAIL",
-  "QUEST_GREETING", "QUEST_PROGRESS", "QUEST_COMPLETE", "MERCHANT_SHOW", "TRAINER_SHOW", "TAXIMAP_OPENED" }) do pcall(nf.RegisterEvent, nf, e) end
+  "QUEST_GREETING", "QUEST_PROGRESS", "QUEST_COMPLETE", "MERCHANT_SHOW", "TRAINER_SHOW", "TAXIMAP_OPENED" }) do ns.RegEv(nf, e) end
 nf:SetScript("OnEvent", function(_, e, arg)
   local unit = (e == "PLAYER_TARGET_CHANGED" and "target") or (e == "UPDATE_MOUSEOVER_UNIT" and "mouseover") or (e == "NAME_PLATE_UNIT_ADDED" and arg) or "npc"
   if unit then pcall(LearnName, unit) end
@@ -1424,7 +1441,7 @@ BuildTargetButton = function()
   if InCombatLockdown and InCombatLockdown() then
     if not tbWait then
       tbWait = CreateFrame("Frame")
-      tbWait:RegisterEvent("PLAYER_REGEN_ENABLED")
+      ns.RegEv(tbWait, "PLAYER_REGEN_ENABLED")
       tbWait:SetScript("OnEvent", function(self) self:UnregisterAllEvents(); BuildTargetButton() end)
     end
     return
@@ -1630,7 +1647,8 @@ end
 function ns.ToggleHud()
   if not hud then return end
   ns.db.hud = not hud:IsShown()
-  if ns.db.hud then hud:Show(); hud.Update() else hud:Hide() end
+  if ns.db.hud then ns.db.quiet = nil; hud:Show(); hud.Update() else hud:Hide() end
+  if ns.AutoPauseCheck then ns.AutoPauseCheck() end   -- 1.3k (P93)
 end
 
 function ns.InitUI()
@@ -1643,7 +1661,7 @@ function ns.InitUI()
   if ns.InitQuestItems then ns.InitQuestItems() end
   if ns.InitCharTab then ns.InitCharTab() end
   BuildPanel()
-  -- Minimap Knopf gibt es nicht mehr, alles laeuft ueber das Symbol im Charakterfenster
+  -- 1.3k (P94): Reiter im Charakterfenster gibt es nicht mehr, Minimap Knopf mit Menue und /klg
   local _ = BuildMinimapButton
   SLASH_TAURENROUTEUI1 = "/trui"
   SlashCmdList.TAURENROUTEUI = TogglePanel
@@ -1652,8 +1670,8 @@ function ns.InitUI()
 end
 
 ------------------------------------------------------------
--- 1.1 (S Log L10.0 "Map Icon oder Reiter fehlt"): Knopf an der Minimap. Links: grosses Fenster auf/zu, Rechts: Mini
--- Fenster an/aus, Ziehen: um die Minimap verschieben (Winkel in db.minimapAngle). db.minimapBtn = false: aus
+-- 1.1 (S Log L10.0 "Map Icon oder Reiter fehlt"): Knopf an der Minimap. 1.3k: Klick oeffnet ein Menue (siehe unten),
+-- Ziehen: um die Minimap verschieben (Winkel in db.minimapAngle). db.minimapBtn = false: aus
 ------------------------------------------------------------
 do
   local MM_RADIUS_ADD = 10   -- Abstand vom Minimap Rand
@@ -1682,10 +1700,8 @@ do
     ring:SetPoint("TOPLEFT")
     ring:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
     btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
-    btn:SetScript("OnClick", function(_, b)
-      if b == "RightButton" then if ns.ToggleHud then ns.ToggleHud() end
-      elseif ns.ToggleBig then ns.ToggleBig() end
-    end)
+    -- 1.3k (P93, K 13:14): Links und Rechtsklick oeffnen ein kleines eigenes Menue (kein Blizzard Dropdown, kein Taint)
+    btn:SetScript("OnClick", function(self) if ns.MinimapMenuToggle then ns.MinimapMenuToggle(self) end end)
     btn:SetScript("OnDragStart", function(self)
       self:SetScript("OnUpdate", function()
         local mx, my = Minimap:GetCenter()
@@ -1701,8 +1717,7 @@ do
     btn:SetScript("OnEnter", function(self)
       if ns.TipOwner then ns.TipOwner(self, "ANCHOR_LEFT") else GameTooltip:SetOwner(self, "ANCHOR_LEFT") end
       GameTooltip:AddLine("Keine Zeit Leveling Guide")
-      GameTooltip:AddLine(TR"Linksklick: Fenster auf oder zu", 1, 1, 1)
-      GameTooltip:AddLine(TR"Rechtsklick: Mini Fenster an oder aus", 1, 1, 1)
+      GameTooltip:AddLine(TR"Klick: Menü (grosses Fenster, Pfeil, Mini Fenster, Pause)", 1, 1, 1)
       GameTooltip:AddLine(TR"Ziehen: verschieben", 0.7, 0.7, 0.7)
       GameTooltip:Show()
     end)
@@ -1710,11 +1725,169 @@ do
     Place()
   end
   ns.MinimapButtonBuild = Build
+
+  ----------------------------------------------------------
+  -- 1.3k (P93): Menue am Minimap Knopf. Pfeil UND Mini Fenster aus = automatisch Pause (nichts rechnet, kein Navi),
+  -- eins davon wieder an = automatisch weiter. Merker db.autoPaused, damit eine Pause von Hand nicht aufgehoben wird
+  ----------------------------------------------------------
+  local MENU_W, MENU_ROW_H, MENU_PAD = 190, 22, 6
+  local MENU_IDLE_S = 8            -- Menue geht von selbst zu, wenn die Maus so lange weg ist
+  local menu, rows = nil, {}
+  local function ArrowOn() return ns.db and ns.db.arrow ~= false end
+  local function HudOn() return ns.db and ns.db.hud ~= false and not ns.db.quiet end
+  function ns.AutoPauseCheck()
+    local db = ns.db
+    if not db or not ns.SetPaused then return end
+    local both = not ArrowOn() and not HudOn()
+    if both and not db.paused then
+      ns.SetPaused(true)
+      db.autoPaused = true
+    elseif not both and db.paused and db.autoPaused then
+      ns.SetPaused(false)
+    end
+  end
+  function ns.MenuSetArrow(on)
+    local db = ns.db
+    if not db then return end
+    db.arrow = on and true or false
+    local a = _G.TaurenRouteArrow
+    if a then a:SetShown(db.arrow and not db.paused) end
+    if ns.RefreshItemBar then ns.RefreshItemBar() end
+    ns.AutoPauseCheck()
+    if a then a:SetShown(db.arrow and not db.paused) end
+  end
+  function ns.MenuSetHud(on)
+    local db = ns.db
+    if not db then return end
+    db.hud = on and true or false
+    local h = _G.TaurenRouteHUD
+    if on then
+      db.quiet = nil
+      if h then h:Show() end
+      if ns.RefreshHud then pcall(ns.RefreshHud) end
+    elseif h then h:Hide() end
+    ns.AutoPauseCheck()
+  end
+  local function MenuPause()
+    local db = ns.db
+    if not db or not ns.SetPaused then return end
+    if db.paused then
+      ns.SetPaused(false)
+      -- Weiter, obwohl Pfeil und Mini Fenster beide aus sind: Mini Fenster kommt zurueck, sonst waere gleich wieder Pause
+      if not ArrowOn() and not HudOn() then ns.MenuSetHud(true) end
+    else
+      ns.SetPaused(true)
+    end
+  end
+  local ITEMS = {
+    { label = function() return TR"Grosses Fenster" end, run = function() if ns.ToggleBig then ns.ToggleBig() end end },
+    { label = function() return ArrowOn() and TR"Pfeil ausblenden" or TR"Pfeil einblenden" end,
+      run = function() ns.MenuSetArrow(not ArrowOn()) end },
+    { label = function() return HudOn() and TR"Mini Fenster ausblenden" or TR"Mini Fenster einblenden" end,
+      run = function() ns.MenuSetHud(not HudOn()) end },
+    { label = function() return (ns.db and ns.db.paused) and TR"Weiter" or TR"Pause" end, run = MenuPause },
+  }
+  -- 1.3v (P103, S 02:16): ganz unten "Log starten" bzw "Log stoppen", abgesetzt und in eigener Farbe (rot = Log laeuft,
+  -- gruen = aus). Gleicher Schalter wie in den Einstellungen (ns.TestLogCmd), nur wenn das Log Addon da ist
+  local LOG_ON_COL, LOG_OFF_COL = "|cffff5050", "|cff50ff70"
+  local LOG_ITEM = { sep = true,
+    label = function()
+      local on = ns.TestLogActive and ns.TestLogActive()
+      return on and (LOG_ON_COL .. TR"Log stoppen" .. "|r") or (LOG_OFF_COL .. TR"Log starten" .. "|r")
+    end,
+    run = function()
+      local on = ns.TestLogActive and ns.TestLogActive()
+      if on and ns.TestLog then ns.TestLog("EINSTELLUNG", "Test Log aus (Minimap Menue)") end
+      ns.TestLogCmd(on and "aus" or "an")
+      if not on and ns.TestLog then ns.TestLog("EINSTELLUNG", "Test Log an (Minimap Menue)") end
+      if ns.RefreshBig then pcall(ns.RefreshBig) end
+    end }
+  local MENU_SEP_H = 8
+  local function MenuLabels()
+    for i, r in ipairs(rows) do r.fs:SetText(ITEMS[i].label()) end
+  end
+  local function BuildMenu()
+    if menu then return end
+    if ns.TestLogAvailable and ns.TestLogAvailable() and ns.TestLogCmd then ITEMS[#ITEMS + 1] = LOG_ITEM end
+    local sepN = 0
+    for _, it in ipairs(ITEMS) do if it.sep then sepN = sepN + 1 end end
+    menu = CreateFrame("Frame", "KeineZeitLevelingGuideMinimapMenu", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+    menu:SetSize(MENU_W, #ITEMS * MENU_ROW_H + 2 * MENU_PAD + sepN * MENU_SEP_H)
+    menu:SetFrameStrata("DIALOG")
+    menu:SetClampedToScreen(true)
+    menu:EnableMouse(true)
+    if ns.T and ns.T.Skin then pcall(ns.T.Skin, menu, "inset")
+    elseif menu.SetBackdrop then
+      menu:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+      menu:SetBackdropColor(0, 0, 0, 0.9); menu:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+    end
+    local yOff = 0
+    for i, it in ipairs(ITEMS) do
+      if it.sep then
+        local line = menu:CreateTexture(nil, "ARTWORK")
+        line:SetColorTexture(1, 1, 1, 0.25)
+        line:SetSize(MENU_W - 2 * MENU_PAD - 8, 1)
+        line:SetPoint("TOPLEFT", MENU_PAD + 4, -MENU_PAD - (i - 1) * MENU_ROW_H - yOff - MENU_SEP_H / 2)
+        yOff = yOff + MENU_SEP_H
+      end
+      local r = CreateFrame("Button", nil, menu)
+      r:SetSize(MENU_W - 2 * MENU_PAD, MENU_ROW_H)
+      r:SetPoint("TOPLEFT", MENU_PAD, -MENU_PAD - (i - 1) * MENU_ROW_H - yOff)
+      local hl = r:CreateTexture(nil, "HIGHLIGHT")
+      hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.15)
+      r.fs = r:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+      r.fs:SetPoint("LEFT", 6, 0)
+      r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+      r:SetScript("OnClick", function()
+        menu:Hide()
+        local ok, err = pcall(it.run)
+        if not ok and ns.TestLog then ns.TestLog("FEHLER", "Minimap Menue: " .. tostring(err)) end
+      end)
+      rows[i] = r
+    end
+    menu.idle = 0
+    menu:SetScript("OnUpdate", function(self, el)
+      if self:IsMouseOver() or (btn and btn:IsMouseOver()) then self.idle = 0 return end
+      self.idle = self.idle + el
+      if self.idle > MENU_IDLE_S then self:Hide() end
+    end)
+    if ns.CloseOnEscape then ns.CloseOnEscape(menu) end
+    menu:Hide()
+  end
+  function ns.MinimapMenuToggle(anchor)
+    BuildMenu()
+    if menu:IsShown() then menu:Hide() return end
+    GameTooltip:Hide()
+    MenuLabels()
+    menu:ClearAllPoints()
+    menu:SetPoint("TOPRIGHT", anchor or Minimap, "BOTTOMLEFT", 0, 0)
+    menu.idle = 0
+    menu:Show()
+  end
+  -- nach /reload: Pause wie vorher (Core setzt sie beim Laden zurueck und merkt sie in ns.pauseWas), danach Auto Pause
+  -- pruefen (Pfeil und Mini Fenster beide aus = Pause, auch nach dem Einloggen)
+  local AUTO_PAUSE_DELAY_S = 3
+  local pf = CreateFrame("Frame")
+  ns.RegEv(pf, "PLAYER_ENTERING_WORLD")
+  pf:SetScript("OnEvent", function(self, _, isLogin, isReload)
+    self:UnregisterAllEvents()
+    C_Timer.After(AUTO_PAUSE_DELAY_S, function()
+      local db, was = ns.db, ns.pauseWas
+      if not db then return end
+      ns.pauseWas = nil
+      if isReload and was and was.paused and not db.paused and ns.SetPaused then
+        ns.SetPaused(true)
+        if was.quiet then db.quiet = true; local h = _G.TaurenRouteHUD; if h then h:Hide() end end
+        db.autoPaused = was.auto
+      end
+      pcall(ns.AutoPauseCheck)
+    end)
+  end)
   function ns.MinimapButtonShow(on)
     if ns.db then ns.db.minimapBtn = on and true or false end
     if on then Build(); if btn then btn:Show() end elseif btn then btn:Hide() end
   end
   local ef = CreateFrame("Frame")
-  ef:RegisterEvent("PLAYER_LOGIN")
+  ns.RegEv(ef, "PLAYER_LOGIN")
   ef:SetScript("OnEvent", function() C_Timer.After(2, function() pcall(Build) end) end)
 end

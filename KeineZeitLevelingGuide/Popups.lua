@@ -92,8 +92,8 @@ local function ShowLogWarn(n)
 end
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("QUEST_ACCEPTED")
-ev:RegisterEvent("QUEST_REMOVED")
+ns.RegEv(ev, "QUEST_ACCEPTED")
+ns.RegEv(ev, "QUEST_REMOVED")
 ev:SetScript("OnEvent", function()
   if not ns.db or not ns.LogWarn then return end
   C_Timer.After(0.5, function()

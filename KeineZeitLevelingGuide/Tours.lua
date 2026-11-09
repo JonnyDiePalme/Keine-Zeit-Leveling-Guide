@@ -357,6 +357,7 @@ function ns.TourQuestLog()
   if not pick then
     local f = CreateFrame("Frame", "TaurenRouteLogPick", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
     f:SetSize(380, 460)
+    f:SetClampedToScreen(true) -- 1.3zk (Pr 13:00 Layout WIN_NOCLAMP)
     f:SetPoint("CENTER", 0, 40)
     f:SetFrameStrata("FULLSCREEN")
     if ns.Skin then ns.Skin(f, "window") end
@@ -659,7 +660,7 @@ end
 -- 17.9: einmal, wenn das Log voll wird, danach erst wieder nach 30 Min (vorher alle 5 Min, Dungeon Test: 3x im Chat)
 local lastWarn, fullNow = -9999, false
 local lf = CreateFrame("Frame")
-lf:RegisterEvent("QUEST_LOG_UPDATE")
+ns.RegEv(lf, "QUEST_LOG_UPDATE")
 lf:SetScript("OnEvent", function()
   if not GetNumQuestLogEntries then return end
   local _, n = GetNumQuestLogEntries()

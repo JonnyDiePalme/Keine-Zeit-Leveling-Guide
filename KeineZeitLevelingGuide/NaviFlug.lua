@@ -35,7 +35,13 @@ end
 local function Sicher(npc)
   local db = ns.db
   if db and npc and type(db.fpVermutet) == "table" then db.fpVermutet[npc] = nil end
+  -- 1.3p (P97): echt bestaetigt (Landung, Flugkarte erreichbar oder aktuell), bleibt beim Bereinigen der DISTANT Punkte
+  if db and npc then db.fpEcht = type(db.fpEcht) == "table" and db.fpEcht or {}; db.fpEcht[npc] = true end
 end
+-- 1.3p (P97, K 15:46, S Log: Navi plante "nach Andruk" ohne den Flugpunkt): auf Forever stehen bei DISTANT auch Punkte,
+-- die man nicht kennt. Bekannt aus der Flugkarte nur noch ueber diese Typen bzw Zustaende (C_TaxiMap: 0 aktuell, 1 erreichbar)
+local FP_KNOWN_TYPES = { CURRENT = true, REACHABLE = true }
+local FP_KNOWN_STATES = { [0] = true, [1] = true }
 -- ab hier glaubt das Navi dem Spiel auch ohne gemeldete unentdeckte Flugpunkte (FEH K 14:20)
 local FP_VERMUTET_LEVEL, FP_VERMUTET_ANZAHL = 30, 8
 
@@ -76,6 +82,7 @@ end
 
 -- a) Landung: wo du landest, kennst du den Flugpunkt
 local wasTaxi, landAt = false, nil
+local ZWISCHEN_LAND_S = 120   -- 1.3p: so lange nach einer Landung gilt ein anderer Flugmeister als Zwischenlandung
 local function LandCheck()
   local on = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player") and true or false
   if on then wasTaxi = true; return end
@@ -138,7 +145,8 @@ local function FromGame()
     end
   end
   local db = ns.db
-  if field and undis > 0 then
+  -- 1.3p (P97): ist die Flugkarte schon einmal offen gewesen, gilt nur sie (auf Forever meldet das Feld zu viele als bekannt)
+  if field and undis > 0 and not (db and db.fpKarteGesehen) then
     for _, npc in ipairs(cand) do if MarkKnown(npc) then n = n + 1 end end
     -- 20.2: jetzt sicher, vermutete Flugpunkte sind damit bestaetigt oder falsch
     if db and type(db.fpVermutet) == "table" then
@@ -589,23 +597,34 @@ local function FromTaxiMap()
   local verm = db and type(db.fpVermutet) == "table" and db.fpVermutet or nil
   local contC = ns.MapWorld and (ns.MapWorld(cm, 0.5, 0.5)) or nil
   -- 1. Durchgang: welche Knoten unserer Daten sind auf der Flugkarte (per ID, sonst per Position)
-  local daSet, idHit, posHit, gotPt = {}, 0, 0, {}
+  local daSet, idHit, posHit, gotPt, fern = {}, 0, 0, {}, {}
   for id, k in pairs(T.knoten) do
     if type(k) == "table" and (k[11] or 0) > 0 and ns.MapWorld then
       local c, wx, wy = ns.MapWorld(k[1], k[2], k[3])
       if c then
-        local da, how = false, nil
-        if slots and slots[id] then da, how = true, "id" end
+        local da, how, kennt = false, nil, false
+        if slots and slots[id] then
+          da, how = true, "id"
+          local st = slots[id].state
+          kennt = st ~= nil and FP_KNOWN_STATES[st] or false
+          if st == nil then
+            for j, q in ipairs(pts) do if q[5] == slots[id].slot then kennt = FP_KNOWN_TYPES[q[6]] or false; break end end
+          end
+        end
         if not da then
           for j, q in ipairs(pts) do
-            if q[1] == c and math.sqrt((q[2] - wx) ^ 2 + (q[3] - wy) ^ 2) < 250 then da, how = true, "pos"; gotPt[j] = true; break end
+            if q[1] == c and math.sqrt((q[2] - wx) ^ 2 + (q[3] - wy) ^ 2) < 250 then da, how = true, "pos"; gotPt[j] = true; kennt = FP_KNOWN_TYPES[q[6]] or false; break end
           end
         end
         if da then
           if how == "id" then idHit = idHit + 1 else posHit = posHit + 1 end
           daSet[id] = true
-          if MarkKnown(k[11]) then n = n + 1 end
-          Sicher(k[11])
+          if kennt then
+            if MarkKnown(k[11]) then n = n + 1 end
+            Sicher(k[11])
+          else
+            fern[k[11]] = true
+          end
         end
       end
     end
@@ -629,13 +648,22 @@ local function FromTaxiMap()
       end
     end
   end
+  -- 1.3p (P97): gespeicherte Liste bereinigen. Auf der Karte nur DISTANT und nie echt bestaetigt = nicht bekannt
+  local fernRaus = 0
+  if lesbar and vertrauen and db and db.knownFP then
+    local echt = type(db.fpEcht) == "table" and db.fpEcht or {}
+    for npc in pairs(fern) do
+      if db.knownFP[npc] and not echt[npc] then db.knownFP[npc] = nil; fernRaus = fernRaus + 1 end
+    end
+  end
+  if fernRaus > 0 then Log("FLUG", ("Flugkarte: %d Flugpunkte nur DISTANT und nie bestaetigt, als unbekannt entfernt"):format(fernRaus)); raus = raus + fernRaus end
   if db and lesbar then db.fpKarteGesehen = true end
   if raus > 0 then Log("FLUG", ("Flugkarte: %d vermutete Flugpunkte doch unbekannt, entfernt"):format(raus)) end
   if n > 0 or raus > 0 then Bump() end
   local parts = {}
   for t2, c2 in pairs(types) do parts[#parts + 1] = t2 .. " " .. c2 end
   table.sort(parts)
-  Log("FLUG", ("Flugkarte offen: %s, %d Flugpunkte neu (auch ohne Strecke von hier)"):format(table.concat(parts, ", "), n))
+  Log("FLUG", ("Flugkarte offen: %s, %d Flugpunkte neu (nur erreichbar oder aktuell)"):format(table.concat(parts, ", "), n))
   Log("FLUG", ("Flugkarte Abgleich: %d von %d Knoten erkannt (%d per Nummer, %d per Position)%s"):format(idHit + posHit, ndata, idHit, posHit,
     (lesbar and not vertrauen) and ", unter 75 %, vermutete Flugpunkte bleiben" or ""))
   -- Knoten der Karte, die zu keinem Flugpunkt in unseren Daten passen: Name, Lage, naechster Daten Knoten (hoechstens 12 Zeilen)
@@ -676,9 +704,35 @@ local taxiOpen = false
 local flewByHand = false -- 20.3d: der Spieler (oder der Sim) hat selbst einen Flug genommen
 if hooksecurefunc and TakeTaxiNode then pcall(hooksecurefunc, "TakeTaxiNode", function() flewByHand = true end) end
 local glow, hint
+-- 1.3zn (P113, S 15:13): schwaecheres Leuchten fuer Zwischenpunkte einer Flug Kette, und was markiert ist (fuer Sim und Log)
+local dimGlows = {}
+ns.NaviFlugMarked = nil
 local function GlowHide()
   if glow then glow:Hide() end
   if hint then hint:Hide() end
+  for _, g in ipairs(dimGlows) do g:Hide() end
+  ns.NaviFlugMarked = nil
+end
+local function DimGlowAt(k, slot)
+  local b = _G["TaxiButton" .. slot]
+  if not (b and b.IsShown and b:IsShown()) then return end
+  local g = dimGlows[k]
+  if not g then
+    g = CreateFrame("Frame", nil, UIParent)
+    g:SetFrameStrata("TOOLTIP")
+    g:SetSize(34, 34)
+    local t = g:CreateTexture(nil, "OVERLAY")
+    t:SetAllPoints()
+    t:SetTexture("Interface\\Cooldown\\star4")
+    t:SetBlendMode("ADD")
+    t:SetVertexColor(1, 0.85, 0.2, 0.45)
+    g.tex = t
+    g:EnableMouse(false)
+    dimGlows[k] = g
+  end
+  g:ClearAllPoints()
+  g:SetPoint("CENTER", b, "CENTER", 0, 0)
+  g:Show()
 end
 local function MakeGlow()
   if glow then return end
@@ -691,6 +745,7 @@ local function MakeGlow()
   t:SetBlendMode("ADD")
   t:SetVertexColor(1, 0.85, 0.2, 1)
   glow.tex = t
+  glow:EnableMouse(false) -- 1.3zn (P113): nur Textur, kein Klick abfangen
   glow:SetScript("OnUpdate", function(self, el)
     self.t = (self.t or 0) + el
     local k = math.sin(self.t * 5)
@@ -713,22 +768,38 @@ end
 -- der Schritt ist ein Flug (acts k="R", link="fly") mit Ziel toMap/toX/toY. Ohne Navi gab es dafuer kein Flug Leg, die Flugkarte
 -- ging ohne Markierung und ohne Auto Flug auf. Jetzt wie beim Navi: Ziel leuchtet, Start wird geprueft, nach 1,2 s TakeTaxiNode.
 local optLegCache = {}
+local V_FLY_AHEAD = 3 -- 1.3zn (P113): so viele Schritte nach vorne nach dem naechsten Flug Schritt schauen
 local function OptFlugLeg()
   local db = ns.db
   if not (db and db.optMode and db.opt and db.opt.steps and ns.OptCurrentAct and ns.MapWorld) then return nil end
   if ns.navi and not ns.navi.hidden then return nil end
   local a = ns.OptCurrentAct()
-  if not (a and a.k == "R" and a.link == "fly" and a.toMap and a.toX and a.toY) then return nil end
+  local ahead = false
+  if not (a and a.k == "R" and a.link == "fly" and a.toMap and a.toX and a.toY) then
+    -- 1.3zn (P113, S 15:13): jede Route mit Flug Schritt (Quest Route, Berufe, Buecher, Dungeon Anreise, Lehrer ...): ist der
+    -- jetzige Schritt noch nicht der Flug (zb hinlaufen zum Flugmeister), leuchtet der naechste Flug Schritt der Route.
+    -- Nur markieren, Auto Flug nur beim jetzigen Flug Schritt
+    a = nil
+    local o = db.opt
+    for k = (o.idx or 1), math.min(#o.steps, (o.idx or 1) + V_FLY_AHEAD) do
+      for _, b in ipairs(o.steps[k].acts or {}) do
+        if b.k == "R" and b.link == "fly" and b.toMap and b.toX and b.toY and not (ns.OptActDone and ns.OptActDone(b)) then a = b; break end
+      end
+      if a then break end
+    end
+    if not a then return nil end
+    ahead = true
+  end
   if ns.OptActDone and ns.OptActDone(a) then return nil end
-  if optLegCache.a == a and optLegCache.lg then return optLegCache.lg end
+  if optLegCache.a == a and optLegCache.ahead == ahead and optLegCache.lg then return optLegCache.lg end
   local c, wx, wy = ns.MapWorld(a.toMap, a.toX, a.toY)
   if not (c and wx) then return nil end
   local s = db.opt.steps[db.opt.idx or 1]
   local fc, fx, fy
   if s and s.map and s.x and s.y then fc, fx, fy = ns.MapWorld(s.map, s.x, s.y) end
-  local lg = { kind = "fly", opt = true, to = { cont = c, wx = wx, wy = wy, name = a.dest or a.quest or a.who } }
-  if fc and fx then lg.from = { cont = fc, wx = fx, wy = fy } end
-  optLegCache.a, optLegCache.lg = a, lg
+  local lg = { kind = "fly", opt = true, ahead = ahead or nil, to = { cont = c, wx = wx, wy = wy, name = a.dest or a.quest or a.who } }
+  if fc and fx and not ahead then lg.from = { cont = fc, wx = fx, wy = fy } end
+  optLegCache.a, optLegCache.lg, optLegCache.ahead = a, lg, ahead
   return lg
 end
 -- Flug Schritt, um den es gerade geht: der jetzige, oder der naechste, wenn du schon beim Flugmeister stehst
@@ -872,22 +943,71 @@ local function AutoFly()
   if not taxiOpen or not db or db.useFlights == false then return end
   local lg = FlugLeg()
   if not (lg and lg.to) then return end
-  -- nur fliegen, wenn die Route genau von diesem Flugmeister aus fliegt (sonst nichts tun, kein Auto Flug)
-  if lg.kind == "fly" and lg.from then
+  -- 1.3g (P87): Flug Kette (lg.hops): an welchem Flugmeister der Kette stehst du? Von dort Endziel, wenn erreichbar,
+  -- sonst die naechste Strecke
+  local hopTo, atHop
+  if lg.kind == "fly" and lg.hops then
+    local at
+    for k, h in ipairs(lg.hops) do
+      if h.from and CurrentIsFrom(h.from) then at = k; break end
+    end
+    if not at then
+      Log("FLUG_AUTO", "anderer Flugmeister als in der Flug Kette geplant, kein Auto Flug")
+      return
+    end
+    atHop = at
+    local iEnd = FindNode(lg.to)
+    if not (iEnd and TaxiNodeGetType(iEnd) == "REACHABLE") then
+      hopTo = lg.hops[at].to
+      Log("FLUG_AUTO", ("Flug Kette: Endziel %s von hier nicht direkt, erst %s"):format(tostring(lg.to.name), tostring(hopTo and hopTo.name)))
+    end
+  elseif lg.kind == "fly" and lg.from then
+    -- nur fliegen, wenn die Route genau von diesem Flugmeister aus fliegt (sonst nichts tun, kein Auto Flug)
     local okFrom, dFrom, why0 = CurrentIsFrom(lg.from)
-    if not okFrom then
+    -- 1.3p (P97, S Log 15:39: Flug Splintertree nach Sonnenfels landete im Wegekreuz): gerade gelandet und das geplante Ziel
+    -- ist von hier erreichbar = Zwischenlandung unterwegs, dann weiter zum Ziel statt stehen bleiben
+    local iZ = (not okFrom) and landAt and (Now() - landAt) < ZWISCHEN_LAND_S and FindNode(lg.to)
+    if iZ and TaxiNodeGetType(iZ) == "REACHABLE" then
+      Log("FLUG_AUTO", ("Zwischenlandung (Abstand zum Start %d yd), weiter nach %s"):format(math.floor(dFrom or 0), tostring(lg.to.name)))
+    elseif not okFrom then
       Log("FLUG_AUTO", ("anderer Flugmeister als geplant (Abstand zum Start %d yd%s), kein Auto Flug"):format(math.floor(dFrom or 0), why0 and (", " .. why0) or ""))
       return
     end
   end
-  local i, dist = FindNode(lg.to)
-  local want = lg.to.name or "?"
+  local tgt = hopTo or lg.to
+  local i, dist = FindNode(tgt)
+  local want = tgt.name or "?"
   if not i then
     Log("FLUG_AUTO", ("Ziel %s nicht auf der Flugkarte gefunden, nichts markiert"):format(tostring(want)))
     return
   end
   local name = (TaxiNodeName and TaxiNodeName(i)) or want
   local typ = TaxiNodeGetType(i)
+  -- 1.3zn (P113): Flug Kette: Endziel hell, Zwischenpunkte schwaecher. Merkt fuer Sim und Log, was leuchtet
+  local function Marks()
+    local iEnd = hopTo and FindNode(lg.to) or nil
+    if iEnd and iEnd ~= i and glow then
+      local be = _G["TaxiButton" .. iEnd]
+      if be and be.IsShown and be:IsShown() then glow:ClearAllPoints(); glow:SetPoint("CENTER", be, "CENTER", 0, 0); glow:Show() end
+      DimGlowAt(1, i)
+    end
+    local n = 1
+    for k, h in ipairs(lg.hops or {}) do
+      if h.to and (not atHop or k > atHop) and h.to ~= lg.to then
+        local j = FindNode(h.to)
+        if j and j ~= i and j ~= iEnd then n = n + 1; DimGlowAt(n, j) end
+      end
+    end
+    ns.NaviFlugMarked = { slot = iEnd or i, hop = iEnd and i or nil, name = iEnd and ((TaxiNodeName and TaxiNodeName(iEnd)) or lg.to.name) or name,
+      ahead = lg.ahead or nil, src = lg.opt and "route" or "navi" }
+    Log("FLUG_MARK", ("leuchtet: %s%s%s"):format(tostring(ns.NaviFlugMarked.name), iEnd and (", Zwischenpunkt " .. tostring(name)) or "", lg.ahead and ", naechster Flug Schritt der Route" or ""))
+  end
+  -- 1.3zn (P113): naechster Flug Schritt (der jetzige Schritt ist noch etwas anderes): nur leuchten, nie selbst fliegen
+  if lg.ahead then
+    MarkNode(i, (TR"Nächster Flug der Route: %s"):format(name))
+    Marks()
+    return
+  end
   local cost = (TaxiNodeCost and tonumber(TaxiNodeCost(i))) or 0
   local money = (GetMoney and GetMoney()) or 0
   local shift = IsShiftKeyDown and IsShiftKeyDown() or false
@@ -898,10 +1018,12 @@ local function AutoFly()
   elseif shift then why = TR"Shift: kein Auto Flug" end
   if why then
     MarkNode(i, (TR"Ziel der Route: %s (%s)"):format(name, why))
+    Marks()
     Log("FLUG_AUTO", ("nur markiert: %s (%s), Typ %s, Kosten %s, Gold %s, Abstand %d yd"):format(tostring(name), tostring(why), tostring(typ), tostring(cost), tostring(money), math.floor(dist or 0)))
     return
   end
   MarkNode(i, (TR"Flug nach %s startet gleich. Abbrechen: Shift halten oder die Flugkarte schliessen"):format(name))
+  Marks()
   Log("FLUG_AUTO", ("Auto Flug in 1,2 s: %s (Typ %s, Kosten %s)"):format(tostring(name), tostring(typ), tostring(cost)))
   if not C_Timer then return end
   C_Timer.After(1.2, function()
@@ -948,13 +1070,13 @@ end
 local portPending
 local bindTries, bindPending, bindNoIdx = 0, false, 0
 local ef = CreateFrame("Frame")
-ef:RegisterEvent("PLAYER_LOGIN")
-ef:RegisterEvent("PLAYER_ENTERING_WORLD")
-ef:RegisterEvent("TAXIMAP_OPENED")
-ef:RegisterEvent("TAXIMAP_CLOSED")
-ef:RegisterEvent("ZONE_CHANGED_NEW_AREA")
-ef:RegisterEvent("PLAYER_UPDATE_RESTING")
-ef:RegisterEvent("HEARTHSTONE_BOUND")
+ns.RegEv(ef, "PLAYER_LOGIN")
+ns.RegEv(ef, "PLAYER_ENTERING_WORLD")
+ns.RegEv(ef, "TAXIMAP_OPENED")
+ns.RegEv(ef, "TAXIMAP_CLOSED")
+ns.RegEv(ef, "ZONE_CHANGED_NEW_AREA")
+ns.RegEv(ef, "PLAYER_UPDATE_RESTING")
+ns.RegEv(ef, "HEARTHSTONE_BOUND")
 pcall(ef.RegisterUnitEvent, ef, "UNIT_SPELLCAST_SUCCEEDED", "player")
 ef:SetScript("OnEvent", function(_, e, a1, a2, a3)
   if e == "PLAYER_LOGIN" then

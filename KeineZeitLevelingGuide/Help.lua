@@ -19,8 +19,18 @@ local CATS = {}
 local function Cat(key, title, lines) CATS[#CATS + 1] = { key = key, title = title, lines = lines } end
 
 -- 1.1 (K: Versionsverlauf im Spiel nur Kernpunkte, nie Details)
-Cat("neu", TR"Neu in 1.2", function()
+Cat("neu", TR"Neu in 1.3", function()
   return {
+    -- 1.3 (S 13:22): Verlauf sehr kurz
+    H .. TR"Neu in Version 1.3|r",
+    TR"- Dungeon Touren mit Zielen drinnen und Abgabe",
+    TR"- Zeppelin und Schiff mit Abfahrtszeiten, verpasst wird erkannt",
+    TR"- Flugkarte zeigt den nächsten Flugpunkt",
+    TR"- Berufe mit Filter, Farben wie im Spiel und Gold pro Stunde",
+    TR"- Daten teilen mit anderen Spielern (abschaltbar)",
+    TR"- Statistik mit Zeit nach Art",
+    TR"- Viele Fehler behoben",
+    "",
     H .. TR"Neu in Version 1.2|r",
     TR"- Händler nur noch als Hinweis, nicht fest in der Route",
     TR"- Mehr Quests am Weg mitnehmen, Quest Reihen bleiben geschützt",
@@ -53,7 +63,8 @@ Cat("start", TR"Erste Schritte", function()
     TR"5. " .. k(TR"Rundgang starten") .. TR" auf der Übersicht zeigt alle Seiten Schritt für Schritt und merkt sich, wo du aufgehört hast. Das " .. k("?") .. TR" oben rechts im grossen Fenster erklärt nur die Seite, die gerade offen ist.",
     "",
     H .. TR"Wo du was findest|r",
-    TR"Das grosse Fenster öffnest du mit " .. k(TR"/klg") .. TR", mit dem Reiter im Charakterfenster (Taste C) oder im Menü vom Mini Fenster mit " .. k(TR"Grosses Fenster") .. ".",
+    TR"Das grosse Fenster öffnest du mit " .. k(TR"/klg") .. TR", mit dem Knopf an der Minimap oder im Menü vom Mini Fenster, jeweils mit " .. k(TR"Grosses Fenster") .. ".",
+    TR"Klick auf den Knopf an der Minimap öffnet ein kleines Menü: " .. k(TR"Grosses Fenster") .. ", " .. k(TR"Pfeil") .. TR" und " .. k(TR"Mini Fenster") .. TR" aus oder ein, " .. k(TR"Pause") .. TR". Sind Pfeil und Mini Fenster beide aus, ist automatisch Pause, sobald eins wieder an ist, geht es weiter.",
     TR"Links ist die Seitenleiste: " .. k(TR"Übersicht") .. ", " .. k(TR"Mein Weg") .. ", " .. k(TR"Statistik") .. ", " .. k(TR"Meine Route") .. TR", die Ziele (" .. k(TR"Dungeons") .. ", " .. k(TR"Ausrüstung") .. ", " .. k(TR"Ruf") .. ", " .. k(TR"Bücher") .. "), " .. k(TR"Einstellungen") .. TR" und " .. k(TR"Hilfe") .. ".",
     TR"Ganz unten, mit einem Strich abgetrennt, steht " .. k(TR"Farmen") .. TR" (Berufe und Gold). Das siehst du nur, wenn in den Einstellungen " .. k(TR"Farmberufe Routen") .. TR" auf Ja ist.",
     "",
@@ -104,7 +115,7 @@ Cat("arrow", TR"Pfeil und Mini Fenster", function()
   out[#out + 1] = TR"Über dem Mini Fenster steht jeder Hinweis als eigene Karte. X klickt sie weg, " .. k(TR"Gehe zu") .. TR" schickt dich hin. Kommt eine neue Funktion dazu, steht dort " .. k(TR"Neu: ...") .. TR", Klick zeigt die Erklärung."
   out[#out + 1] = ""
   out[#out + 1] = H .. TR"Karte und Minimap|r"
-  out[#out + 1] = TR"Die Karte zeigt die nächsten Schritte als Linie mit Nummern. Rechts an der Karte ist eine schmale Leiste mit Symbolen (Route, Minimap Linie, Bücher, Gold, OpenMap). Maus drauf erklärt sie, leuchtend heisst an."
+  out[#out + 1] = TR"Die Karte zeigt die nächsten Schritte als Linie mit Nummern. Rechts an der Karte ist eine schmale Leiste mit Symbolen (Route, Minimap Linie, Bücher, Gold). Maus drauf erklärt sie, leuchtend heisst an."
   out[#out + 1] = TR"Die Minimap zeigt die nächsten Schritte als Linie und Questgeber als Kreise."
   out[#out + 1] = ""
   out[#out + 1] = H .. TR"Navi|r"

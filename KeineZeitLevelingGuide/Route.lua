@@ -154,12 +154,13 @@ function ns.SlowMark(site, ms)
   ns.slowLast = { site = site, ms = ms, t = GetTime() }
   ns.slowCount[site] = (ns.slowCount[site] or 0) + 1
 end
-function ns.Ticker(interval, fn, keep)
+-- 1.3x (P108): inPause = laeuft auch in der Pause weiter (nur Anzeige, zb Mini Fenster mit XP Balken und Tempo)
+function ns.Ticker(interval, fn, keep, inPause)
   local n = 0
   local site = Site()
   local clock = debugprofilestop
   return C_Timer.NewTicker(interval, function(...)
-    if ns.db and ns.db.paused then return end
+    if ns.db and ns.db.paused and not inPause then return end
     if not keep and interval < 3 and ns.LowPower() then
       n = n + 1
       if n % (interval < 1 and 4 or 2) ~= 0 then return end
@@ -193,8 +194,8 @@ end
 ns.INSTANCE_WAIT_S = 1.5
 do
   local wf = CreateFrame("Frame")
-  wf:RegisterEvent("PLAYER_ENTERING_WORLD")
-  wf:RegisterEvent("LOADING_SCREEN_ENABLED")
+  ns.RegEv(wf, "PLAYER_ENTERING_WORLD")
+  ns.RegEv(wf, "LOADING_SCREEN_ENABLED")
   wf:SetScript("OnEvent", function(_, ev)
     ns.worldReady = false
     ns.worldTok = (ns.worldTok or 0) + 1
@@ -213,8 +214,8 @@ ns.WorldReadyHooks = ns.WorldReadyHooks or {}
 ns.blockedQueue = {}
 do
   local eb = CreateFrame("Frame")
-  eb:RegisterEvent("ADDON_ACTION_BLOCKED")
-  eb:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+  ns.RegEv(eb, "ADDON_ACTION_BLOCKED")
+  ns.RegEv(eb, "ADDON_ACTION_FORBIDDEN")
   eb:SetScript("OnEvent", function(_, ev, addon, func)
     -- 1.1 (P48): bis das Test Log laeuft hier merken, DebugLog traegt es nach
     if not ns.testLogLive then

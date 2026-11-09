@@ -433,6 +433,14 @@ function ns.FlightMasterById(id)
         if e[6] and not e.city and not fmById[e[6]] and IsKind(e, "fly") then fmById[e[6]] = { map = ui, x = e[1], y = e[2], name = e[3], id = e[6] } end
       end
     end
+    -- 1.3zj (Pr 10:25, K 10:44 Punkt 3: geteilte Fluege nie uebernommen): Flugmeister in Hauptstaedten (Orgrimmar, Donnerfels,
+    -- Sturmwind, Eisenschmiede ...) gab es hier nie, darum war jeder Flug von oder zu einer Stadt "nicht plausibel" (auch die
+    -- eigenen Messungen). Stadt Eintraege nur, wenn die Zone keinen hat
+    for ui, list in pairs(ns.svc) do
+      for _, e in ipairs(list) do
+        if e[6] and e.city and not fmById[e[6]] and IsKind(e, "fly") then fmById[e[6]] = { map = ui, x = e[1], y = e[2], name = e[3], id = e[6], city = true } end
+      end
+    end
   end
   return fmById[id]
 end
@@ -1098,8 +1106,8 @@ end
 -- nach dem Ruhestein (oder Astralen Rueckruf): da wo du ankommst, ist der Bindepunkt. Genauer als jede Schaetzung
 do
   local hf = CreateFrame("Frame")
-  hf:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-  hf:RegisterEvent("PLAYER_ENTERING_WORLD")
+  ns.RegEv(hf, "UNIT_SPELLCAST_SUCCEEDED")
+  ns.RegEv(hf, "PLAYER_ENTERING_WORLD")
   local castAt, castPos = -999, nil
   local function Here()
     local map = ns.PlayerMap and ns.PlayerMap()
@@ -1197,7 +1205,7 @@ end
 ns.FirstStart = FirstStart -- fuer Tests (Sim, Trockenlauf)
 do
   local ff = CreateFrame("Frame")
-  ff:RegisterEvent("PLAYER_ENTERING_WORLD")
+  ns.RegEv(ff, "PLAYER_ENTERING_WORLD")
   ff:SetScript("OnEvent", function(self)
     self:UnregisterAllEvents()
     local db = ns.db
@@ -1212,14 +1220,14 @@ do
 end
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("PLAYER_LOGIN")
-ev:RegisterEvent("PLAYER_LEVEL_UP")
-ev:RegisterEvent("TRAINER_SHOW")
-ev:RegisterEvent("MERCHANT_SHOW")
-ev:RegisterEvent("TAXIMAP_OPENED")
-ev:RegisterEvent("HEARTHSTONE_BOUND")
-ev:RegisterEvent("GOSSIP_SHOW")
-ev:RegisterEvent("CONFIRM_BINDER")
+ns.RegEv(ev, "PLAYER_LOGIN")
+ns.RegEv(ev, "PLAYER_LEVEL_UP")
+ns.RegEv(ev, "TRAINER_SHOW")
+ns.RegEv(ev, "MERCHANT_SHOW")
+ns.RegEv(ev, "TAXIMAP_OPENED")
+ns.RegEv(ev, "HEARTHSTONE_BOUND")
+ns.RegEv(ev, "GOSSIP_SHOW")
+ns.RegEv(ev, "CONFIRM_BINDER")
 -- Soll beim Gastwirt gleich gebunden werden? Route Schritt "binden" oder der Ruhestein Hinweis ist da
 function ns.WantBind()
   local a = ns.db and ns.db.optMode and ns.OptCurrentAct and ns.OptCurrentAct()

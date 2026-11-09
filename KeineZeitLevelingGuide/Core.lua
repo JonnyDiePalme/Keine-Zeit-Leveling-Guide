@@ -1132,8 +1132,8 @@ end
 -- Kampfzeit messen: Start des Kampfs bis zum Kill, bei mehreren Mobs ab dem letzten Kill
 local combatStart, combatEnd, lastKillAt
 local cf = CreateFrame("Frame")
-cf:RegisterEvent("PLAYER_REGEN_DISABLED")
-cf:RegisterEvent("PLAYER_REGEN_ENABLED")
+ns.RegEv(cf, "PLAYER_REGEN_DISABLED")
+ns.RegEv(cf, "PLAYER_REGEN_ENABLED")
 cf:SetScript("OnEvent", function(_, ev)
   local now = GetTime()
   if ev == "PLAYER_REGEN_DISABLED" then
@@ -1667,7 +1667,7 @@ end
 -- (zb nach Schiff oder Zeppelin).
 -- 20.4a4 (K 20:30 z6 Punkt 1, S 20:22): auf der Kontinent oder Welt Karte (wide) zeigt auch die Leveling Route mehr
 -- Schritte ueber alle Zonen (MAP_WIDE_STEPS), sonst sah man dort fast nichts
-local MAP_WIDE_STEPS = 40
+local MAP_WIDE_STEPS = 50   -- 1.3zzd (Pr 04:07: Ashenvale ab Schritt 44, K "20 bis 50")
 function ns.MapStepList(opt, start, wide)
   local out = {}
   local steps = opt and opt.steps or {}
@@ -1678,17 +1678,18 @@ function ns.MapStepList(opt, start, wide)
   local inZone, extra, lastTravel = 0, nil, false
   -- Farmrunde: die ganze Runde zeigen (sonst die naechsten 10 Stopps)
   local cap = (opt and opt.loop) and 40 or 10
-  if wide then
-    for i = start, math.min(#steps, start + MAP_WIDE_STEPS - 1) do table.insert(out, i) end
-    return out
-  end
   -- 20.3k (S Test 20.3g Punkt 20b): Zusatz Routen (Dungeon, Ruf, Ausruestung, Farmen) ganz zeigen, bis 300 Stopps und
   -- ueber alle Zonen. Die Leveling Route bleibt bei den naechsten 10
+  -- 1.3zza (P130): Zusatz Routen auch auf Kontinent und Welt ganz (vorher kam dort zuerst die Grenze MAP_WIDE_STEPS)
   local all = ns.OptSpecial and ns.OptSpecial(opt) and not (opt.mirror or opt.group or opt.split)
   if all then
     -- 20.3o (Da Pruefung Nr 10): schwacher PC nur 40 Stopps (jedes Neuzeichnen der Karte geht durch alle)
     local maxN = (db and db.slowPC) and 40 or 300
     for i = start, math.min(#steps, start + maxN - 1) do table.insert(out, i) end
+    return out
+  end
+  if wide then
+    for i = start, math.min(#steps, start + MAP_WIDE_STEPS - 1) do table.insert(out, i) end
     return out
   end
   for i = start, #steps do
@@ -1754,7 +1755,10 @@ local function DrawOpt(mapID, optArg)
     return u, v
   end
   if wide and not lastX and pm and pp then lastX, lastY = View(pm, pp:GetXY()) end
-  local list = ns.MapStepList(opt, start, wide)
+  -- 1.3zza (P130, S 03:15 und 03:18: "die Steps, die auf der grossen Karte angezeigt werden, sollten auch alle in der
+  -- Zonenkarte angezeigt werden"): die Zonen Karte nimmt dieselbe Liste wie Kontinent und Welt (Leveling die naechsten
+  -- MAP_WIDE_STEPS, Zusatz Routen alle) und zeigt davon, was in dieser Zone liegt
+  local list = ns.MapStepList(opt, start, wide or zoneView)
   local drawn = 0
   -- v11f (K P37): Runde im grossen Gegner Gebiet (Arrow.lua NaviRundPts) als geschlossener Kreis
   do
@@ -1803,14 +1807,16 @@ local function DrawOpt(mapID, optArg)
           AddLine(lastX, lastY, x, y, col, 0.9, wd)
         end
       end
-      local k = st.acts[1].k
+      -- 1.3zg (Pr 08:15): Schritt ohne acts (Dungeon Eingang) nicht mehr Fehler
+      local a1 = st.acts and st.acts[1]
+      local k = a1 and a1.k or "O"
       local both = false
-      for _, a in ipairs(st.acts) do if a.k ~= k then both = true end end
+      for _, a in ipairs(st.acts or {}) do if a.k ~= k then both = true end end
       local c = OPTCOL[k] or YELLOW
       if i == start then AddRing(x, y, 40, GREEN, 0.35, 1) end
       -- Symbol je Art (Figma Atlas); ohne Atlas wie frueher Ringe
       local pk = OPTPIN[k]
-      if k == "V" and st.acts[1].books then pk = "book" end
+      if k == "V" and a1 and a1.books then pk = "book" end
       if both then
         local hasA, hasT = false, false
         for _, a in ipairs(st.acts) do if a.k == "A" then hasA = true elseif a.k == "T" then hasT = true end end
@@ -3034,22 +3040,58 @@ local function ActiveTick()
   local taxi = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")
   if moving or fight or taxi then idleFor = 0 else idleFor = idleFor + 1 end
   -- kurz stehen (reden, looten, essen) gehoert dazu, ab 90 Sekunden ohne alles gilt es als Pause
+  ns.idleFor = idleFor
   if afk or idleFor > 90 then return end
   local b = RateBucket()
   b.act = b.act + 1
+  -- 1.3zze (K 04:30): Route Zeit getrennt, fuer Tempo und Prognose
+  if ns.curAct == "route" then b.ract = (b.ract or 0) + 1 end
 end
 local function ActiveXP(d)
   local b = RateBucket()
   b.xp = b.xp + d
+  if ns.curAct == "route" then b.rxp = (b.rxp or 0) + d end
   idleFor = 0
 end
-function ns.XPRate()
-  local act, xp = 0, 0
+-- 1.3z (P110 Punkt 5, S Log 05:14 "0 XP pro Stunde", 05:19 "357400"): fuers Mini Fenster ein ruhiger Wert. Gleitend ueber
+-- die letzte Stunde aktive Spielzeit (Eimer zu je 1 Min), solange weniger als SMOOTH_FULL_S gemessen ist, mit dem Schnitt
+-- ueber alles Erfasste gemischt (am Anfang fast nur der Gesamt Schnitt). Grosse Quest Abgaben reissen so nicht mehr aus
+-- 1.3zze (K 04:30, 04:33): Tempo und Prognose nur aus der Zeit, in der die Leveling Route lief (ns.curAct "route",
+-- StatsExtra ns.ActNow). Ohne genug Route Zeit wie bisher alles
+ns.XP_SMOOTH = { WIN_S = 3600, FULL_S = 1800, MIN_ACT_S = 90, ROUTE_MIN_S = 600 } -- Core hat fast 200 Locals, darum in ns
+function ns.XPRateAll(p)
+  if not p then return nil end
+  if (p.rtotal or 0) > ns.XP_SMOOTH.ROUTE_MIN_S and (p.rxp or 0) > 0 then return p.rxp / p.rtotal * 3600 end
+  if (p.total or 0) > 600 and (p.xp or 0) > 0 then return p.xp / p.total * 3600 end
+end
+function ns.XPRateSmooth()
+  local act, xp, ract, rxp = 0, 0, 0, 0
   for i = #buckets, 1, -1 do
     act = act + buckets[i].act
     xp = xp + buckets[i].xp
+    ract = ract + (buckets[i].ract or 0)
+    rxp = rxp + (buckets[i].rxp or 0)
+    if act >= ns.XP_SMOOTH.WIN_S then break end
+  end
+  if ract >= ns.XP_SMOOTH.MIN_ACT_S then act, xp = ract, rxp end
+  local p = ns.PerfData and ns.PerfData()
+  local all = ns.XPRateAll(p)
+  local now = act >= ns.XP_SMOOTH.MIN_ACT_S and (xp / act * 3600) or nil
+  if not now then return all or 0, act end
+  if not all then return now, act end
+  local w = math.min(1, act / ns.XP_SMOOTH.FULL_S)
+  return w * now + (1 - w) * all, act
+end
+function ns.XPRate()
+  local act, xp, ract, rxp = 0, 0, 0, 0
+  for i = #buckets, 1, -1 do
+    act = act + buckets[i].act
+    xp = xp + buckets[i].xp
+    ract = ract + (buckets[i].ract or 0)
+    rxp = rxp + (buckets[i].rxp or 0)
     if act >= RATE_WIN then break end
   end
+  if ract >= ns.XP_SMOOTH.MIN_ACT_S then act, xp = ract, rxp end
   if act < 90 then return 0, act end
   return xp / act * 3600, act
 end
@@ -3169,7 +3211,7 @@ function ns.Stats()
   local s = {}
   if not db then return s end
   local el = sess.start and (GetTime() - sess.start) or 0
-  s.xph = ns.XPRate()
+  s.xph = ns.XPRateSmooth()
   s.session = el
   -- 20.3l (Log 20.3k K5, S: "Lauftempo 100% obwohl beritten"): das Spiel liefert neben dem aktuellen Tempo auch das
   -- moegliche Lauftempo mit allen Boni (Reittier, Buffs, Talente, Gegenstaende), auch im Stehen. Das zeigt die Zeile.
@@ -3295,6 +3337,40 @@ end
 
 local function PerfTick()
   if not db then return end
+  -- 1.3zze (K 04:30, 04:33): wofuer die Zeit je Level draufgeht (Route, Berufe, Dungeon, Farm, Stadt, AFK, frei)
+  -- 1.3zzl (Pr 06:29: 3 Min stehen fehlten ganz): Sekunden seit dem letzten Takt statt immer 1, Luecken (Takt lief nicht,
+  -- zb Ladebild, Sim Sprung) bis ACT_SPLIT.MAX_GAP_S zaehlen mit, stehst du dabei still, als AFK
+  do
+    local nowT = GetTime()
+    local dt = 1
+    if ns.actLastT then dt = math.max(0, math.min(math.floor(nowT - ns.actLastT + 0.5), ns.ACT_SPLIT and ns.ACT_SPLIT.MAX_GAP_S or 1)) end
+    ns.actLastT = (ns.actLastT and nowT - ns.actLastT < (ns.ACT_SPLIT and ns.ACT_SPLIT.MAX_GAP_S or 1)) and (ns.actLastT + dt) or nowT
+    local act = (dt > 0 and ns.ActNow) and ns.ActNow(dt) or nil
+    ns.curAct = act or ns.curAct
+    if act then
+      local p0, L0 = Perf(), UnitLevel("player")
+      p0.lvlAct = p0.lvlAct or {}
+      p0.lvlAct[L0] = p0.lvlAct[L0] or {}
+      p0.lvlAct[L0][act] = (p0.lvlAct[L0][act] or 0) + dt
+      p0.act = p0.act or {}
+      p0.act[act] = (p0.act[act] or 0) + dt
+      if act == "route" then p0.rtotal = (p0.rtotal or 0) + dt end
+      -- 1.3zzj: Steh Zeit vor AFK nachtraeglich umbuchen (StatsExtra ns.actMove)
+      local mvs = ns.actMove
+      if mvs then
+        ns.actMove = nil
+        local la = p0.lvlAct[L0]
+        for _, mv in ipairs(mvs) do
+          local n = math.min(mv.n or 0, la[mv.from] or 0, p0.act[mv.from] or 0)
+          if n > 0 then
+            la[mv.from] = la[mv.from] - n; la.afk = (la.afk or 0) + n
+            p0.act[mv.from] = p0.act[mv.from] - n; p0.act.afk = (p0.act.afk or 0) + n
+            if mv.from == "route" then p0.rtotal = math.max(0, (p0.rtotal or 0) - n) end
+          end
+        end
+      end
+    end
+  end
   if UnitIsAFK and ns.Api.U(UnitIsAFK, "player") then return end
   local mapID = ZoneOnly(PlayerMap())
   if not mapID then return end
@@ -3441,8 +3517,12 @@ function ns.BigStats()
     table.insert(out.levels, { lv = lv, t = t, sum = sum })
   end
   -- Prognose bis 60 mit der aktuellen XP pro Stunde (Session, sonst gesamt)
+  -- 1.3y (P109 Punkt 3, S Bild: "Schnitt 885 XP pro Stunde", 1025 Tage): vorher zuerst die Sitzung (XP der Sitzung durch
+  -- die ganze Sitzungs Zeit mit Pause und Stehen), die war nach einer langen Pause fast 0. Jetzt der Schnitt ueber alles
+  -- Erfasste (XP gesamt durch erfasste Spielzeit), die Sitzung nur ohne genug Gesamtdaten
   local el = sess.start and (GetTime() - sess.start) or 0
-  local rate = (el > 300 and sess.xp > 0) and (sess.xp / el * 3600) or ((p.total or 0) > 600 and (p.xp or 0) / p.total * 3600 or 0)
+  local rate = ns.XPRateAll(p)
+    or ((el > 300 and (sess.xp or 0) > 0) and (sess.xp / el * 3600) or 0)
   out.rate = rate
   local now = (ns.xpTotal[L] or 0) + (Plain(UnitXP("player")) or 0)
   out.xpTo60 = math.max(0, (ns.xpTotal[60] or 0) - now)
@@ -3459,6 +3539,7 @@ local function PerfXP(d)
   local mapID = ZoneOnly(PlayerMap())
   if mapID then ZoneStat(mapID).xp = ZoneStat(mapID).xp + d end
   Perf().xp = Perf().xp + d
+  if ns.curAct == "route" then Perf().rxp = (Perf().rxp or 0) + d end
 end
 
 -- restliche Punkte einer Zone als Zeit
@@ -4069,6 +4150,9 @@ local function Slash(msg)
     if ns.ShowBig then ns.ShowBig("help") end
     return
   end
+  -- 1.3zj (Pr 10:40 Layout: "/fw oeffnet das grosse Fenster nicht, zeigt 14 Chat Zeilen"): die Hilfe sagt "/klg grosses
+  -- Fenster", also oeffnet /klg ohne Zusatz das grosse Fenster. Die Befehle zeigt /klg help
+  if cmd == "" and ns.ToggleBig then ns.ToggleBig(); return end
   if cmd == "" or cmd == "help" then
     Print(TR"/klg  grosses Fenster,  /klg hilfe  Anleitung im grossen Fenster")
     Print(TR"/klg an | aus  Route zeigen oder verstecken,  /klg pause  alles anhalten oder weiter")
@@ -4245,9 +4329,9 @@ function ns.StartReady()
 end
 do
   local gf = CreateFrame("Frame")
-  gf:RegisterEvent("ADDON_LOADED")
-  gf:RegisterEvent("PLAYER_ENTERING_WORLD")
-  gf:RegisterEvent("LOADING_SCREEN_DISABLED")
+  ns.RegEv(gf, "ADDON_LOADED")
+  ns.RegEv(gf, "PLAYER_ENTERING_WORLD")
+  ns.RegEv(gf, "LOADING_SCREEN_DISABLED")
   gf:SetScript("OnEvent", function(_, event)
     if gate.open then gf:UnregisterAllEvents(); return end
     local now = GetTime and GetTime() or 0
@@ -4260,23 +4344,23 @@ end
 -- Events
 ------------------------------------------------------------
 local f = CreateFrame("Frame")
-f:RegisterEvent("PLAYER_LOGIN")
-f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
-f:RegisterEvent("CHAT_MSG_SYSTEM")
-f:RegisterEvent("UI_INFO_MESSAGE")
-f:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
-f:RegisterEvent("PLAYER_LEVEL_UP")
-f:RegisterEvent("PLAYER_XP_UPDATE")
+ns.RegEv(f, "PLAYER_LOGIN")
+ns.RegEv(f, "ZONE_CHANGED_NEW_AREA")
+ns.RegEv(f, "CHAT_MSG_SYSTEM")
+ns.RegEv(f, "UI_INFO_MESSAGE")
+ns.RegEv(f, "CHAT_MSG_COMBAT_XP_GAIN")
+ns.RegEv(f, "PLAYER_LEVEL_UP")
+ns.RegEv(f, "PLAYER_XP_UPDATE")
 -- Kampflog (COMBAT_LOG_EVENT_UNFILTERED) ist auf Forever fuer Addons gesperrt, daher nicht mehr benutzt
-f:RegisterEvent("PLAYER_DEAD")
-f:RegisterEvent("QUEST_TURNED_IN")
+ns.RegEv(f, "PLAYER_DEAD")
+ns.RegEv(f, "QUEST_TURNED_IN")
 
 -- Kaputte gespeicherte Daten (von Hand geaendert, Absturz beim Speichern, sehr alte Version): was den falschen Typ hat,
 -- wird verworfen und neu angelegt, statt dass das Addon beim Einloggen mit einem Fehler abbricht (Sim 17.2)
 local SV_TABLES = { "opt", "plan60", "myWay", "planHist", "planPast", "bindInn", "hudPos", "arrowPos", "stats", "chars", "profiles",
   "trail", "progress", "custom", "learned", "renames", "danger", "via", "override", "mobDanger", "done", "defer", "knownFP", "booksDone",
   "bookTierDone", "gearSkip", "gearPick", "logPick", "classSeen", "unlockSeen", "innHinted", "startAsked", "svcSnooze", "profSel", "profSess", "profLastOpt",
-  "questBlocked", "forceQ", "planGrind", "mobLayer", "tourAt", "shared", "sharedD", "sharedOut", "sharedX", "syncIgnore", "blockedLog",
+  "questBlocked", "fpEcht", "offerNo", "questItemSeen", "forceQ", "planGrind", "mobLayer", "tourAt", "shared", "sharedD", "sharedOut", "sharedX", "syncIgnore", "blockedLog",
   "cross", "walk", "walkDir", "walkDrop", "road", "cliff", "water", "loot", "recipes", "killRep", "questMoney", "best", "block", "perf",
   "coachSeen", "migrated", "minimap", "prof", "profPlan", "qdrop", "otherSaid", "hubVisited", "forbidden", "bookItems", "bookPick",
   "startBindNames", "questTwin", "optParked", "farmSess", "repGoal", "docks", "npcName", "hubQuests", "oldCVars", "shareFail", "skipQ",
@@ -4379,6 +4463,7 @@ f:SetScript("OnEvent", function(_, event, ...)
     -- (vorher fuer den ganzen Account: ein Level 60 Magier hatte die Route vom neuen Tauren)
     do
       local CHAR_FIELDS = { "opt", "plan60", "setupDone", "firstStartDone", "trainedAt", "bindInn", "bindZone", "bindStart", "hearthUsedAt", "startPlan", "startAsked", "forceQ", "innHinted", "knownFP",
+        "fpEcht", "offerNo", "questItemSeen", -- 1.3u, 1.3w (P106 Quest Items im Tooltip): Flugpunkte bestaetigt (P97) und "NPC bietet sie nicht an" (P101) auch pro Charakter
         "questBlocked", "planGrind", "booksDone", "booksTurned", "bookTierDone", "gearSkip", "gearPick", "logPick", "classSeen", "unlockSeen",
         "stepChanged", "trainerSkip", "svcSnooze", "optMode", "profSel", "profSess", "profLastOpt",
         -- auch pro Charakter: Zonen Fortschritt, Tempo (ein Twink ohne Reittier ist langsamer), Gold Modus
@@ -4524,6 +4609,8 @@ f:SetScript("OnEvent", function(_, event, ...)
     -- 1.1 (P49, K 12:55, S Log 12:45: neuer Tauren startete mit "Pause ja"): Pause gilt nur bis zum Ausloggen, beim Einloggen
     -- ist sie immer aus (vorher blieb sie aus einer alten Sitzung haengen, auch "Pfeil und Mini Fenster aus")
     if db.paused or db.quiet then
+      -- 1.3k (P93): bei /reload bleibt die Pause, UI.lua holt sie aus ns.pauseWas zurueck (nur beim Einloggen ist sie aus)
+      ns.pauseWas = { paused = db.paused, quiet = db.quiet, auto = db.autoPaused }
       db.paused, db.quiet = false, nil
       if ns.TestLog then C_Timer.After(5, function() ns.TestLog("PAUSE", "aus beim Einloggen (war aus alter Sitzung an)") end) end
     end
@@ -4592,11 +4679,15 @@ f:SetScript("OnEvent", function(_, event, ...)
   if ns.RefreshUI then ns.RefreshUI() end
 end)
 
--- Pause: alles anhalten (Menue im Mini Fenster, Reiter im Charakterfenster, /klg pause)
+-- Pause: alles anhalten (Menue im Mini Fenster, Minimap Menue, /klg pause)
 function ns.SetPaused(on)
   local db = ns.db
   if not db then return end
   db.paused = on and true or false
+  db.autoPaused = nil   -- 1.3k (P93): ns.AutoPauseCheck setzt es nach dem Aufruf neu
+  -- 1.3p (P96 Punkt 2, S Log 15:22 und 15:30): in der Pause wartet ein Routen Wechsel (Tour Start oder Ende) und kommt
+  -- beim Weitermachen. Damit steht im Log der Grund statt "ohne bekannten Anlass"
+  if not db.paused and ns.TestLogWhy then ns.TestLogWhy("Pause aus, Wechsel aus der Pause uebernommen") end
   -- 19.32 (Saschas Runde 2 Punkt 15): Weitermachen holt auch das Mini Fenster zurueck, wenn es mit "Pfeil und Mini
   -- Fenster aus" weg war
   if not db.paused and db.quiet then

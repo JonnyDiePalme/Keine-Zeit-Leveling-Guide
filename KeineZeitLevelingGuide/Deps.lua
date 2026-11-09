@@ -114,7 +114,7 @@ function ns.CheckOthers()
 end
 
 local f = CreateFrame("Frame")
-f:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(f, "PLAYER_LOGIN")
 f:SetScript("OnEvent", function()
   C_Timer.After(6, function() ns.CheckDeps(); if ns.CheckOthers then pcall(ns.CheckOthers) end end)
 end)
@@ -191,7 +191,7 @@ function ns.OnBlocked(ev, addon, func)
 end
 -- was beim Laden passiert ist, nach dem Einloggen auswerten
 local lf = CreateFrame("Frame")
-lf:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(lf, "PLAYER_LOGIN")
 lf:SetScript("OnEvent", function()
   C_Timer.After(3, function()
     local q = ns.blockedQueue or {}

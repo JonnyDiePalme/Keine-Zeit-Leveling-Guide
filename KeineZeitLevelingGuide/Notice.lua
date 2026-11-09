@@ -54,7 +54,7 @@ function ns.NoticeList()
   -- Hinweise: Gruppe, Ruhestein, Taschen, Reparieren, Lehrer, Questlog, Buecher, Dungeon, Flugpunkt, Gasthaus
   local function AddHints()
     local now = GetTime()
-    for _, h in ipairs(ns.HintList and ns.HintList() or {}) do
+    for _, h in ipairs((ns.HintListShown and ns.HintListShown()) or (ns.HintList and ns.HintList()) or {}) do
       local hk = HintKey(h)
       if hintGone[hk] and now >= hintGone[hk] then hintGone[hk] = nil end
       if not hintGone[hk] then
@@ -282,9 +282,9 @@ end
 ns.NoticeUpdate = Update
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("PLAYER_LOGIN")
-ev:RegisterEvent("PLAYER_REGEN_DISABLED")
-ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+ns.RegEv(ev, "PLAYER_LOGIN")
+ns.RegEv(ev, "PLAYER_REGEN_DISABLED")
+ns.RegEv(ev, "PLAYER_REGEN_ENABLED")
 ev:SetScript("OnEvent", function(_, event)
   if event == "PLAYER_LOGIN" then
     C_Timer.After(2, function() ns.Ticker(1, Update) end)

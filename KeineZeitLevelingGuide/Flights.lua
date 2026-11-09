@@ -43,13 +43,23 @@ function ns.FlightTime(a, b)
     local o = db.flights and db.flights[k]
     if type(o) == "table" and (o.n or 0) > 0 and o.s then return o.s / o.n, "eigen" end
   end
+  -- 1.3zzf (K 04:44): geteilt ab 2 Absendern, dann Startdaten gelernt, dann geteilt von 1 Absender
+  local one
   for _, k in ipairs({ Key(a, b), Key(b, a) }) do
     local sh = db.flightsShared and db.flightsShared[k]
     if type(sh) == "table" then
       local m = Median(sh)
-      if m then return m, "geteilt" end
+      if m then
+        local n = 0
+        for _, x in pairs(sh) do if type(x) == "number" then n = n + 1 end end
+        if n >= ((ns.GELERNT and ns.GELERNT.MIN_SENDERS) or 2) then return m, "geteilt" end
+        one = one or m
+      end
     end
   end
+  local g = ns.GelerntFlug and ns.GelerntFlug(a, b)
+  if g then return g, "gelernt" end
+  if one then return one, "geteilt" end
   return nil
 end
 
@@ -176,8 +186,8 @@ ns.FlightRecord = Record
 ------------------------------------------------------------
 local fromId, taking, startT
 local ef = CreateFrame("Frame")
-ef:RegisterEvent("TAXIMAP_OPENED")
-ef:RegisterEvent("PLAYER_ENTERING_WORLD")
+ns.RegEv(ef, "TAXIMAP_OPENED")
+ns.RegEv(ef, "PLAYER_ENTERING_WORLD")
 ef:SetScript("OnEvent", function(_, e)
   if e == "TAXIMAP_OPENED" then
     fromId = NpcId(UnitGUID and UnitGUID("npc"))
@@ -214,6 +224,8 @@ function ns.InFlight()
   if t ~= nil then return t and true or false end
   return ns.FlightNow and ns.FlightNow() ~= nil or false
 end
+-- 1.3.1a (P119): Ziel Flugmeister (NPC id) vom laufenden Flug, sonst nil
+function ns.FlightTo() return taking and startT and taking.to or nil end
 function ns.FlightNow()
   if not (taking and startT and taking.to and taking.from) then return nil end
   local total, src = ns.FlightTime(taking.from, taking.to)
@@ -345,7 +357,7 @@ end
 ns.FlightsShare = Share
 
 local tf = CreateFrame("Frame")
-tf:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(tf, "PLAYER_LOGIN")
 tf:SetScript("OnEvent", function()
   ns.Ticker(0.5, function() pcall(Tick) end, true)
   ns.Ticker(120, function() pcall(Share) end)

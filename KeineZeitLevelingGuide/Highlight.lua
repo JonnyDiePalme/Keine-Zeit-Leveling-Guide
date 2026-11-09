@@ -116,6 +116,14 @@ local MARK_SCALE = 2.5
 ns.MARK_SCALE_BIG = 3.5
 ns.MARK_SCALE_STD = MARK_SCALE
 local function MarkScale() return (ns.db and tonumber(ns.db.markScale)) or MARK_SCALE end
+-- 1.3n (P95, S 14:27 "Marker ueber dem Questgeber zu gross"): eigener Regler nur fuer den Questgeber Marker, Faktor auf
+-- MarkScale. 1.0 = Groesse bis 1.3m, Standard die Haelfte. Neuer Schluessel db.giverMarkScale, darum gilt der neue
+-- Standard fuer alle, die noch nichts eingestellt haben
+ns.GIVER_MARK_MIN, ns.GIVER_MARK_MAX, ns.GIVER_MARK_STD = 0.2, 2, 0.5
+local function GiverScale()
+  local f = ns.db and tonumber(ns.db.giverMarkScale) or ns.GIVER_MARK_STD
+  return MarkScale() * math.max(ns.GIVER_MARK_MIN, math.min(ns.GIVER_MARK_MAX, f))
+end
 local function GetMark(plate)
   local m = marks[plate]
   if not m then
@@ -206,47 +214,105 @@ local function CurrentGiver()
 end
 ns.CurrentGiver = CurrentGiver
 
+-- 1.3a (P83, S 23:57 Bild: "das Symbol gerne als etwas anderes, etwas auffaelliger", K 00:06: nur der Geber vom aktuellen
+-- Schritt, eigenes Symbol klar anders als das gelbe "!" vom Spiel, gross, leicht pulsierend, Groesse als Einstellung,
+-- Annehmen und Abgeben in eigenen Farben): leuchtender Ring mit Raute in der Mitte, darueber ein huepfender Winkel nach
+-- unten, darunter das Wort (Annehmen, Abgeben). Alles aus einfachen Flaechen gebaut, kein Bild vom Spiel. Der Ring pulsiert
+-- (Helligkeit und Groesse). Farben je Art in ns.MARK_COL, Groesse ueber db.markScale wie bisher
+ns.MARK_COL = {
+  quest  = { 1, 0.82, 0.1 },   -- Annehmen: gold
+  turnin = { 0.25, 1, 0.35 },  -- Abgeben: gruen
+  both   = { 1, 0.55, 0.1 },   -- beides: orange Ring, Raute gold, Winkel gruen
+}
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+local function Bar(m, layer, w, h)
+  local t = m:CreateTexture(nil, layer)
+  t:SetTexture(WHITE)
+  t:SetSize(w, h)
+  return t
+end
+local function Rot(t, r) if t.SetRotation then pcall(t.SetRotation, t, r) end end
 local function GetGiverMark(plate)
   local m = giverMarks[plate]
   if m then return m end
   m = CreateFrame("Frame", nil, UIParent)
-  m:SetSize(44, 44)
-  m:SetScale(MarkScale())
-  Follow(m, plate, 6)
+  m:SetSize(56, 56)
+  m:SetScale(GiverScale())
+  Follow(m, plate, 10)
   m:SetFrameStrata("HIGH")
+  -- Leuchten aussen (pulsiert), dunkler Ring innen, Raute in der Mitte
   m.glow = m:CreateTexture(nil, "BACKGROUND")
   m.glow:SetTexture(CIRCLE)
-  m.glow:SetSize(44, 44)
+  m.glow:SetSize(56, 56)
   m.glow:SetPoint("CENTER")
   m.inner = m:CreateTexture(nil, "BORDER")
   m.inner:SetTexture(CIRCLE)
-  m.inner:SetSize(34, 34)
+  m.inner:SetSize(40, 40)
   m.inner:SetPoint("CENTER")
-  m.inner:SetVertexColor(0, 0, 0, 0.75)
-  m.icon = m:CreateTexture(nil, "ARTWORK")
-  m.icon:SetSize(26, 26)
-  m.icon:SetPoint("CENTER")
-  m.icon2 = m:CreateTexture(nil, "ARTWORK")
-  m.icon2:SetSize(22, 22)
-  m.icon2:SetTexture("Interface\\GossipFrame\\AvailableQuestIcon")
-  -- huepfender Pfeil nach unten
-  m.arrow = m:CreateTexture(nil, "OVERLAY")
-  m.arrow:SetTexture("Interface\\Minimap\\MinimapArrow")
-  m.arrow:SetSize(28, 28)
-  m.arrow:SetPoint("BOTTOM", m, "TOP", 0, 0)
-  m.arrow:SetRotation(math.pi)
-  m.arrow:SetVertexColor(0.2, 1, 0.4)
+  m.inner:SetVertexColor(0, 0, 0, 0.8)
+  m.dia = Bar(m, "ARTWORK", 18, 18)
+  m.dia:SetPoint("CENTER")
+  Rot(m.dia, math.pi / 4)
+  m.diaIn = Bar(m, "OVERLAY", 8, 8)
+  m.diaIn:SetPoint("CENTER")
+  Rot(m.diaIn, math.pi / 4)
+  m.diaIn:SetVertexColor(1, 1, 1, 0.9)
+  -- Winkel nach unten ueber dem Ring (zwei Balken als V)
+  m.vL = Bar(m, "OVERLAY", 22, 6)
+  m.vL:SetPoint("BOTTOM", m, "TOP", -7, 6)
+  Rot(m.vL, -0.7)
+  m.vR = Bar(m, "OVERLAY", 22, 6)
+  m.vR:SetPoint("BOTTOM", m, "TOP", 7, 6)
+  Rot(m.vR, 0.7)
+  -- Wort unter dem Ring
+  m.label = m:CreateFontString(nil, "OVERLAY", ns.FontName and ns.FontName("GameFontNormal") or "GameFontNormal")
+  m.label:SetPoint("TOP", m, "BOTTOM", 0, -1)
+  m.label:SetShadowOffset(1, -1)
   if m.CreateAnimationGroup then
+    -- ganzer Marker huepft leicht
     local ag = m:CreateAnimationGroup()
     local up = ag:CreateAnimation("Translation")
-    up:SetOffset(0, 8); up:SetDuration(0.45); up:SetOrder(1)
+    up:SetOffset(0, 6); up:SetDuration(0.5); up:SetOrder(1)
     local down = ag:CreateAnimation("Translation")
-    down:SetOffset(0, -8); down:SetDuration(0.45); down:SetOrder(2)
+    down:SetOffset(0, -6); down:SetDuration(0.5); down:SetOrder(2)
     ag:SetLooping("REPEAT")
     m.anim = ag
   end
+  if m.glow.CreateAnimationGroup then
+    -- Ring pulsiert (heller und etwas groesser, dann zurueck)
+    local pg = m.glow:CreateAnimationGroup()
+    local a1 = pg:CreateAnimation("Alpha")
+    a1:SetFromAlpha(0.55); a1:SetToAlpha(1); a1:SetDuration(0.6); a1:SetOrder(1)
+    local a2 = pg:CreateAnimation("Alpha")
+    a2:SetFromAlpha(1); a2:SetToAlpha(0.55); a2:SetDuration(0.6); a2:SetOrder(2)
+    if pg.CreateAnimation then
+      local okS, sc = pcall(pg.CreateAnimation, pg, "Scale")
+      if okS and sc and sc.SetScale then
+        pcall(sc.SetScale, sc, 1.15, 1.15); sc:SetDuration(0.6); sc:SetOrder(1)
+        local okS2, sc2 = pcall(pg.CreateAnimation, pg, "Scale")
+        if okS2 and sc2 and sc2.SetScale then pcall(sc2.SetScale, sc2, 1 / 1.15, 1 / 1.15); sc2:SetDuration(0.6); sc2:SetOrder(2) end
+      end
+    end
+    pg:SetLooping("REPEAT")
+    m.pulse = pg
+  end
   giverMarks[plate] = m
   return m
+end
+
+-- Farben und Wort je Art setzen
+local function StyleGiver(m, kind)
+  m:SetScale(GiverScale()) -- Einstellung Groesse gilt sofort, auch fuer schon gebaute Marker
+  local C = ns.MARK_COL
+  local ring = C[kind] or C.quest
+  local dia = (kind == "both") and C.quest or ring
+  local vee = (kind == "both") and C.turnin or ring
+  m.glow:SetVertexColor(ring[1], ring[2], ring[3], 0.95)
+  m.dia:SetVertexColor(dia[1], dia[2], dia[3], 1)
+  m.vL:SetVertexColor(vee[1], vee[2], vee[3], 1)
+  m.vR:SetVertexColor(vee[1], vee[2], vee[3], 1)
+  m.label:SetText(kind == "both" and TR"Annehmen + Abgeben" or (kind == "turnin" and TR"Abgeben" or TR"Annehmen"))
+  m.label:SetTextColor(ring[1], ring[2], ring[3])
 end
 
 local raidMarked -- Name, dem wir ein Symbol gegeben haben
@@ -282,20 +348,10 @@ local function UpdateGiverPlate(unit, giverName, kind, giverNpc)
   if isGiver then
     diag.giver = diag.giver + 1
     local m = GetGiverMark(plate)
-    if kind == "both" then
-      m.glow:SetVertexColor(1, 0.5, 0, 0.95)
-      m.icon:SetTexture("Interface\\GossipFrame\\ActiveQuestIcon")
-      m.icon:ClearAllPoints(); m.icon:SetPoint("CENTER", -7, 0)
-      m.icon2:ClearAllPoints(); m.icon2:SetPoint("CENTER", 8, 0); m.icon2:Show()
-    else
-      local c = (kind == "turnin") and { 0.3, 1, 0.6 } or { 1, 0.5, 0 }
-      m.glow:SetVertexColor(c[1], c[2], c[3], 0.95)
-      m.icon:SetTexture(kind == "turnin" and "Interface\\GossipFrame\\ActiveQuestIcon" or "Interface\\GossipFrame\\AvailableQuestIcon")
-      m.icon:ClearAllPoints(); m.icon:SetPoint("CENTER")
-      m.icon2:Hide()
-    end
+    StyleGiver(m, kind)
     m:Show()
     if m.anim and not m.anim:IsPlaying() then m.anim:Play() end
+    if m.pulse and not m.pulse:IsPlaying() then m.pulse:Play() end
     MarkGiver(unit, kind)
   elseif giverMarks[plate] then
     giverMarks[plate]:Hide()
@@ -432,10 +488,10 @@ end
 ns.MarkDiag = MarkDiag
 
 local f = CreateFrame("Frame")
-f:RegisterEvent("NAME_PLATE_UNIT_ADDED")
-f:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
-f:RegisterEvent("PLAYER_TARGET_CHANGED")
-f:RegisterEvent("QUEST_LOG_UPDATE")
+ns.RegEv(f, "NAME_PLATE_UNIT_ADDED")
+ns.RegEv(f, "NAME_PLATE_UNIT_REMOVED")
+ns.RegEv(f, "PLAYER_TARGET_CHANGED")
+ns.RegEv(f, "QUEST_LOG_UPDATE")
 local updSoon = false
 f:SetScript("OnEvent", function(_, event, unit)
   -- Pause: keine Marker und Symbole setzen (Ausblenden beim Entfernen der Plakette geht weiter)
@@ -523,8 +579,8 @@ end
 
 -- Grafik Vorlagen schalten den Umriss wieder an: danach neu setzen
 local sp = CreateFrame("Frame")
-sp:RegisterEvent("PLAYER_REGEN_ENABLED")
-sp:RegisterEvent("CVAR_UPDATE")
+ns.RegEv(sp, "PLAYER_REGEN_ENABLED")
+ns.RegEv(sp, "CVAR_UPDATE")
 sp:SetScript("OnEvent", function(_, event, name)
   if event == "PLAYER_REGEN_ENABLED" then
     if ns.sparklePending then ns.sparklePending = false; ApplySparkle() end
@@ -620,5 +676,12 @@ end
 -- 1.1 (P51): neue Groesse gleich auf alle schon gebauten Symbole
 function ns.MarkRescale()
   for _, m in pairs(marks) do pcall(m.SetScale, m, MarkScale()) end
-  for _, m in pairs(giverMarks) do pcall(m.SetScale, m, MarkScale()) end
+  for _, m in pairs(giverMarks) do pcall(m.SetScale, m, GiverScale()) end
+end
+function ns.GiverMarkScale() return (ns.db and tonumber(ns.db.giverMarkScale)) or ns.GIVER_MARK_STD end
+function ns.SetGiverMarkScale(v)
+  if not ns.db then return end
+  v = math.floor(math.max(ns.GIVER_MARK_MIN, math.min(ns.GIVER_MARK_MAX, tonumber(v) or ns.GIVER_MARK_STD)) * 10 + 0.5) / 10
+  ns.db.giverMarkScale = v
+  ns.MarkRescale()
 end

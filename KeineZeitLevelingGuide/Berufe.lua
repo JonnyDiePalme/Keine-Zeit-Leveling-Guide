@@ -27,6 +27,10 @@ local function DB()
   p.fish = p.fish or {}     -- [map] = { [cell] = { x, y, n, items = { [id] = n } } } Angelstellen
   p.ctype = p.ctype or {}   -- [npc] = 1 Wildtier, 0 anderes
   p.fishZone = p.fishZone or {} -- [map] = { [fish] = n } gefangene Fische pro Zone
+  -- 1.3h (P90): eigene Raten je Art und Gebiet: [art][map] = { n = Beute Fenster, i = { [item] = Fenster mit dem Item } }
+  -- Art: fish (Angeln), node (Kraut oder Ader), skin (Kuerschnern), mob (Beute vom Mob: Stoff, Fleisch)
+  p.rate = p.rate or {}
+  p.rateShared = p.rateShared or {} -- [art][map][Absender Nummer] = { n, i, t } von anderen Spielern (P91)
   db.recipes = db.recipes or {} -- [char] = { [rezept] = { c = item, r = { [item] = n }, p = Beruf } }
   return db
 end
@@ -36,12 +40,12 @@ end
 ------------------------------------------------------------
 local ICON = "Interface\\Icons\\"
 ns.PROFS = {
-  { key = "herb", name = TR"Kräuterkunde", short = TR"Kräuter", skills = { "Kräuterkunde", "Herbalism" }, icon = ICON .. "Spell_Nature_NatureTouchGrow", banner = "fw_beruf_kraeuter", kind = "node", gm = "Herb Gathering" },
-  { key = "mine", name = TR"Bergbau", short = TR"Bergbau", skills = { "Bergbau", "Mining" }, icon = ICON .. "Trade_Mining", banner = "fw_beruf_bergbau", kind = "node", gm = "Mining" },
-  { key = "skin", name = TR"Kürschnerei", short = TR"Kürschner", skills = { "Kürschnerei", "Skinning" }, icon = ICON .. "INV_Misc_Pelt_Wolf_01", banner = "fw_beruf_kuerschner", kind = "mob" },
-  { key = "cloth", name = TR"Stoff", short = TR"Stoff", skills = { "Schneiderei", "Tailoring" }, icon = ICON .. "Trade_Tailoring", banner = "fw_beruf_stoff", kind = "mob", free = true },
-  { key = "cook", name = TR"Kochkunst", short = TR"Kochen", skills = { "Kochkunst", "Cooking" }, icon = ICON .. "INV_Misc_Food_15", banner = "fw_beruf_kochen", kind = "mob", free = true },
-  { key = "fish", name = TR"Angeln", short = TR"Angeln", skills = { "Angeln", "Fishing" }, icon = ICON .. "Trade_Fishing", banner = "fw_beruf_angeln", kind = "fish" },
+  { key = "herb", skillId = 182, name = TR"Kräuterkunde", short = TR"Kräuter", skills = { "Kräuterkunde", "Herbalism" }, icon = ICON .. "Spell_Nature_NatureTouchGrow", banner = "fw_beruf_kraeuter", kind = "node", gm = "Herb Gathering" },
+  { key = "mine", skillId = 186, name = TR"Bergbau", short = TR"Bergbau", skills = { "Bergbau", "Mining" }, icon = ICON .. "Trade_Mining", banner = "fw_beruf_bergbau", kind = "node", gm = "Mining" },
+  { key = "skin", skillId = 393, name = TR"Kürschnerei", short = TR"Kürschner", skills = { "Kürschnerei", "Skinning" }, icon = ICON .. "INV_Misc_Pelt_Wolf_01", banner = "fw_beruf_kuerschner", kind = "mob" },
+  { key = "cloth", skillId = 197, name = TR"Stoff", short = TR"Stoff", skills = { "Schneiderei", "Tailoring" }, icon = ICON .. "Trade_Tailoring", banner = "fw_beruf_stoff", kind = "mob", free = true },
+  { key = "cook", skillId = 185, name = TR"Kochkunst", short = TR"Kochen", skills = { "Kochkunst", "Cooking" }, icon = ICON .. "INV_Misc_Food_15", banner = "fw_beruf_kochen", kind = "mob", free = true },
+  { key = "fish", skillId = 356, name = TR"Angeln", short = TR"Angeln", skills = { "Angeln", "Fishing" }, icon = ICON .. "Trade_Fishing", banner = "fw_beruf_angeln", kind = "fish" },
 }
 local PROF = {}
 for _, p in ipairs(ns.PROFS) do PROF[p.key] = p end
@@ -121,7 +125,7 @@ local FISH = {
   { 8365, TR"Rohe Mithrilkopfforelle", { 130 } }, { 4603, TR"Roher gefleckter Gelbschwanz", { 130, 205 } },
   { 6358, TR"Öliger Schwarzmaul", { 130 }, 107 }, { 6359, TR"Feuerflossenschnapper", { 130, 205 }, 105 },
   { 13758, TR"Roher Rotkiemer", { 205 } }, { 13754, TR"Roher glasiger Mächtigfisch", { 205 } }, { 13759, TR"Roher Nachtflossenschnapper", { 205, 330 } },
-  { 13760, TR"Roher Sonnenschuppenlachs", { 205, 330 } }, { 13756, TR"Winterkalmar", { 205 } }, { 13757, TR"Roher Sommerbarsch", { 205 } },
+  { 13760, TR"Roher Sonnenschuppenlachs", { 205, 330 } }, { 13755, TR"Winterkalmar", { 205 } }, { 13756, TR"Roher Sommerbarsch", { 205 } }, { 13757, TR"Blitzaal", { 205 } }, -- 1.3l (Pr 13:35): Ids waren vertauscht
   { 21153, TR"Roher großer Weisenfisch", { 205 }, 106 }, { 13889, TR"Roher Weißschuppenlachs", { 330 } }, { 13422, TR"Steinschuppenaal", { 205, 330 }, 110 },
 }
 local function FishNeed(base) return math.min(300, math.max(1, base + 70)) end
@@ -178,23 +182,79 @@ end
 local skillCache, skillAt = {}, -10
 function ns.ProfSkill(key)
   local p = PROF[key]
-  if not (p and GetNumSkillLines and GetSkillLineInfo) then return end
+  if not (p and ((GetNumSkillLines and GetSkillLineInfo) or GetProfessions)) then return end
   if GetTime() - skillAt < 1 then local c = skillCache[key]; if c then return c[1], c[2] end; if c == false then return end end
   if GetTime() - skillAt >= 1 then skillCache = {}; skillAt = GetTime() end
   local r, m = B.ReadSkill(p)
   skillCache[key] = r and { r, m } or false
   return r, m
 end
+-- alle Rueckgabe Werte, Fehler = nichts (ns.Api.U gibt nur zwei zurueck)
+local function PAll(ok, ...) if ok then return ... end end
 function B.ReadSkill(p)
-  for i = 1, (Plain(GetNumSkillLines()) or 0) do
-    local name, header, _, rank, _, _, max = GetSkillLineInfo(i)
-    if name and not header then
-      for _, n in ipairs(p.skills) do if name == n then return Plain(rank) or 0, Plain(max) or 0 end end
+  if GetNumSkillLines and GetSkillLineInfo then
+    for i = 1, (Plain(PAll(pcall(GetNumSkillLines))) or 0) do
+      local name, header, _, rank, _, _, max = PAll(pcall(GetSkillLineInfo, i))
+      name = Plain(name)
+      if name and not Plain(header) then
+        for _, n in ipairs(p.skills) do if name == n then return Plain(rank) or 0, Plain(max) or 0 end end
+      end
+    end
+  end
+  -- 1.3f (P88, S 03:25 Bild: Spiel zeigt "Angeln 68/150", wir sagten "noch nicht gelernt"): auf Forever stehen Berufe auch im
+  -- Berufe Fenster (GetProfessions, GetProfessionInfo mit Skill Linie). Erst die Skill Linie (p.skillId), dann der Name
+  if GetProfessions and GetProfessionInfo then
+    local list = { PAll(pcall(GetProfessions)) }
+    for i = 1, 6 do
+      local idx = Plain(list[i])
+      if idx then
+        local name, _, rank, max, _, _, line = PAll(pcall(GetProfessionInfo, idx))
+        name, rank, max, line = Plain(name), Plain(rank), Plain(max), Plain(line)
+        local hit = (p.skillId and line == p.skillId)
+        if not hit and name then for _, n in ipairs(p.skills) do if name == n then hit = true; break end end end
+        if hit then return rank or 0, max or 0 end
+      end
     end
   end
 end
+-- 1.3f (P88): beim Start eine BERUF Zeile mit allen erkannten Berufen und Skill
+function ns.ProfLogAll()
+  if not ns.TestLog then return end
+  local parts = {}
+  for key, p in pairs(PROF) do
+    local r, m = B.ReadSkill(p)
+    if r then parts[#parts + 1] = ("%s %d/%d"):format(tostring(p.short or key), r, m or 0) end
+  end
+  table.sort(parts)
+  ns.TestLog("BERUF", #parts > 0 and ("erkannt: " .. table.concat(parts, ", ")) or "keine Berufe erkannt")
+end
+if C_Timer then
+  local f = CreateFrame("Frame")
+  ns.RegEv(f, "PLAYER_LOGIN")
+  f:SetScript("OnEvent", function() C_Timer.After(8, function() pcall(ns.ProfLogAll) end) end)
+end
 
 -- kann man das mit dem Skill farmen? (Stoff und Fleisch immer), plus wie viel fehlt
+-- 1.3zr (P120, K 19:12, S 19:08): EINE Regel fuer die Farbe der Skill Zahl, wie im Spiel beim Sammeln (Kraeuter, Bergbau):
+-- orange bis Mindestwert + YELLOW, gelb bis + GREEN, gruen bis + GREY, danach grau (keine Punkte mehr), rot = Skill noch zu
+-- tief (oder nicht gelernt). Abstaende gelten fuer alle Knoten gleich (Spiel Regel), der Mindestwert kommt aus den Daten
+ns.PROF_DIFF = { YELLOW = 25, GREEN = 50, GREY = 100 }
+ns.PROF_LEGEND_H = 66   -- Berufe Seite: Platz unten links fuer Legende und Hinweis
+ns.PROF_DIFF_COL = { orange = "ff8040", yellow = "ffff00", green = "40bf40", grey = "808080", red = "ff2020", white = "ffffff" }
+function ns.ProfDiff(it)
+  if not it then return nil end
+  local p = PROF[it.prof]
+  if not p or p.free then return "white" end
+  local r = ns.ProfSkill(it.prof)
+  local need = it.skill or 0
+  if not r or r < need then return "red" end
+  if p.kind ~= "node" or need <= 0 then return "white" end
+  local D = ns.PROF_DIFF
+  if r < need + D.YELLOW then return "orange" end
+  if r < need + D.GREEN then return "yellow" end
+  if r < need + D.GREY then return "green" end
+  return "grey"
+end
 function ns.ProfCan(it)
   if not it then return false, 0 end
   local p = PROF[it.prof]
@@ -532,7 +592,14 @@ function ns.ProfMobIndex(cb)
         local tries = 0
         local function W()
           tries = tries + 1
-          if ns.svcReady and Q() then B.waitTimer = nil; ns.ProfMobIndex() elseif tries < 30 then C_Timer.After(3, W) else B.waitTimer = nil end
+          if ns.svcReady and Q() then B.waitTimer = nil; ns.ProfMobIndex() elseif tries < 30 then C_Timer.After(3, W) else
+            -- 1.3v (P104, S Bilder: Gold/Std bleibt bei "wird gerechnet"): Questie oder die Dienste kamen nicht, die
+            -- Wartenden bekommen eine leere Liste, damit die Seite "unbekannt" zeigt statt ewig zu warten
+            B.waitTimer = nil
+            local w = mobWait; mobWait = {}
+            if ns.TestLog then ns.TestLog("BERUFE", ("Mob Liste: Questie nach %d Versuchen nicht bereit, %d Warten beendet"):format(tries, #w)) end
+            for _, f in ipairs(w) do pcall(f, {}) end
+          end
         end
         C_Timer.After(3, W)
       end
@@ -706,15 +773,33 @@ local function MobAreas(it, idx)
   return out
 end
 
+-- 1.3i (P89, S 03:25 und Pr 12:25: Gebiete waren nur je Skill Stufe, also falsch): Fang Raten je Fisch und Gebiet als Daten
+-- (Daten\FWW_Fisch_Gebiete.lua, von Pr aus VMaNGOS fishing_loot_template erzeugt): ns.FISH_AREAS[item] = { [uiMap] = Prozent }.
+-- Gibt es fuer einen Fisch Daten, zaehlen nur Gebiete mit Rate (und Gebiete, in denen du ihn schon gefangen hast). Ohne Daten
+-- (zb Forever eigene Zonen) wie bisher ueber die Skill Stufe. Die Skill Grenze je Gebiet bleibt FISH_ZONE
+local function FishData(id) return ns.FISH_AREAS and ns.FISH_AREAS[id] end
+ns.FishData = FishData
+local function FishFits(it, map, base)
+  local d = FishData(it.id)
+  if d and next(d) then return (d[map] or 0) > 0, d[map] end
+  for _, b in ipairs(it.tiers or {}) do if b == base then return true end end
+  return false
+end
+local function FishMaps(it)
+  local maps = {}
+  for map in pairs(FISH_ZONE) do maps[map] = true end
+  for map in pairs(FishData(it.id) or {}) do maps[map] = true end
+  return maps
+end
 local function FishAreas(it)
   local out = {}
   local db = DB()
   local L = L0()
-  local tiers = {}
-  for _, b in ipairs(it.tiers or {}) do tiers[b] = true end
-  for map, base in pairs(FISH_ZONE) do
+  for map in pairs(FishMaps(it)) do
+    local base = FISH_ZONE[map]
     local caught = db and db.prof.fishZone[map] and db.prof.fishZone[map][it.id]
-    if tiers[base] or caught then
+    local fits, pct = FishFits(it, map, base)
+    if fits or caught then
       local spots = 0
       for _, s in pairs(db and db.prof.fish[map] or {}) do spots = spots + 1 end
       local schools = 0
@@ -723,8 +808,8 @@ local function FishAreas(it)
         for _, node in pairs(t and t[map] or {}) do if node == it.school then schools = schools + 1 end end
       end
       local lo, hi = ZoneRange(map)
-      table.insert(out, { map = map, n = spots + schools, spots = spots, schools = schools, lo = lo, hi = hi,
-        status = (lo and lo > L + 4) and "danger" or "ok", learned = caught and true or (spots > 0), need = FishNeed(base) })
+      table.insert(out, { map = map, n = spots + schools, spots = spots, schools = schools, lo = lo, hi = hi, pct = pct,
+        status = (lo and lo > L + 4) and "danger" or "ok", learned = caught and true or (spots > 0), need = base and FishNeed(base) or nil })
     end
   end
   return out
@@ -776,6 +861,23 @@ local function Tbl(v) return type(v) == "table" and v or nil end
 local function ALProf() local AL = Tbl(_G.AtlasLoot); local D = AL and Tbl(AL.Data); return AL, D and Tbl(D.Profession) end
 local function ALStorage() local AL = Tbl(_G.AtlasLoot); local I = AL and Tbl(AL.ItemDB); return I and Tbl(I.Storage) end
 function ns.HasAtlasLoot() local _, P = ALProf(); return P ~= nil end
+-- 1.3zza (P131, S Log 03:15 Kochen "Rezepte leer, 0 Zutaten" mit AtlasLoot an): ist ein AtlasLoot Berufe Modul (Crafting)
+-- ueberhaupt geladen oder ladbar? Ohne Modul gibt es keine Rezepte aus AtlasLoot, nur die aus deinen Berufsfenstern
+function ns.ALCraftState()
+  local ST = ALStorage()
+  local isLoaded = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
+  local exists = (C_AddOns and C_AddOns.DoesAddOnExist) or nil
+  local getInfo = (C_AddOns and C_AddOns.GetAddOnInfo) or GetAddOnInfo
+  for _, m in ipairs(ALMODS) do
+    if (ST and ST[m]) or (isLoaded and isLoaded(m)) then return "geladen", m end
+  end
+  for _, m in ipairs(ALMODS) do
+    local ok, there = false, nil
+    if exists then ok, there = pcall(exists, m) elseif getInfo then local ok2, nm = pcall(getInfo, m); ok, there = ok2, nm ~= nil end
+    if ok and there then return "aus", m end
+  end
+  return "fehlt"
+end
 local recipeIdx -- [reagent] = { { spell, created, prof, skill, count } }
 local function LoadAL()
   local ST = ALStorage()
@@ -969,6 +1071,7 @@ local function LearnLoot()
   if not map then return end
   local fishing = IsFishingLoot and IsFishingLoot()
   local num = Plain(GetNumLootItems()) or 0
+  pcall(ns.ProfRateCount, map, fishing, num)
   for slot = 1, num do
     local link = GetLootSlotLink and GetLootSlotLink(slot)
     local id = type(link) == "string" and tonumber(link:match("item:(%d+)"))
@@ -1015,15 +1118,16 @@ local function LearnLoot()
 end
 
 local lf = CreateFrame("Frame")
-lf:RegisterEvent("LOOT_OPENED")
-lf:RegisterEvent("PLAYER_TARGET_CHANGED")
-lf:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
-lf:RegisterEvent("NAME_PLATE_UNIT_ADDED")
-lf:RegisterEvent("TRADE_SKILL_SHOW")
-lf:RegisterEvent("TRADE_SKILL_UPDATE")
-lf:RegisterEvent("CRAFT_SHOW")
-lf:RegisterEvent("CRAFT_UPDATE")
-lf:RegisterEvent("PLAYER_LOGIN")
+ns.RegEv(lf, "LOOT_OPENED")
+ns.RegEv(lf, "PLAYER_TARGET_CHANGED")
+ns.RegEv(lf, "UPDATE_MOUSEOVER_UNIT")
+ns.RegEv(lf, "NAME_PLATE_UNIT_ADDED")
+ns.RegEv(lf, "TRADE_SKILL_SHOW")
+ns.RegEv(lf, "TRADE_SKILL_UPDATE")
+ns.RegEv(lf, "TRADE_SKILL_LIST_UPDATE") -- 1.3zl: Name im neueren Client, das ausgelassene alte ersetzt es
+ns.RegEv(lf, "CRAFT_SHOW")
+ns.RegEv(lf, "CRAFT_UPDATE")
+ns.RegEv(lf, "PLAYER_LOGIN")
 local tradeAt = 0
 B.frame = lf
 lf:SetScript("OnEvent", function(_, e, arg)
@@ -1031,7 +1135,7 @@ lf:SetScript("OnEvent", function(_, e, arg)
   elseif e == "PLAYER_TARGET_CHANGED" then pcall(LearnType, "target")
   elseif e == "UPDATE_MOUSEOVER_UNIT" then pcall(LearnType, "mouseover")
   elseif e == "NAME_PLATE_UNIT_ADDED" then if arg then pcall(LearnType, arg) end
-  elseif e == "TRADE_SKILL_SHOW" or e == "TRADE_SKILL_UPDATE" or e == "CRAFT_SHOW" or e == "CRAFT_UPDATE" then
+  elseif e == "TRADE_SKILL_SHOW" or e == "TRADE_SKILL_UPDATE" or e == "TRADE_SKILL_LIST_UPDATE" or e == "CRAFT_SHOW" or e == "CRAFT_UPDATE" then
     -- nicht bei jedem Update, das Fenster feuert oft
     if GetTime() - tradeAt > 2 then
       tradeAt = GetTime()
@@ -1372,7 +1476,7 @@ local function FishSpot(sel, opt, lockerer)
     local picked = next(opt.zones) and opt.zones[map]
     local fits = false
     for _, it in pairs(want) do
-      for _, b in ipairs(it.tiers) do if b == base then fits = true end end
+      if FishFits(it, map, base) then fits = true end
       if db.prof.fishZone[map] and db.prof.fishZone[map][it.id] then fits = true end
     end
     if fits and (not minNeed or FishNeed(base) < minNeed) then minNeed = FishNeed(base) end
@@ -1726,25 +1830,154 @@ function ns.ProfSession()
   return s
 end
 
+-- 1.3zzg (P133 Teil b, K 04:18): gemessene Stueck pro Stunde je Sache und Gebiet, nur waehrend einer Berufe Route
+-- (ns.curAct "beruf", also nicht AFK, nicht Pause, nicht in Instanz). db.prof.meas[map][item] = { t = Sekunden, n = Stueck }
+ns.PROF_MEAS = { TICK_S = 5, MIN_S = 600, MAX_DT_S = 30, IDLE_S = 30 }
+local meas = { at = nil, last = {}, said = {} }
+function ns.ProfMeasTick()
+  local db = DB()
+  local s = db and ns.ProfSession()
+  if not (s and ns.curAct == "beruf") then meas.at = nil; meas.last = {}; return end
+  local map = ns.CurZone and ns.CurZone()
+  -- 1.3zzl: Spielzeit statt Uhrzeit, Luecken ueber MAX_DT_S zaehlen nicht
+  local now = GetTime()
+  local dt = meas.at and (now - meas.at) or 0
+  meas.at = now
+  -- 1.3zzj (Pr 05:34: Stillstand zaehlte mit): ab IDLE_S ohne Ortswechsel zaehlt die Zeit nicht
+  local okDt = map and dt > 0 and dt <= ns.PROF_MEAS.MAX_DT_S and (ns.stillFor or 0) < ns.PROF_MEAS.IDLE_S
+  -- 1.3zzn (Pr 07:03: Stehen zaehlte noch mit): einmal je Steh Pause ins Log, warum nicht gezaehlt wird
+  if map and dt > 0 and not okDt then
+    if not meas.paused and ns.TestLog then ns.TestLog("BERUFE", ("Messung pausiert: still %d s, Luecke %d s"):format(math.floor(ns.stillFor or 0), math.floor(dt))) end
+    meas.paused = true
+  elseif okDt then meas.paused = nil end
+  db.prof.meas = db.prof.meas or {}
+  local zm = map and (db.prof.meas[map] or {})
+  if map then db.prof.meas[map] = zm end
+  for id in pairs(s.start or {}) do
+    local c = Count(id)
+    local l = meas.last[id]
+    meas.last[id] = c
+    if okDt and l then
+      local e = zm[id] or { t = 0, n = 0 }
+      zm[id] = e
+      e.t = e.t + dt
+      if c > l then e.n = e.n + (c - l) end
+      local key = id .. ":" .. map
+      if e.t >= ns.PROF_MEAS.MIN_S and not meas.said[key] and ns.TestLog then
+        meas.said[key] = true
+        ns.TestLog("BERUFE", ("gemessen %d in %d: %d Stueck in %d s, %.1f pro Std"):format(id, map, e.n, e.t, e.n / e.t * 3600))
+      end
+    end
+  end
+end
+-- Stueck pro Stunde: eigene Messung (ab MIN_S), sonst geteilt (Art g). Gibt Wert, Quelle ("eigen", "geteilt"), Sekunden oder Absender
+function ns.ProfMeasured(id, map)
+  local db = DB()
+  local e = db and db.prof.meas and db.prof.meas[map] and db.prof.meas[map][id]
+  if e and e.t >= ns.PROF_MEAS.MIN_S then return e.n / e.t * 3600, "eigen", e.t end
+  local G = ns.DATA_SHARE and ns.DATA_SHARE.G
+  if G and ns.SharedValue and id and map then
+    local v, n = ns.SharedValue("g", id * G.KEY_F + map)
+    if v then return v / G.SCALE, "geteilt", n end
+  end
+end
+-- alle eigenen Messungen zum Teilen: { [schluessel] = Stueck pro Std mal SCALE }
+function ns.ProfMeasAll()
+  local db = DB()
+  local G = ns.DATA_SHARE and ns.DATA_SHARE.G
+  local out = {}
+  if not (db and db.prof.meas and G) then return out end
+  for map, zm in pairs(db.prof.meas) do
+    for id, e in pairs(zm) do
+      if e.t >= ns.PROF_MEAS.MIN_S and map < G.KEY_F then out[id * G.KEY_F + map] = math.floor(e.n / e.t * 3600 * G.SCALE + 0.5) end
+    end
+  end
+  return out
+end
+
+-- 1.3zj (Pr 09:55 PROF_HALT_NICHT_FERTIG, K 10:44 Punkt 1): Halt wurde nie fertig. Jetzt: Act gehoert zum jetzigen Schritt
+-- (gleiche Tabelle oder gleicher Halt: k P und gleiches what), Abstand auch ohne Weltkoordinaten (gleiche Karte direkt), und
+-- je Act einmal ein Log mit dem Grund, wenn er nicht fertig wird
+local profWhy = setmetatable({}, { __mode = "k" })
+local function ProfWhy(a, why)
+  if ns.TestLog and profWhy[a] ~= why then
+    profWhy[a] = why
+    ns.TestLog("BERUFE", "Halt noch nicht fertig: " .. why)
+  end
+end
 function ns.ProfActDone(a)
   local s = ns.ProfSession()
   if not s then return true end
   if SessDone(s) then return true end
-  local map, x, y = PlayerPos()
-  local st = ns.db.opt and ns.db.opt.steps[ns.db.opt.idx or 1]
+  local o = ns.db and ns.db.opt
+  local st = o and o.steps and o.steps[o.idx or 1]
   local cur = false
+  -- 1.3zk: nur die gleiche Tabelle. Der Vergleich ueber what aus 1.3zj liess Halte mit gleichem Kraut weiter hinten als
+  -- fertig zaehlen (Abstand wird zum jetzigen Schritt gemessen), darum sprang die Route 1 auf 3, 5 auf 8 usw
   for _, b in ipairs(st and st.acts or {}) do if b == a then cur = true end end
   if not cur then return false end
+  if a.skip then return true end   -- 1.3zzb (P132): Halt uebersprungen (ns.PROF_SKIP)
+  local map, x, y = PlayerPos()
+  if not map and C_Map and C_Map.GetBestMapForUnit then
+    map = C_Map.GetBestMapForUnit("player")
+    local pos = map and C_Map.GetPlayerMapPosition(map, "player")
+    if pos then x, y = pos:GetXY() else map = nil end
+  end
   local d = map and ns.WorldDist and ns.WorldDist({ map, x, y }, { st.map, st.x, st.y })
+  if not d and map and map == st.map and x and st.x and ns.ZoneYards then
+    local w, h = ns.ZoneYards(map)
+    if w and h then d = math.sqrt(((x - st.x) * w) ^ 2 + ((y - st.y) * h) ^ 2) end
+  end
+  if not d then ProfWhy(a, ("kein Abstand (Karte %s, Halt %s)"):format(tostring(map), tostring(st.map))); return false end
   if a.dwell then
     if a.arrive and a.arrive > GetTime() then a.arrive = nil end
     if not a.arrive then
-      if d and d < (a.r or 80) then a.arrive = GetTime() end
+      if d < (a.r or 80) then a.arrive = GetTime() else ProfWhy(a, ("noch %d yd"):format(math.floor(d))) end
       return false
     end
     return GetTime() - a.arrive >= a.dwell
   end
-  return d ~= nil and d < (a.r or 40)
+  if d < (a.r or 40) then return true end
+  ProfWhy(a, ("noch %d yd"):format(math.floor(d)))
+  return false
+end
+
+-- 1.3zzb (P132, S 03:37 "stur ein Punkt nach dem anderen, oder kann ein Punkt uebersprungen werden?"): bisher war ein
+-- Sammel Halt erst fertig, wenn du bis auf a.r (40 yd) dran warst, sonst schickte der Pfeil dich zurueck. Jetzt alle
+-- CHECK_S Sekunden: liegt einer der naechsten LOOK Halte um mehr als GAIN_YD naeher als der jetzige (Halt verpasst oder
+-- schon am uebernaechsten), geht es dort weiter. Die uebersprungenen Halte zaehlen als erledigt, in der naechsten Runde
+-- sind sie wieder dabei. Nicht bei Halten mit Wartezeit (Mobs, Angeln). Log FARM
+ns.PROF_SKIP = { CHECK_S = 3, LOOK = 3, GAIN_YD = 30 }
+do
+  local function Dist(map, x, y, st)
+    if not (map and st and st.map and st.x) then return nil end
+    return ns.WorldDist and ns.WorldDist({ map, x, y }, { st.map, st.x, st.y })
+  end
+  local function Plain(st)
+    for _, a in ipairs(st and st.acts or {}) do if a.k ~= "P" or a.dwell or a.fish or a.mob or a.school then return false end end
+    return st and st.acts and #st.acts > 0
+  end
+  local function SkipCheck()
+    local o = ns.db and ns.db.opt
+    if not (o and o.prof and o.steps and ns.ProfSession and ns.ProfSession()) then return end
+    if ns.db.paused or (UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")) then return end
+    local i = o.idx or 1
+    local st = o.steps[i]
+    if not Plain(st) then return end
+    local map, x, y = PlayerPos()
+    local dCur = Dist(map, x, y, st)
+    if not dCur then return end
+    local best, bd
+    for j = i + 1, math.min(#o.steps, i + ns.PROF_SKIP.LOOK) do
+      if not Plain(o.steps[j]) then break end
+      local dj = Dist(map, x, y, o.steps[j])
+      if dj and (not bd or dj < bd) then best, bd = j, dj end
+    end
+    if not (best and bd + ns.PROF_SKIP.GAIN_YD < dCur) then return end
+    for k = i, best - 1 do for _, a in ipairs(o.steps[k].acts or {}) do a.skip = true end end
+    if ns.TestLog then ns.TestLog("FARM", ("weiter bei Halt %d, uebersprungen %d bis %d, Grund: naeher (%d yd statt %d yd)"):format(best, i, best - 1, math.floor(bd), math.floor(dCur))) end
+  end
+  if ns.Ticker then ns.Ticker(ns.PROF_SKIP.CHECK_S, function() pcall(SkipCheck) end) end
 end
 
 function ns.ProfActText(a, plainName)
@@ -1780,7 +2013,7 @@ end
 function ns.ProfLoopAgain(opt)
   local s = ns.ProfSession()
   if not (s and not SessDone(s) and opt and opt.prof and opt.loop and #(opt.steps or {}) > 0) then return false end
-  for _, st in ipairs(opt.steps) do for _, a in ipairs(st.acts or {}) do a.arrive = nil end end
+  for _, st in ipairs(opt.steps) do for _, a in ipairs(st.acts or {}) do a.arrive = nil; a.skip = nil end end
   opt.idx = 1
   s.round = (s.round or 1) + 1
   ns.Print((TR"Runde %d: wieder von vorne, die Stellen sind inzwischen nachgewachsen."):format(s.round))
@@ -1818,6 +2051,10 @@ end
 ------------------------------------------------------------
 -- Gold Berufe: grobe Schaetzung Gold pro Stunde pro Farmstelle
 ------------------------------------------------------------
+-- 1.3zm (K 14:27 Punkt 2): so lange zeigt die Berufe Seite "wird gerechnet", danach "keine Preise"
+ns.PROF_GOLD_WAIT_S = 20
+-- 1.3zza (P129): Angeln, Faenge pro Stunde fuer die Gold Schaetzung (Wurf und Einholen ca 20 s), mal Anteil des Fischs im Gebiet
+ns.PROF_FISH_CATCH_H = 180
 function ns.ProfGoldList(cb)
   local function Calc(idx)
     local out = {}
@@ -1853,6 +2090,8 @@ function ns.ProfGoldList(cb)
       if not (okP and pr) then return end
       local price, can, miss, none, sel, zones = pr.price, pr.can, pr.miss, pr.none, pr.sel, pr.zones
       local best
+      -- 1.3zv (P127, S 23:36: Gold/Std "unbekannt" fast ueberall): jedes Gebiet behalten, nicht nur das beste
+      local perZone = {}
       for map in pairs(zones) do
         Tick()
         -- auch ohne Skill rechnen (Spalte Skill sagt dann "fehlt")
@@ -1869,26 +2108,20 @@ function ns.ProfGoldList(cb)
           if loopT < 300 then ph = ph * loopT / 300 end
           local danger = false
           for _, p in ipairs(t) do if p.st then danger = true end end
+          if ph > 0 then perZone[map] = ph * price end
           if not best or ph > best.ph then best = { map = map, ph = ph, danger = danger } end
         end
       end
       if best then
         table.insert(out, { id = it.id, prof = it.prof, map = best.map, perHour = best.ph, gph = best.ph * price, price = price,
-          can = can, miss = miss, none = none, danger = best.danger })
+          can = can, miss = miss, none = none, danger = best.danger, zones = perZone })
       end
     end
-    for _, key in ipairs({ "herb", "mine", "skin", "cloth" }) do
-      for _, it in ipairs(ITEMS[key]) do
-        -- nur was zum Level passt: Stoff und Leder nach Mob Level, Kraeuter und Erz bis Skill plus 50
-        local ok = true
-        if it.prof == "skin" then ok = it.lo <= L + 2
-        elseif it.prof == "herb" or it.prof == "mine" then
-          -- Kraeuter und Erz bis Skill plus 50 (ohne Beruf grob nach Level), sonst steht Schwarzer Lotus bei Level 20 da
-          local sk = (ns.ProfSkill and ns.ProfSkill(it.prof)) or 0
-          ok = (it.skill or 1) <= math.max(sk + 50, L * 5)
-        end
-        if ok then Eval(it) end
-      end
+    -- 1.3zza (P129, S 03:10: Angeln und Kochen ohne Gold/Std; Pr 03:11: Mittleres Leder ueberall unbekannt): alle Sachen
+    -- aller Sammel und Mob Berufe rechnen (auch Kochen Fleisch), nicht nur was zum Level passt. Die Liste nutzt nur die Berufe
+    -- Seite (Gebiete), dort steht Skill oder Level ohnehin daneben. Angeln rechnet die Seite selbst aus der Fang Rate
+    for _, key in ipairs({ "herb", "mine", "skin", "cloth", "cook" }) do
+      for _, it in ipairs(ITEMS[key] or {}) do Eval(it) end
     end
     table.sort(out, function(a, b) if a.can ~= b.can then return a.can end return a.gph > b.gph end)
     return out
@@ -1896,6 +2129,7 @@ function ns.ProfGoldList(cb)
   ns.itemInfoMissing = 0
   ns.ProfMobIndex(function(ix) Job(function() return Calc(ix) end, function(r)
     ns.profGold = r or {}; ns.profGoldAt = GetTime()
+    if ns.TestLog then ns.TestLog("BERUFE", ("Gold/Std gerechnet: %d Eintraege, Preise fehlen %d"):format(#ns.profGold, ns.itemInfoMissing or 0)) end
     -- Preise fehlten (Items noch nicht im Spiel Cache, gleich nach dem Einloggen): bald nochmal rechnen, hoechstens 3 mal
     if (ns.itemInfoMissing or 0) > 0 and (B.goldRetry or 0) < 3 then
       B.goldRetry = (B.goldRetry or 0) + 1
@@ -1928,3 +2162,141 @@ B.FISH_ZONE = FISH_ZONE
 B.FishNeed = FishNeed
 B.SessDone = SessDone
 B.SessCount = SessCount
+
+
+------------------------------------------------------------
+-- 1.3h (P90, K 03:30 und 04:00): eigene Raten je Beruf und Gebiet aus eigenen Funden. Je Beute Fenster wird gezaehlt, von
+-- welcher Art es war (Angeln, Kraut oder Ader, Kuerschnern, Mob) und welche Berufs Sachen drin waren. Rate = Fenster mit
+-- dem Item durch alle Fenster dieser Art im Gebiet. Angezeigt ab RATE_MIN_N Fenstern, sonst die Rate anderer Spieler (P91)
+------------------------------------------------------------
+local RATE_MIN_N = 20
+ns.PROF_RATE_MIN_N = RATE_MIN_N
+local KIND_OF_PROF = { fish = "fish", herb = "node", mine = "node", skin = "skin", cloth = "mob", cook = "mob" }
+ns.ProfRateKind = function(prof) return KIND_OF_PROF[prof] end
+function ns.ProfRateCount(map, fishing, num)
+  local db = DB()
+  if not (db and map and num and num > 0) then return end
+  local ids, fromObj, fromMob, anySkin = {}, false, false, false
+  for slot = 1, num do
+    local link = GetLootSlotLink and GetLootSlotLink(slot)
+    local id = type(link) == "string" and tonumber(link:match("item:(%d+)"))
+    if id and BYID[id] then
+      ids[id] = true
+      if BYID[id].prof == "skin" then anySkin = true end
+    end
+    local ok, src = pcall(function() return { GetLootSourceInfo(slot) } end)
+    if ok and type(src) == "table" then
+      for k = 1, #src, 2 do
+        local g = Plain(src[k])
+        if type(g) == "string" then
+          if g:find("^GameObject") then fromObj = true elseif g:find("^Creature") then fromMob = true end
+        end
+      end
+    end
+  end
+  local kind = fishing and "fish" or (fromObj and "node") or (anySkin and "skin") or (fromMob and "mob") or nil
+  if not kind then return end
+  if kind == "node" and not next(ids) then return end -- Truhe oder Objekt ohne Berufs Sachen zaehlt nicht
+  local R = db.prof.rate
+  R[kind] = R[kind] or {}
+  local e = R[kind][map]
+  if not e then e = { n = 0, i = {} }; R[kind][map] = e end
+  e.n = e.n + 1
+  for id in pairs(ids) do
+    local p = BYID[id] and BYID[id].prof
+    if KIND_OF_PROF[p] == kind or (kind == "mob" and (p == "cloth" or p == "cook")) then e.i[id] = (e.i[id] or 0) + 1 end
+  end
+end
+-- Rate fuer ein Item in einem Gebiet: eigene (ab RATE_MIN_N), sonst geteilte von anderen. Gibt Anteil, Anzahl, Quelle
+function ns.ProfOwnRate(prof, map, id)
+  local db = DB()
+  local kind = KIND_OF_PROF[prof]
+  if not (db and kind and map and id) then return end
+  local e = db.prof.rate[kind] and db.prof.rate[kind][map]
+  if e and e.n >= RATE_MIN_N then return (e.i[id] or 0) / e.n, e.n, "own" end
+  local sh = db.prof.rateShared[kind] and db.prof.rateShared[kind][map]
+  if sh then
+    local n, c = 0, 0
+    for _, v in pairs(sh) do n = n + (v.n or 0); c = c + ((v.i and v.i[id]) or 0) end
+    if n >= RATE_MIN_N then return c / n, n, "shared" end
+  end
+  if e and e.n > 0 then return nil, e.n, "few" end
+end
+
+------------------------------------------------------------
+-- 1.3h (P91): Raten teilen, im selben Kanal und mit denselben Regeln wie die Wege (Sync.lua): nur Zahlen, Pruefsumme,
+-- Pruefung gegen Unsinn, abschaltbar mit Wege teilen. Je Nachricht eine Art und ein Gebiet mit hoechstens RATE_SHARE_ITEMS
+-- Items, nur ab RATE_MIN_N eigenen Fenstern und wenn seit dem letzten Teilen RATE_SHARE_STEP neue dazu kamen
+------------------------------------------------------------
+local RATE_SHARE_ITEMS, RATE_SHARE_STEP, RATE_SHARE_PER, RATE_SHARE_EVERY = 8, 10, 3, 1800
+local RATE_N_MAX, RATE_SENDERS_MAX = 5000, 20
+local KINDS = { fish = 1, node = 2, skin = 3, mob = 4 }
+local KIND_BY_NUM = { "fish", "node", "skin", "mob" }
+local function RChk(s)
+  local h = 0
+  for i = 1, #s do h = (h * 31 + s:byte(i)) % 9973 end
+  return h
+end
+function ns.ProfRatesPackets()
+  local db = DB()
+  if not db then return {} end
+  db.prof.rateSent = db.prof.rateSent or {}
+  local out = {}
+  for kind, maps in pairs(db.prof.rate) do
+    for map, e in pairs(maps) do
+      local key = kind .. ":" .. map
+      if #out < RATE_SHARE_PER and e.n >= RATE_MIN_N and e.n - (db.prof.rateSent[key] or 0) >= RATE_SHARE_STEP then
+        local items = {}
+        for id, c in pairs(e.i) do items[#items + 1] = { id, c } end
+        table.sort(items, function(a, b) return a[2] > b[2] end)
+        local parts = {}
+        for k = 1, math.min(#items, RATE_SHARE_ITEMS) do parts[#parts + 1] = items[k][1] .. ":" .. items[k][2] end
+        local body = ("1|%d|%d|%d|%s"):format(KINDS[kind] or 0, map, math.min(e.n, RATE_N_MAX), table.concat(parts, ","))
+        out[#out + 1] = "FWR" .. body .. "|" .. RChk(body)
+        db.prof.rateSent[key] = e.n
+      end
+    end
+  end
+  return out
+end
+function ns.ProfRatesReceive(text, sbit)
+  local db = DB()
+  if not (db and type(text) == "string" and text:sub(1, 3) == "FWR") then return false, "Kennung" end
+  local body, chk = text:sub(4):match("^(.*)|(%d+)$")
+  if not body or tonumber(chk) ~= RChk(body) then return false, "Pruefsumme" end
+  local ver, k, map, n, list = body:match("^(%d+)|(%d+)|(%d+)|(%d+)|(.*)$")
+  k, map, n = tonumber(k), tonumber(map), tonumber(n)
+  local kind = k and KIND_BY_NUM[k]
+  if ver ~= "1" or not kind or not map or map < 1 or map > 5000 or not n or n < RATE_MIN_N or n > RATE_N_MAX then return false, "Werte" end
+  local items, cnt = {}, 0
+  for id, c in (list or ""):gmatch("(%d+):(%d+)") do
+    id, c = tonumber(id), tonumber(c)
+    if not (id and c and c >= 0 and c <= n and BYID[id]) then return false, "Item" end
+    items[id] = c
+    cnt = cnt + 1
+    if cnt > RATE_SHARE_ITEMS then return false, "zu viele Items" end
+  end
+  local R = db.prof.rateShared
+  R[kind] = R[kind] or {}
+  R[kind][map] = R[kind][map] or {}
+  local m = R[kind][map]
+  if not m[sbit] then
+    local nn = 0
+    for _ in pairs(m) do nn = nn + 1 end
+    if nn >= RATE_SENDERS_MAX then return false, "voll" end
+  end
+  m[sbit] = { n = n, i = items, t = time and time() or 0 }
+  return true
+end
+if C_Timer then
+  local rf = CreateFrame("Frame")
+  ns.RegEv(rf, "PLAYER_LOGIN")
+  rf:SetScript("OnEvent", function()
+    if not ns.Ticker then return end
+    ns.Ticker(RATE_SHARE_EVERY, function()
+      if not (ns.ShareWaysOn and ns.ShareWaysOn() and ns.SyncQueue) then return end
+      local ok, list = pcall(ns.ProfRatesPackets)
+      if ok then for _, t in ipairs(list) do ns.SyncQueue(t, "rates") end end
+    end)
+  end)
+end

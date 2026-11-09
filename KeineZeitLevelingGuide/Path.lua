@@ -434,6 +434,29 @@ if C_Timer and C_Timer.NewTicker then ns.Ticker(1, function() pcall(Tick) end) e
 ------------------------------------------------------------
 -- Kosten eines Feldes (k) beim Betreten in Richtung d (0..7, nil = egal)
 ------------------------------------------------------------
+-- 1.3r (P99, Ka Stand 169 fk): Felder, deren feine Sperre zum groessten Teil zu ist (Klippen Ring, Wand), kosten im
+-- Netz mehr. Die genaue Pruefung macht LineFree (Karte.lua FineFree). Je fine Tabelle einmal gezaehlt
+local FINE_HEAVY_BITS, FINE_COST_MUL = 32, 3
+local fineHeavyCache = setmetatable({}, { __mode = "k" })
+local function FineHeavy(fine)
+  if not fine then return EMPTY end
+  local c = fineHeavyCache[fine]
+  if c then return c end
+  c = {}
+  local A = ns.PAINT_ABC or ""
+  local D = {}
+  for i = 1, #A do D[A:byte(i)] = i - 1 end
+  for k, str in pairs(fine) do
+    local n = 0
+    for i = 1, #str do
+      local v = D[str:byte(i)] or 0
+      while v > 0 do n = n + (v % 2); v = math.floor(v / 2) end
+    end
+    if n >= FINE_HEAVY_BITS then c[k] = true end
+  end
+  fineHeavyCache[fine] = c
+  return c
+end
 local function CostFn(ui)
   local db = ns.db
   local walked = db and db.walk and db.walk[ui] or EMPTY
@@ -444,6 +467,7 @@ local function CostFn(ui)
   local road = KF.road or EMPTY
   local wat = KF.water or EMPTY
   local cliff = KF.cliff or EMPTY
+  local heavy = (not (db and db.feinSperre == false)) and FineHeavy(KF.fine) or EMPTY
   local dangers = ns.Dangers and ns.Dangers(ui) or {}
   local dz = {}
   for _, d in ipairs(dangers) do
@@ -524,6 +548,7 @@ local function CostFn(ui)
       end
     end
     if w == 1 or Lw[k] or OwnWater(wdir[k]) then base = base * swimMul end
+    if heavy[k] and not walked[k] then base = base * FINE_COST_MUL end
     return base
   end
 end
@@ -718,7 +743,7 @@ end
 -- oder kommst du mit dem Weg 20 s lang nicht 5 Yards naeher ans Ziel, zeigt der Pfeil gerade aufs Ziel (30 s lang,
 -- danach wird der Weg wieder versucht). Ausserhalb der Staedte wie bisher. ns.walkCity = Grund (fuer die Anzeige).
 -- Dann gibt WalkNext das Ziel selbst zurueck (Pfeil gerade drauf), damit Arrow.lua den Hinweis "Stadt: Richtung Ziel" zeigt
-local CITY_STUCK_S, CITY_STUCK_YD, CITY_STRAIGHT_S = 20, 5, 30
+local CITY_STUCK_S, CITY_STUCK_YD, CITY_STRAIGHT_S = 20, 5, 10 -- 1.3zo (P118): gerade aufs Ziel nur noch 10 s, dann Weg neu
 -- 20.3u (Na 06:25, Sim haengt in Orgrimmar/Unterstadt/Donnerfels/Sturmwind/Eisenschmiede): wer in 20 s mindestens so weit
 -- lief, haengt nicht, auch wenn der Weg (Rampe, Turm, Bruecke) gerade von der Luftlinie weg fuehrt. Hoechstens so lange
 local CITY_MOVE_YD, CITY_MAX_S = 25, 90
@@ -754,7 +779,7 @@ end
 local TOR_NEAR_YD, TOR_MAX_S, TOR_ENGE_YD, TOR_DETOUR, TOR_SICHER_YD = 15, 25, 80, 1.6, 150
 -- 1.1 (P58, K 14:33: Pfeil in der Stadt Luftlinie statt Weg): nach Ende oder Zeit um nach so vielen Sekunden neu rechnen
 -- (vorher dann fuer immer gerade aufs Ziel), wenn das Ziel noch weiter als GATE_FAR_YD weg ist
-local GATE_RETRY_S, GATE_FAR_YD = 15, 30
+local GATE_RETRY_S, GATE_FAR_YD = 8, 30 -- 1.3zo (P118, S 15:32 "in der Stadt alle 5 bis 10 s neu"): vorher 15
 -- 20.4b (Na, Ge Stand 164, S hat die Tore beantwortet): 45 Tore mit sicher = 1 (Ja), dazu je Stadt Wege Linien, die S gezeichnet hat
 -- (Orgrimmar hat gar kein Tor, nur Wege). Wege Linien sind bewiesene Wege, in beide Richtungen. Daraus wird je Stadt ein Wegnetz:
 -- Knoten alle WEG_STEP_YD auf den Linien, Linien die sich auf WEG_JOIN_YD beruehren sind verbunden, Tore sind Knoten (TOR_JOIN_YD zu
@@ -1137,6 +1162,10 @@ function ns.WalkNext(ui, fx, fy, tx, ty)
   if city and city ~= ui and ns.ToMap and not ns.walkInner then
     local cfx, cfy = ns.ToMap(ui, fx, fy, city)
     local ctx, cty = ns.ToMap(ui, tx, ty, city)
+    -- 1.3zo (P118, S Log 15:31 Unterstadt: "Stadt 1420: kein Wegnetz", Ziel Zeppelin Turm draussen): liegt das Ziel ausserhalb
+    -- der Stadt Karte, gab ToMap nil, dann suchte es im Netz der Ziel Zone (1420) statt in der Stadt, in der du stehst (1458).
+    -- Jetzt das Ziel auch ausserhalb in Stadt Koordinaten: das Stadt Netz fuehrt dann zum Knoten am naechsten am Ziel (Ausgang)
+    if cfx and not ctx and ns.ToMapFree then ctx, cty = ns.ToMapFree(ui, tx, ty, city) end
     if cfx and ctx then
       ns.walkInner = true
       local ok, rx, ry = pcall(ns.WalkNext, city, cfx, cfy, ctx, cty)
@@ -1154,6 +1183,15 @@ function ns.WalkNext(ui, fx, fy, tx, ty)
   local same = s.ui == ui and math.abs((s.tx or -1) - tx) < 0.002 and math.abs((s.ty or -1) - ty) < 0.002
   -- 20.3w: Ziel in der Stadt auf einen erreichbaren Punkt auf der Karte ziehen (cx, cy); same und cityS bleiben beim Original
   local cx, cy = tx, ty
+  -- 1.3zp (Pr 17:27 Stadt Test UC: du auf der Stadt Karte 1458, Ziel draussen): Ziel ausserhalb der Stadt Karte nicht an den
+  -- Rand ziehen (dann galt es als "innen" bzw "kein Netz beim Ziel", jede Sekunde abwechselnd), sondern so lassen: das Stadt
+  -- Netz fuehrt dann zum Knoten am naechsten am Ziel (Ausgang), wie beim Stehen auf der Zonen Karte (1.3zo)
+  local outside = city and city == ui and (tx < 0 or tx > 1 or ty < 0 or ty > 1)
+  if outside then
+    if ns.walkCity ~= "draussen" and ns.TestLog then ns.TestLog("STADTTOR", ("Ziel ausserhalb der Stadt %s, Weg zum Ausgang (Karte %.3f %.3f)"):format(tostring(ui), tx, ty)) end
+    ns.walkCity = "draussen"
+    return GateOr(ui, fx, fy, tx, ty, true)
+  end
   if city and city == ui then cx, cy = CityTarget(ui, tx, ty) end
   -- 20.4: Ziel in einem Gebaeude oder auf einer Hoehe (Ge Stadt.lua innen): erst Tor, dann Luftlinie, nicht als Haenger zaehlen
   if city and city == ui and InnenZiel(ui, tx, ty) then
@@ -1329,7 +1367,7 @@ function ns.KarteMigrate(db)
 end
 do
   local pf = CreateFrame("Frame")
-  pf:RegisterEvent("PLAYER_ENTERING_WORLD")
+  ns.RegEv(pf, "PLAYER_ENTERING_WORLD")
   pf:SetScript("OnEvent", function(self)
     self:UnregisterAllEvents()
     pcall(ns.KarteMigrate)

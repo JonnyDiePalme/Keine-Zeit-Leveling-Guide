@@ -10,6 +10,42 @@ local ADDON, ns = ...
 
 local A = {}
 ns.Api = A
+
+-- 1.3zl (S 14:07 und 14:12, K 14:09 DRINGEND): "Attempt to register unknown event TRADE_SKILL_UPDATE" (Berufe.lua) und
+-- "LEARNED_SPELL_IN_TAB" (Group.lua) beim Laden. Der Forever Client kennt nicht jedes Event. Darum registriert das ganze
+-- Addon Events nur noch ueber ns.RegEv bzw ns.RegUEv: zuerst C_EventUtils.IsEventValid (falls vorhanden), dann mit pcall.
+-- Unbekannte Events werden still ausgelassen und in ns.badEvents gemerkt (Test Log EVENT beim ersten Mal)
+ns.badEvents = {}
+local function BadEv(ev)
+  if ns.badEvents[ev] then return end
+  ns.badEvents[ev] = true
+  if C_Timer and C_Timer.After then
+    C_Timer.After(6, function() if ns.TestLog then ns.TestLog("EVENT", "unbekannt im Client, ausgelassen: " .. tostring(ev)) end end)
+  end
+end
+local function EvValid(ev)
+  if type(ev) ~= "string" then return false end
+  local U = C_EventUtils
+  if U and U.IsEventValid then
+    local ok, v = pcall(U.IsEventValid, ev)
+    if ok and v == false then return false end
+  end
+  return true
+end
+function ns.RegEv(f, ev, ...)
+  if not (f and f.RegisterEvent) then return false end
+  if not EvValid(ev) then BadEv(ev); return false end
+  local ok = pcall(f.RegisterEvent, f, ev, ...)
+  if not ok then BadEv(ev) end
+  return ok
+end
+function ns.RegUEv(f, ev, ...)
+  if not (f and f.RegisterUnitEvent) then return false end
+  if not EvValid(ev) then BadEv(ev); return false end
+  local ok = pcall(f.RegisterUnitEvent, f, ev, ...)
+  if not ok then BadEv(ev) end
+  return ok
+end
 local G = _G
 local pcall, type, select = pcall, type, select
 

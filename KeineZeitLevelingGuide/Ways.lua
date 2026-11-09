@@ -1015,8 +1015,8 @@ end
 ------------------------------------------------------------
 do
   local f = CreateFrame("Frame")
-  f:RegisterEvent("PLAYER_LOGIN")
-  f:RegisterEvent("PLAYER_LOGOUT")
+  ns.RegEv(f, "PLAYER_LOGIN")
+  ns.RegEv(f, "PLAYER_LOGOUT")
   f:SetScript("OnEvent", function(_, ev)
     if ev == "PLAYER_LOGOUT" then pcall(W.SaveAll); return end
     C_Timer.After(5, function()

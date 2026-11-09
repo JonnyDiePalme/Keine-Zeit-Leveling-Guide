@@ -51,7 +51,7 @@ local function Eligible(qid, u, lvl)
     local _, _, cid = UnitClass(u)
     if cid and not ns.HasBit(rc, cid - 1) then return false end
   end
-  local rr = Q(qid, "requiredRaces")
+  local rr = ns.DKRaces(qid, Q(qid, "requiredRaces"))
   if rr and rr > 0 and bit then
     local _, _, rid = UnitRace(u)
     if rid and not ns.RaceOK(rr, rid) then return false end
@@ -96,7 +96,8 @@ local function Tick()
   for qid, p in pairs(log) do
     if not noShare[qid] then
       local targets = {}
-      for who, g in pairs(ns.group or {}) do
+      -- 1.3zd (P111): auch Mitspieler ohne unser Addon, deren Quest Stand Questie meldet
+      for who, g in pairs((ns.GroupAll and ns.GroupAll()) or ns.group or {}) do
         local u = units[who]
         if u and g.quests and not g.quests[qid] and not Failed(who, qid) and InRange(u) and Eligible(qid, u, g.lvl) then
           local t = tries[qid .. who]
@@ -430,6 +431,6 @@ end
 
 ------------------------------------------------------------
 local f = CreateFrame("Frame")
-f:RegisterEvent("CHAT_MSG_SYSTEM")
+ns.RegEv(f, "CHAT_MSG_SYSTEM")
 f:SetScript("OnEvent", function(_, _, msg) if type(msg) == "string" then OnSystem(msg) end end)
 ns.Ticker(3, Tick)

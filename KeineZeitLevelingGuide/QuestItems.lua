@@ -194,12 +194,12 @@ function ns.InitQuestItems()
   bar:SetSize(36, 32)
   ns.RefreshItemBar = function() C_Timer.After(0, Update) end
   local f = CreateFrame("Frame")
-  f:RegisterEvent("QUEST_LOG_UPDATE")
-  f:RegisterEvent("BAG_UPDATE_DELAYED")
-  f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
-  f:RegisterEvent("PLAYER_REGEN_ENABLED")
-  f:RegisterEvent("BAG_UPDATE_COOLDOWN")
-  f:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+  ns.RegEv(f, "QUEST_LOG_UPDATE")
+  ns.RegEv(f, "BAG_UPDATE_DELAYED")
+  ns.RegEv(f, "ZONE_CHANGED_NEW_AREA")
+  ns.RegEv(f, "PLAYER_REGEN_ENABLED")
+  ns.RegEv(f, "BAG_UPDATE_COOLDOWN")
+  ns.RegEv(f, "SPELL_UPDATE_COOLDOWN")
   f:SetScript("OnEvent", function(_, event)
     if event == "BAG_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_COOLDOWN" then
       for _, b in ipairs(buttons) do if b:IsShown() then Cooldown(b); SpellCooldown(b) end end
