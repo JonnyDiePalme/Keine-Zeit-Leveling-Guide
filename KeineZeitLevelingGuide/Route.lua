@@ -154,14 +154,48 @@ function ns.SlowMark(site, ms)
   ns.slowLast = { site = site, ms = ms, t = GetTime() }
   ns.slowCount[site] = (ns.slowCount[site] or 0) + 1
 end
+-- 1.4zzn (P217 Punkt 5, S 06:02 "in einem Zug"): Ruhe. Pause oder keine offene Route und kein Navi: Takte unter
+-- IDLE.MIN_S Sekunden (ohne keep) laufen nur noch alle IDLE.MIN_S Sekunden. Zustand je IDLE.CHECK_S neu
+ns.IDLE = { MIN_S = 5, CHECK_S = 2 }
+do
+  local idleC, idleAt = false, -1e9
+  function ns.Idle()
+    local now = GetTime()
+    if now - idleAt < ns.IDLE.CHECK_S then return idleC end
+    idleAt = now
+    local db = ns.db
+    if not db then idleC = false; return false end
+    local opt = db.opt
+    local open = opt and opt.steps and (opt.idx or 1) <= #opt.steps
+    local navi = ns.navi and not ns.navi.hidden
+    idleC = (db.paused or not (open or navi or db.goldMode or ns.serviceTarget)) and true or false
+    return idleC
+  end
+end
+-- 1.4zzn (K 06:15 Punkt 1, Pr WUNSCH 05:55): Zeit je Takt Stelle (Datei:Zeile) zusammenzaehlen, die LEISTUNG Wache
+-- schreibt alle 5 Min die teuersten 15 (ns.TickProfTop). Kostet nur eine Addition, die Messung gab es schon
+ns.tickProf = {}
+function ns.TickProfTop(n, reset)
+  local list = {}
+  for site, v in pairs(ns.tickProf) do list[#list + 1] = { site, v[1], v[2] } end
+  table.sort(list, function(a, b) return a[2] > b[2] end)
+  local out = {}
+  for i = 1, math.min(n or 15, #list) do out[i] = list[i] end
+  if reset then ns.tickProf = {} end
+  return out
+end
 -- 1.3x (P108): inPause = laeuft auch in der Pause weiter (nur Anzeige, zb Mini Fenster mit XP Balken und Tempo)
 function ns.Ticker(interval, fn, keep, inPause)
-  local n = 0
+  local n, m = 0, 0
   local site = Site()
   local clock = debugprofilestop
+  local idleEvery = math.max(1, math.floor(ns.IDLE.MIN_S / math.max(0.05, interval) + 0.5))
   return C_Timer.NewTicker(interval, function(...)
     if ns.db and ns.db.paused and not inPause then return end
-    if not keep and interval < 3 and ns.LowPower() then
+    if not keep and interval < ns.IDLE.MIN_S and ns.Idle() then
+      m = m + 1
+      if m % idleEvery ~= 0 then return end
+    elseif not keep and interval < 3 and ns.LowPower() then
       n = n + 1
       if n % (interval < 1 and 4 or 2) ~= 0 then return end
     end
@@ -170,6 +204,8 @@ function ns.Ticker(interval, fn, keep, inPause)
     local r = fn(...)
     local ms = clock() - t0
     if ms > 40 then ns.SlowMark(site, ms) end
+    local p = ns.tickProf[site]
+    if p then p[1], p[2] = p[1] + ms, p[2] + 1 else ns.tickProf[site] = { ms, 1 } end
     return r
   end)
 end

@@ -104,6 +104,7 @@ local resolveFinal -- Pfeil zeigt auf einen Zwischenpunkt (Weg ums Gelaende, Zon
 -- wieder vorne). Ohne Feld rund aendert sich nichts. ns.NaviRundPts(mapID) gibt die Runde als geschlossene Linie fuer die Minimap/Weltkarte.
 local RUND_NAH = 25
 local RUND_SKIP_S = 90    -- v11f: Punkt ohne Fortschritt so lange auslassen
+local RUND_EMPTY_N = 2   -- 1.4zf (P156 M17): erst nach so vielen leeren Besuchen in Folge auslassen
 local rundState = { key = nil, i = 1, n = 0 }
 local function RundOf(stp, mapID)
   local r = stp and stp.rund
@@ -122,7 +123,7 @@ local function RundNext(stp, mapID, px, py)
       local d = ns.WorldDist and ns.WorldDist({ mapID, px, py }, { mapID, p[1], p[2] }) or math.huge
       if d < bd then bi, bd = i, d end
     end
-    rundState.key, rundState.i, rundState.n, rundState.skip, rundState.prog = key, bi, 0, {}, nil
+    rundState.key, rundState.i, rundState.n, rundState.skip, rundState.prog, rundState.empty = key, bi, 0, {}, nil, {}
   end
   local p = r[rundState.i]
   local d = ns.WorldDist and ns.WorldDist({ mapID, px, py }, { mapID, p[1], p[2] })
@@ -132,7 +133,15 @@ local function RundNext(stp, mapID, px, py)
     local act = ns.OptCurrentAct and ns.OptCurrentAct()
     local prog = act and ns.OptCountText and ns.OptCountText(act) or ""
     rundState.skip = rundState.skip or {}
-    if rundState.prog ~= nil and rundState.prog == prog then rundState.skip[rundState.i] = now + RUND_SKIP_S end
+    rundState.empty = rundState.empty or {}
+    -- 1.4zf (P156 M17, S: Punkt fuer Punkt ohne Ueberspringen): ein Punkt ohne Fortschritt wird erst ausgelassen, wenn er
+    -- zwei Runden hintereinander leer war (vorher reichte einmal, dann sprang der Pfeil in kleinen Runden ueber Punkte)
+    if rundState.prog ~= nil and rundState.prog == prog then
+      rundState.empty[rundState.i] = (rundState.empty[rundState.i] or 0) + 1
+      if rundState.empty[rundState.i] >= RUND_EMPTY_N then rundState.skip[rundState.i] = now + RUND_SKIP_S end
+    else
+      rundState.empty[rundState.i] = 0
+    end
     rundState.prog = prog
     local tries = 0
     repeat
@@ -141,6 +150,12 @@ local function RundNext(stp, mapID, px, py)
       tries = tries + 1
     until tries >= #r or not ((rundState.skip[rundState.i] or 0) > now)
     p = r[rundState.i]
+    -- 1.4ze (P156 M17): jeder Wechsel ins Test Log, mit ausgelassenen Punkten
+    if ns.TestLog then
+      local nSkip = 0
+      for _, t in pairs(rundState.skip) do if t > now then nSkip = nSkip + 1 end end
+      ns.TestLog("PFEIL", ("Rundpunkt %d/%d Runde %d, ausgelassen %d, Fortschritt %s"):format(rundState.i, #r, rundState.n + 1, nSkip, tostring(prog)))
+    end
   end
   return p[1], p[2], rundState.n + 1, #r, rundState.i
 end
@@ -155,6 +170,7 @@ function ns.NaviRundPts(mapID)
   return out
 end
 
+ns.HUNT = { FAR = 300, KEEP = 400 }
 local function ResolveRaw(db)
   resolveSrc, resolveFinal = nil, nil
   local mapID = ns.PlayerMap()
@@ -273,10 +289,41 @@ local function ResolveRaw(db)
     if ca and ca.k == "H" and not (ns.OptActDone and ns.OptActDone(ca)) then resolveSrc = "opt"; return mapID, px, py, px, py, oname, opt_pt end
     if stp then
       -- 20.3 Farm Rundweg: Schritt mit Runde, Ziel ist der naechste Rundpunkt (sonst unveraendert)
+      local stOrig = stp
       local rx, ry, rn, rc, ri = RundNext(stp, mapID, px, py)
       if rx then
         stp = setmetatable({ x = rx, y = ry }, { __index = stp })
         oname = (oname or "") .. (TR"\n|cff9d9d9dRunde %d, Punkt %d von %d|r"):format(rn, ri, rc)
+      end
+      -- 1.4zzc (P182, Pr BER 21:18 Log 194141: Bussardmuskelmagen, S jagte erfolgreich 1154 yd weg vom Ziel Punkt, HAENGT):
+      -- kommt bei einem Ziel (O) Fortschritt, waehrend du weiter als HUNT.FAR vom Ziel Punkt bist, merkt sich der Pfeil diese
+      -- Stelle und zeigt dorthin, solange du naeher als HUNT.KEEP bist. Gilt nur fuer diesen Schritt (neue Route vergisst es)
+      -- 1.4zzg (Pr BER 18:35, Sim jagd: Schritt mit Runde): auch mit Runde, dann zaehlt der kleinere Abstand zum Ziel Punkt
+      -- oder zum naechsten Rundpunkt. Kommt der Fortschritt weit weg von beiden, liegt die Runde falsch, Pfeil bleibt hier
+      if ca and ca.k == "O" and ca.qid and ns.OptCountText and ns.WorldDist then
+        local H = ns.huntHere
+        if not H then H = setmetatable({}, { __mode = "k" }); ns.huntHere = H end
+        local c = tonumber((ns.OptCountText(ca) or ""):match("^(%d+)/"))
+        local h = H[ca]
+        if not h then h = {}; H[ca] = h end
+        if c then
+          if h.c and c > h.c then
+            local dS = ns.WorldDist({ mapID, px, py }, { stp.map, stp.x, stp.y }) or 0
+            if rx then dS = math.min(dS, ns.WorldDist({ mapID, px, py }, { stOrig.map, stOrig.x, stOrig.y }) or dS) end
+            if dS > ns.HUNT.FAR then
+              if not h.x and ns.TestLog then ns.TestLog("PFEIL", ("Jagd Ort: Quest %d Fortschritt %d %d yd vom Ziel Punkt, Pfeil bleibt hier"):format(ca.qid, c, math.floor(dS))) end
+              h.map, h.x, h.y = mapID, px, py
+            end
+          end
+          h.c = c
+        end
+        if h.x and h.map == mapID then
+          local dH = ns.WorldDist({ mapID, px, py }, { h.map, h.x, h.y }) or math.huge
+          if dH < ns.HUNT.KEEP then
+            stp = setmetatable({ x = h.x, y = h.y, map = h.map }, { __index = stp })
+            oname = (oname or "") .. TR"\n|cff9d9d9dhier kam Fortschritt, weiter hier jagen|r"
+          end
+        end
       end
       -- zu Fuss: um Berge herum ueber bekannte Wege, in andere Zonen ueber bekannte Uebergaenge
       -- 20.3k (K Punkt 19a, Test 20.3j: Pfeil gerade zum Zeppelin Turm, keine Linie): Reise Schritte (Zeppelin, Schiff, Flug)
@@ -549,6 +596,15 @@ local function BuildArrow()
   arrow.kind:SetSize(20, 20)
   arrow.kind:SetPoint("RIGHT", arrow.tex, "LEFT", -10, 0)
   arrow.kind:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+  -- 1.4e (P151 Pfeil Punkt 1, Pr fenster Pfeil 1 rot auf 1.4c): ruhiger heller Rahmen direkt am Symbol (der Rahmen am
+  -- Ziel Knopf kam nur, wenn es etwas zum Anvisieren gab). Kein Blinken, Werte in ns.TB_GLOW (UI.lua)
+  arrow.kindGlow = arrow:CreateTexture(nil, "ARTWORK")
+  arrow.kindGlow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+  arrow.kindGlow:SetBlendMode("ADD")
+  arrow.kindGlow:SetPoint("CENTER", arrow.kind, "CENTER", 0, 0)
+  arrow.kindGlow:SetSize(40, 40)
+  arrow.kindGlow:SetVertexColor(1, 0.85, 0.45, 0.35)
+  arrow.kindGlow:Hide()
 
   -- Kreuz, wenn es kein Ziel oder keinen Weg gibt (Sanduhr, solange gerechnet wird)
   arrow.cross = arrow:CreateTexture(nil, "ARTWORK")
@@ -607,6 +663,12 @@ local function BuildArrow()
     local north = -(ty - py) * h
     local facing = GetPlayerFacing and ns.Plain(GetPlayerFacing())
     if not facing then self.tex:Hide(); return end
+    -- 1.4zzp (P217 tickprof, Arrow.lua:682 11 bis 22 %): nichts bewegt, nichts gedreht, Pfeil steht schon richtig
+    local rk = self.rotKey
+    if rk and self.tex:IsShown() and rk[1] == facing and rk[2] == px and rk[3] == py and rk[4] == tx and rk[5] == ty and rk[6] == m then return end
+    if not rk then rk = {}; self.rotKey = rk end
+    self.gpsRel = nil
+    rk[1], rk[2], rk[3], rk[4], rk[5], rk[6] = facing, px, py, tx, ty, m
     local bearing = (math.atan2 or math.atan)(-east, north)
     local rel = bearing - facing
     while rel > math.pi do rel = rel - 2 * math.pi end
@@ -633,6 +695,9 @@ local function BuildArrow()
     if slow < 0.25 then
       if following and gpsTex then
         local rel = gpsTex:GetRotation() or 0
+        if rel == self.gpsRel and self.tex:IsShown() then return end
+        self.gpsRel = rel
+        self.rotKey = nil
         self.tex:SetRotation(rel)
         local a = math.abs(rel)
         local elv = ns.T and ns.T.IsElv and ns.T.IsElv()
@@ -660,6 +725,7 @@ local function BuildArrow()
       cm = nil
       self.tex:Hide()
       self.kind:Hide()
+      if self.kindGlow then self.kindGlow:Hide() end
       local why = type(px) == "string" and px ~= "" and px or nil
       local busy = ns.OptBusy and ns.OptBusy()
       local fertig = why and (why:find("fertig") or why == TR"Route fertig" or why == TR"Zone fertig")
@@ -675,7 +741,7 @@ local function BuildArrow()
       local inInst = (ns.InInstance and ns.InInstance()) or (ns.InTram and ns.InTram())
       self.cross:SetTexture((busy or inInst) and "Interface\\RaidFrame\\ReadyCheck-Waiting" or (fertig and "Interface\\RaidFrame\\ReadyCheck-Ready") or "Interface\\RaidFrame\\ReadyCheck-NotReady")
       self.cross:Show()
-      self.text:SetText(why)
+      if why ~= self.lastInfo then self.lastInfo = why; self.text:SetText(why) end
       return
     end
     self.cross:Hide()
@@ -698,6 +764,7 @@ local function BuildArrow()
     end
     self.kind:SetTexture(ic)
     self.kind:SetShown(ic ~= nil)
+    if self.kindGlow then self.kindGlow:SetShown(ic ~= nil) end
     -- 20.3z4 (K 19:06, S 18:51 "kein Feld mit Target neben dem Pfeil" bei Flugpunkt holen: Georgia): einmal je Schritt ins Test Log,
     -- was der Ziel Knopf (UI.lua TargetInfo) fuer diesen Schritt liefert, damit man sieht, woran es liegt
     if act and ns.TestLog and ns.TargetInfo then
@@ -736,7 +803,8 @@ local function BuildArrow()
       local okF, left, total, src = pcall(ns.FlightNow)
       if okF and left and total and total > 0 then fLeft, fTotal, fSrc = left, total, src end
     end
-    if fLeft then
+    -- 1.4a (P151): Flug und Abfahrt zeigt jetzt der Reise Balken (ReiseBalken.lua), auch bei Pause und ohne Pfeil
+    if fLeft and not ns.ReiseBalkenOn then
       local fb = self.flightBar
       if not fb then
         fb = CreateFrame("StatusBar", nil, self)
@@ -759,7 +827,7 @@ local function BuildArrow()
     elseif self.flightBar then
       self.flightBar:Hide()
     end
-    self.text:SetText(info)
+    if info ~= self.lastInfo then self.lastInfo = info; self.text:SetText(info) end
     if not docked and not following and not hearthNow then Rotate(self, m, px, py, tx, ty) end
   end)
 

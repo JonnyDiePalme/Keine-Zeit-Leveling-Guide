@@ -2,7 +2,7 @@
 ## Title: Keine Zeit Leveling Guide Test Log
 ## Notes: Test Log fuer Keine Zeit Leveling Guide in einer eigenen Datei (verschluesselt, anonym). Nur fuer Tester.
 ## Author: jonnydiepalme
-## Version: 1.0
+## Version: 1.4
 ## Dependencies: KeineZeitLevelingGuide
 ## SavedVariables: ForeverWegweiserTestLog
 FWLog.lua

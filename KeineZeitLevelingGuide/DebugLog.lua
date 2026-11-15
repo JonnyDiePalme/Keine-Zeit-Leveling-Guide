@@ -247,6 +247,35 @@ local function L(cat, msg)
   if #txt > MAXLEN then txt = txt:sub(1, MAXLEN) .. " ..." end
   local plain = ("%s +%ds L%.2f %s %d,%d | %s | %s"):format(date("%H:%M:%S"), math.floor(GetTime() - t0),
     lv, tostring(m or "?"), math.floor(x * 1000), math.floor(y * 1000), cat, txt)
+  -- 1.4zzi (K 20:36, S Log 20:02: LogCrypt "script ran too long" 2x, Takt Spitzen 680 ms): viele Zeilen in einem Bild
+  -- (Zusammenfassungen) wurden alle sofort verschluesselt. Jetzt hoechstens SEALQ.MS ms pro Bild, der Rest kommt der
+  -- Reihe nach in den naechsten Bildern. Beim Ausloggen alles sofort
+  local Q = ns.LOG_SEALQ
+  local now = GetTime()
+  if Q.frame ~= now then Q.frame, Q.spent = now, 0 end
+  if not Q.all and (Q.h <= #Q.q or Q.spent > Q.MS) then
+    Q.q[#Q.q + 1] = { cat, plain }
+    if not Q.busy then Q.busy = true; C_Timer.After(0, ns.LogSealPump) end
+    return
+  end
+  local c0 = debugprofilestop and debugprofilestop()
+  ns.LogSealOne(cat, plain)
+  if c0 then Q.spent = Q.spent + (debugprofilestop() - c0) end
+end
+ns.LOG_SEALQ = { q = {}, h = 1, MS = 4, spent = 0 }
+function ns.LogSealPump()
+  local Q = ns.LOG_SEALQ
+  local c0 = debugprofilestop and debugprofilestop()
+  while Q.h <= #Q.q do
+    local e = Q.q[Q.h]
+    Q.q[Q.h] = nil
+    Q.h = Q.h + 1
+    pcall(ns.LogSealOne, e[1], e[2])
+    if not Q.all and c0 and debugprofilestop() - c0 > Q.MS then break end
+  end
+  if Q.h > #Q.q then Q.q, Q.h, Q.busy = {}, 1, false else C_Timer.After(0, ns.LogSealPump) end
+end
+function ns.LogSealOne(cat, plain)
   if not CR then NewSession() end
   if not CR then return end
   SEQ = SEQ + 1
@@ -456,7 +485,7 @@ end
 -- Einstellungen, Fenster und Darstellung (alle 2 Sekunden, billig)
 ------------------------------------------------------------
 local SETKEYS = { "mode", "levelStep", "goal", "grind", "dungeonQ", "escorts", "contSwitch", "books", "hudGroup", "hudSize", "hud", "look", "arrow", "useHearth", "useFlights", "naviPorts",
-  "walkPaths", "escorts", "contSwitch", "eventQuests", "eliteGroup", "eliteSolo", "logMax", "logWarn", "profOn", "allSettings", "testerBox", "slowPC",
+  "walkPaths", "escorts", "contSwitch", "eventQuests", "eliteGroup", "eliteSolo", "logMax", "logWarn", "profOn", "allSettings", "testerBox", "logShot", "slowPC",
   "showGrind", "planOn", "pinIcons", "optMode", "noMountPlan", "markBags", "mapShow", "mapBooks", "hudLocked", "hudScale", "groupSync", "gearHints",
   "farmAH", "autoShare", "autoQuestAll", "autoQuest", "bookYards", "radius", "questFirst", "trainerPopup", "unlockHints", "weaponHint", "paused",
   "hudVendor", "hudSleep", "miniShow", "noticeWin", "mobDanger", "patrolWarn", "minimap", "goldMode", "hudExt" }
@@ -562,6 +591,7 @@ local function WatchUI()
 end
 local uiTick = 0
 
+ns.LOG_SPUR = { ON = true, EVERY_S = 2.5 }
 local function Tick()
   if not On() then return end
   local db = ns.db
@@ -571,13 +601,27 @@ local function Tick()
   -- stehen wie in jeder Zeile vorne, dazu Tempo in Yards pro Sekunde, beritten, schwimmend, Geist, Flug (je 1 oder 0)
   do
     local now = GetTime()
-    local spd = ns.Api.GetUnitSpeed and ns.Api.GetUnitSpeed("player") or 0
+    -- 1.4zzj (Pr BER 23:00, DebugLog secret spd): Tempo kann geheim sein, dann 0
+    local spd = ns.Api.GetUnitSpeed and ns.Plain and ns.Plain(ns.Api.GetUnitSpeed("player")) or 0
     local gap = (spd and spd > 0) and 15 or 60
     if not last.posAt or now - last.posAt >= gap then
       last.posAt = now
       local function B(f, ...) if not f then return 0 end local ok, v = pcall(f, ...); return (ok and v) and 1 or 0 end
       L("POS", ("Tempo %.1f, beritten %d, schwimmt %d, Geist %d, Flug %d"):format(spd or 0, B(IsMounted), B(IsSwimming),
         B(UnitIsGhost, "player"), B(UnitOnTaxi, "player")))
+    end
+    -- 1.4zzh (P212 Punkt 3, Ka FRA 10:30): Laufspur fuer das Karten Tool. Alle SPUR.EVERY_S Sekunden, solange du dich zu Fuss
+    -- oder beritten bewegst (nicht Flug, nicht Ladebild). Ort steht vorne in der Zeile, dazu Tempo, beritten, schwimmt.
+    -- Gelernt (db.walk, db.walkDir) hat nur Felder und Richtung ohne Reihenfolge, die Spur hat die Reihenfolge
+    local SP = ns.LOG_SPUR
+    if SP.ON and spd and spd > 0 and ns.worldReady and now - (last.spurAt or 0) >= SP.EVERY_S then
+      local taxi = UnitOnTaxi and ns.Api.U(UnitOnTaxi, "player")
+      if not taxi then
+        last.spurAt = now
+        local mo = IsMounted and ns.Api.U(IsMounted) and 1 or 0
+        local sw = IsSwimming and ns.Api.U(IsSwimming) and 1 or 0
+        L("SPUR", ("t=%.1f b=%d s=%d"):format(spd, mo, sw))
+      end
     end
   end
   uiTick = uiTick + 1
@@ -734,6 +778,66 @@ local function Tick()
       math.floor(mem), free, ns.Money and ns.Money(GetMoney() or 0) or tostring(GetMoney()),
       (C_QuestLog and C_QuestLog.GetNumQuestLogEntries and select(2, C_QuestLog.GetNumQuestLogEntries())) or (GetNumQuestLogEntries and select(2, GetNumQuestLogEntries())) or 0,
       tickN > 0 and tickMs / tickN or 0, tickMax, math.floor((LOG.bytes or 0) / 1024)))
+    -- 1.4zza (P208, S 05:19 Ja): Leistungs Wache je 5 Min. Billig: Lua gesamt, fps, Takt, offene Fenster, Rahmen im grossen
+    -- Fenster. Nur alle 30 Min einmal aufraeumen (GC) und Addon Speicher vor und nach messen (das ruckelt kurz)
+    if ns.MigrationLine then pcall(ns.MigrationLine) end
+    pcall(function()
+      local W = ns.LW or {}
+      ns.LW = W
+      local lua0 = collectgarbage and math.floor(collectgarbage("count")) or 0
+      local addon, after, luaG = "-", "-", "-"
+      local now = GetTime()
+      -- 1.4zzj (Pr BER 20:58 und 23:00: Takt Spitzen 674, 685, 890 ms immer zur halben Stunde = genau dieses Aufraeumen und
+      -- Messen): nur noch wenn du stehst (ns.stillFor ab 20 s) und nicht im Kampf, sonst beim naechsten 5 Min Takt nochmal
+      local ruhig = (ns.stillFor or 0) >= 20 and not (InCombatLockdown and InCombatLockdown()) and not (UnitAffectingCombat and ns.Api.U(UnitAffectingCombat, "player"))
+      if ruhig and (not W.gcAt or now - W.gcAt > 1800) then
+        W.gcAt = now
+        local up = (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage) or UpdateAddOnMemoryUsage
+        local get = (C_AddOns and C_AddOns.GetAddOnMemoryUsage) or GetAddOnMemoryUsage
+        if up and get then
+          pcall(up); local ok1, a = pcall(get, ADDON)
+          collectgarbage("collect")
+          pcall(up); local ok2, b = pcall(get, ADDON)
+          addon, after = ok1 and math.floor(a or 0) or "-", ok2 and math.floor(b or 0) or "-"
+          luaG = math.floor(collectgarbage("count"))
+        end
+      elseif not ruhig and not (InCombatLockdown and InCombatLockdown()) and now - (W.gcAt or W.memAt or 0) > 3600 and now - (W.memAt or 0) > 3600 then
+        -- 1.4zzu (Pr BER 18:25: Addon KB leer bei S, neuer Char steht nie 20 s still): spaetestens jede Stunde ausserhalb
+        -- vom Kampf einmal messen, ohne Aufraeumen (kurzer Haker), damit man sieht, ob der Zuwachs von uns kommt
+        W.memAt = now
+        local up = (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage) or UpdateAddOnMemoryUsage
+        local get = (C_AddOns and C_AddOns.GetAddOnMemoryUsage) or GetAddOnMemoryUsage
+        if up and get then
+          pcall(up); local ok1, a = pcall(get, ADDON)
+          addon = ok1 and math.floor(a or 0) or "-"
+          local okQ, q = pcall(get, "Questie")
+          if okQ and q then after = "Questie " .. math.floor(q) end
+        end
+      end
+      local cpu = "-"
+      if GetCVar and GetCVar("scriptProfile") == "1" then
+        local ucpu = (C_AddOns and C_AddOns.GetAddOnCPUUsage) or GetAddOnCPUUsage
+        if UpdateAddOnCPUUsage then pcall(UpdateAddOnCPUUsage) end
+        local okc, c = pcall(ucpu, ADDON)
+        if okc and c then cpu = math.floor(c) .. " ms" end
+      end
+      local function Cnt(f, n)
+        n = (n or 0) + 1
+        if f and f.GetChildren then for _, c in ipairs({ f:GetChildren() }) do n = Cnt(c, n) end end
+        return n
+      end
+      local open = {}
+      for nm, key in pairs({ TaurenRouteBig = "gross", TaurenRouteHUD = "mini", TaurenRouteArrow = "pfeil", WorldMapFrame = "karte", TaxiFrame = "flugkarte" }) do
+        local f = _G[nm]
+        if f and f.IsShown and f:IsShown() then open[#open + 1] = key end
+      end
+      table.sort(open)
+      local tk = ns.TickerCount and ns.TickerCount() or "-"
+      L("LEISTUNG", ("Lua %d KB (Zuwachs %s KB in 5 Min), Addon %s KB, nach Aufraeumen %s KB (Lua %s KB), CPU %s, Takt %.2f ms (hoechstens %.1f), %d fps, Ticker %s, Rahmen gross %d, offen %s"):format(
+        lua0, W.lua and tostring(lua0 - W.lua) or "-", tostring(addon), tostring(after), tostring(luaG), cpu, tickN > 0 and tickMs / tickN or 0, tickMax,
+        math.floor(GetFramerate() or 0), tostring(tk), Cnt(_G.TaurenRouteBig), #open > 0 and table.concat(open, ",") or "-"))
+      W.lua = (luaG ~= "-") and luaG or lua0
+    end)
     tickMs, tickN, tickMax = 0, 0, 0
     -- welche Takte waren in den letzten 5 Minuten langsam (ueber 40 ms)?
     if ns.slowCount and next(ns.slowCount) then
@@ -743,6 +847,15 @@ local function Tick()
       L("LANGSAM", table.concat(t, ", "))
       ns.slowCount = {}
     end
+    -- 1.4zzn (K 06:15 Punkt 1): die 15 teuersten Takt Stellen der letzten 5 Min, ms je Minute und Aufrufe, dazu Ruhe ja/nein
+    if ns.TickProfTop then
+      local top = ns.TickProfTop(15, true)
+      if #top > 0 then
+        local t, sum = {}, 0
+        for _, e in ipairs(top) do sum = sum + e[2]; t[#t + 1] = ("%s %.1f/%d"):format(e[1], e[2] / 5, e[3]) end
+        L("LEISTUNG", ("Takte teuerste (ms je Min/Aufrufe): %s | Summe %.0f ms je Min | ruhe %s"):format(table.concat(t, ", "), sum / 5, tostring(ns.Idle and ns.Idle() or false)))
+      end
+    end
     MsgLine()
     winStart, winT = XPTotal(), GetTime()
   end
@@ -751,6 +864,9 @@ local function Tick()
   -- 1.3.1a (P119, Log 15:15:00 HAENGT 4 s nach der Landung, die Flugzeit zaehlte mit): unterwegs (Flug, Schiff, Zeppelin,
   -- Tiefenbahn, Laden) die Zeit anhalten, nach der Ankunft neu anfangen
   if d and ns.UwHold and ns.UwHold("haengt") then last.bestD, last.bestT, last.bestWalk = nil, nil, nil; d = nil end
+  -- 1.4zj (M34, S Log 13:20 und 13:44 Orgrimmar): kein Haengen, solange das grosse Fenster offen ist (du liest) oder der Weg
+  -- durch eine Stadt laeuft (zum Tor geht es erst weg vom Ziel, die Luftlinie wird dabei groesser)
+  if d and ((_G.TaurenRouteBig and _G.TaurenRouteBig:IsShown()) or ns.walkCity) then last.bestD, last.bestT, last.bestWalk = nil, nil, nil; d = nil end
   if d then
     -- 17.4: bei Sammel und Kill Zielen zaehlt Fortschritt (5/10 -> 6/10) als weiter kommen, Mobs suchen im Gebiet ist kein Haengen
     local prog = type(last.txt) == "string" and last.txt:match("(%d+)/%d+") or nil
@@ -857,7 +973,10 @@ local function Hooks()
             #t > 0 and ("; raus: " .. table.concat(t, ", ")) or "", #sel > 0 and ("; nicht genommen: " .. table.concat(sel, ", ")) or ""))
         end)
         -- 1.3p (P96 Punkt 2): die Route aus dieser Rechnung bekommt ihren Anlass mit (sonst "ohne bekannten Anlass")
-        SetWhy("Rechnung fertig, Anlass " .. why)
+        -- 1.4zzt (Pr 18:00): beim Fahrplan wuchs der Text je Abschnitt um ein "Rechnung fertig, Anlass", nur einmal davor
+        local w0 = tostring(why)
+        while w0:sub(1, 24) == "Rechnung fertig, Anlass " do w0 = w0:sub(25) end
+        SetWhy("Rechnung fertig, Anlass " .. w0)
         if done then return done(...) end
       end, opts)
     end
@@ -1204,11 +1323,29 @@ function ns.TestLogStart()
     L("START", ("Addons %d: %s%s"):format(n, table.concat(add, ", "), n > #add and (", und " .. (n - #add) .. " weitere") or ""))
   end
   L("START", "Namen anderer Spieler stehen als Spieler 1, Spieler 2 (pro Sitzung neu gezaehlt), keine Chat Texte")
-  ns.Ticker(1, function() if not On() then return end local ok, err = pcall(Tick); if not ok then L("FEHLER", "Log Tick: " .. tostring(err)) end end)
+  -- 1.4zzg (M51, S 17:16): sammeln und teilen auch in der Pause (Log auch), dazu alle 5 Min eine PAUSE Zeile
+  ns.Ticker(1, function() if not On() then return end local ok, err = pcall(Tick); if not ok then L("FEHLER", "Log Tick: " .. tostring(err)) end end, nil, true)
+  do
+    local last, base = 0, nil
+    ns.Ticker(10, function()
+      local db = ns.db
+      if not (On() and db and db.paused) then base = nil; return end
+      local c = ns.collectN or { k = 0, l = 0 }
+      local S = ns.SyncStats or {}
+      if not base then base = { k = c.k, l = c.l, s = (S.sent or 0) + (S.gsent or 0), t = GetTime() }; last = GetTime() end
+      if GetTime() - last < 300 then return end
+      last = GetTime()
+      L("PAUSE", ("sammelt | kills %d | beute %d | gesendet %d | seit %d Min%s"):format(c.k - base.k, c.l - base.l,
+        (S.sent or 0) + (S.gsent or 0) - base.s, math.floor((GetTime() - base.t) / 60), db.quiet and " | ohne Fenster" or ""))
+    end, nil, true)
+  end
 end
 
 function ns.TestLogEvent(e, a1, a2, a3)
   if e == "PLAYER_LOGOUT" then
+    -- 1.4zzi: beim Ausloggen nichts mehr warten lassen
+    ns.LOG_SEALQ.all = true
+    pcall(ns.LogSealPump)
     pcall(ErrSum)
     -- beim Ausloggen darf es kurz haken: Speicher genau messen (erst aufraeumen, dann pro Addon)
     local okM, msg = pcall(function()
@@ -1250,7 +1387,11 @@ function ns.TestLogEvent(e, a1, a2, a3)
   elseif e == "PLAYER_DEAD" then
     deadAt = GetTime()
     local d = Dist()
-    L("TOD", ("gestorben durch %s, Ziel war: %s%s"):format(tostring(lastHit or "?"), tostring(last.txt), d and (", noch %d yd"):format(math.floor(d)) or ""))
+    -- 1.4zu (M44): ohne Kampflog (Midnight, "?") den Gegner nehmen, der zuletzt im Kampf als Ziel oder Namensplakette auf dich ging
+    local who = lastHit
+    if not who and ns.lastFoe and GetTime() - (ns.lastFoe.t or 0) < 15 then who = tostring(ns.lastFoe.name) .. " (Gegner im Kampf)" end
+    if not who and ns.combatT and GetTime() - ns.combatT < 5 then who = "Gegner (im Kampf, Name unbekannt)" end
+    L("TOD", ("gestorben durch %s, Ziel war: %s%s"):format(tostring(who or "?"), tostring(last.txt), d and (", noch %d yd"):format(math.floor(d)) or ""))
     if CUR then CUR.deaths = (CUR.deaths or 0) + 1 end
   elseif e == "PLAYER_ALIVE" then
     if UnitIsGhost and ns.Api.U(UnitIsGhost, "player") then L("TOD", "als Geist unterwegs zur Leiche")
@@ -1348,6 +1489,47 @@ function ns.TestReport(kind, text)
   return true
 end
 
+-- 1.4zf (P199, K 13:33, S Plan P188): Bild bei Meldung. Nur wenn das Log schreibt UND der Schalter an ist (Standard aus,
+-- fuer andere Spieler nie von selbst). Das Bild macht das Spiel (Screenshots Ordner), die Log Zeile BILD hat die Zeit wie im
+-- Datei Namen (WoWScrnShot_MMTTJJ_HHMMSS), damit K Bild und Meldung zusammen findet
+-- 1.4zzd (P210, K 11:00): MIGRATION Zeile beim ersten Log nach einem Update: von welcher Version, auf welche, und was der
+-- Stand nach dem Laden ist (umgestellte Profile, Route, Flugpunkte, Einstellungen). Merkt die Version in db.addonVer
+function ns.MigrationLine()
+  local db = ns.db
+  if not (db and LOG and On()) then return end
+  local meta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+  local ver = meta and meta(ADDON, "Version") or "?"
+  if db.addonVer == ver then return end
+  local was = {}
+  if ns.migNote then was[#was + 1] = ns.migNote end
+  local pk = {}
+  for k in pairs(db.profiles or {}) do pk[#pk + 1] = tostring(k) end
+  table.sort(pk)
+  was[#was + 1] = "profile " .. (#pk > 0 and table.concat(pk, ",") or "-")
+  was[#was + 1] = ("route %d Schritte (ab %d)"):format(db.opt and db.opt.steps and #db.opt.steps or 0, db.opt and db.opt.idx or 0)
+  was[#was + 1] = ("fahrplan %d Abschnitte"):format(db.plan60 and db.plan60.secs and #db.plan60.secs or 0)
+  local nf, ns2 = 0, 0
+  for _ in pairs(db.knownFP or {}) do nf = nf + 1 end
+  for k, v in pairs(db) do if type(v) ~= "table" then ns2 = ns2 + 1 end end
+  was[#was + 1] = ("flugpunkte %d"):format(nf)
+  was[#was + 1] = ("einstellungen %d Werte"):format(ns2)
+  L("MIGRATION", ("von=%s | nach=%s | was=%s"):format(tostring(db.addonVer or "unbekannt"), tostring(ver), table.concat(was, ", ")))
+  db.addonVer = ver
+end
+function ns.ShotOn() return (ns.db and ns.db.logShot and On() and type(_G.Screenshot) == "function") and true or false end
+function ns.TakeShot(why, delay)
+  if not ns.ShotOn() then return false end
+  C_Timer.After(delay or 0.3, function()
+    if not ns.ShotOn() then return end
+    local ok = pcall(_G.Screenshot)
+    local was = LOG and LOG.on
+    if LOG then LOG.on = true end
+    L("BILD", ("%s | Datei WoWScrnShot_%s | %s"):format(ok and "Bild gemacht" or "Bild ging nicht", date("%m%d%y_%H%M%S"), tostring(why or "-")))
+    if LOG then LOG.on = was end
+  end)
+  return true
+end
+
 local rep
 local function OpenReport(kind)
   local T = ns.T
@@ -1381,7 +1563,12 @@ local function OpenReport(kind)
     rep.save:SetScript("OnClick", function()
       if ns.TestReport(rep.kind, eb:GetText()) then
         ns.Print(rep.kind == "bug" and TR"Fehler gespeichert, danke! Er landet beim Ausloggen oder /reload im Log." or TR"Verbesserung gespeichert, danke! Sie landet beim Ausloggen oder /reload im Log.")
-        rep:Hide()
+        -- 1.4zf (P199): Bild mit dem Kasten drauf, danach erst zu
+        if ns.TakeShot(rep.kind == "bug" and "Fehler melden" or "Verbesserung", 0.2) then
+          C_Timer.After(0.8, function() rep:Hide() end)
+        else
+          rep:Hide()
+        end
       else
         ns.Print(TR"Bitte zuerst etwas eintippen.")
       end
@@ -1397,6 +1584,20 @@ local function OpenReport(kind)
 end
 ns.OpenReport = OpenReport
 
+-- 1.4g (P189): Knoepfe fuer die schnelle Rueckmeldung (Schluessel fuer die Auswertung, Text im Spiel)
+ns.RUECK = { { "weg", TR"Weg schlecht" }, { "nicht_da", TR"Quest nicht da" }, { "zu_schwer", TR"Zu schwer" }, { "unnoetig", TR"Unnötig" } }
+function ns.Rueckmeldung(key, label)
+  local idx, txt, s = StepInfo()
+  local a = s and s.acts and s.acts[1]
+  local m, x, y = Where()
+  local was = LOG and LOG.on
+  if LOG then LOG.on = true end
+  L("RUECKMELDUNG", ("%s | Schritt %s: %s | Quest %s %s | Ort Karte %s %.3f,%.3f"):format(tostring(key), tostring(idx or "-"), tostring(txt or "-"),
+    tostring(a and a.qid or "-"), tostring(a and a.quest or ""), tostring(m), x or 0, y or 0))
+  if LOG then LOG.on = was end
+  ns.TakeShot("Rueckmeldung " .. tostring(key))
+  ns.Print((TR"Danke, gemerkt: %s"):format(tostring(label)))
+end
 local tbox
 local function TesterBox()
   local db = ns.db
@@ -1419,16 +1620,42 @@ local function TesterBox()
     if tbox.idea.fs then tbox.idea.fs:SetTextColor(0.5, 1, 0.5) end
     tbox.bug:SetScript("OnClick", function() OpenReport("bug") end)
     tbox.idea:SetScript("OnClick", function() OpenReport("idea") end)
+    -- 1.4g (P189, S 11:31): schnelle Rueckmeldung zum jetzigen Schritt, ein Klick, Log RUECKMELDUNG mit Schritt, Quest, Ort
+    tbox.rm = {}
+    local prev = tbox.idea
+    for _, e in ipairs(ns.RUECK or {}) do
+      local b = T.Button(tbox, e[2], 104, 18)
+      b:SetPoint("TOP", prev, "BOTTOM", 0, -3)
+      b:SetScript("OnClick", function() ns.Rueckmeldung(e[1], e[2]) end)
+      tbox.rm[#tbox.rm + 1] = b
+      prev = b
+    end
+    tbox:SetHeight(76 + #tbox.rm * 21)
   end
-  local on = db.testerBox ~= false and hud:IsShown() and not db.paused and On()
+  -- 1.4zzg (M52, S 17:18): auch in der Pause und ohne Mini Fenster (quiet) sichtbar, solange das Log laeuft
+  local on = db.testerBox ~= false and On()
   tbox:SetShown(on and true or false)
   if not on then return end
   tbox:SetScale(hud:GetScale() or 1)
   -- links neben dem Mini Fenster, steht es ganz links am Rand: rechts daneben
   tbox:ClearAllPoints()
+  if not hud:IsShown() then
+    -- eigener Anker: wo das Mini Fenster zuletzt stand (links daneben), sonst rechts in der Mitte
+    local hl, ht, s = hud:GetLeft(), hud:GetTop(), (hud:GetScale() or 1)
+    if hl and ht and hl * s > 130 then
+      tbox:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", hl - 6, ht)
+    else
+      tbox:SetPoint("RIGHT", UIParent, "RIGHT", -260, 0)
+    end
+    return
+  end
   local left = hud:GetLeft() or 200
-  if left * (hud:GetScale() or 1) < 130 then
-    tbox:SetPoint("TOPLEFT", hud, "TOPRIGHT", 6, 0)
+  -- 1.4a (P151 Pfeil Punkt 2, S 11.11.): stehen dort die Quest Item Knoepfe, rueckt der Kasten darueber
+  local qi = ns.QuestItemsSide and ns.QuestItemsSide()
+  if qi == "rechts" or (qi ~= "links" and left * (hud:GetScale() or 1) < 130) then
+    if qi == "rechts" then tbox:SetPoint("BOTTOMLEFT", hud, "TOPRIGHT", 6, 4) else tbox:SetPoint("TOPLEFT", hud, "TOPRIGHT", 6, 0) end
+  elseif qi == "links" then
+    tbox:SetPoint("BOTTOMRIGHT", hud, "TOPLEFT", -6, 4)
   else
     tbox:SetPoint("TOPRIGHT", hud, "TOPLEFT", -6, 0)
   end
@@ -1439,7 +1666,7 @@ function ns.TesterBoxStart()
   if tbStarted then return end
   tbStarted = true
   TesterBox()
-  if ns.Ticker then ns.Ticker(1, TesterBox) end
+  if ns.Ticker then ns.Ticker(1, TesterBox, nil, true) end
 end
 
 -- 1.2i (P72, K 17:00: HAENGT "Reise: Zeppelin nach Unterstadt (faehrt in 2:02)"): Reise Schritt (Schiff, Zeppelin, Flug)
@@ -1454,3 +1681,37 @@ function ns.WaitsForRide()
   if lg and (lg.kind == "ride" or lg.kind == "fly") then return true end
   return false
 end
+
+-- 1.4f (P182, P133 Rest h): Haenge Stellen auch ohne Test Log erkennen und teilen. Leichte Fassung der HAENGT Pruefung
+-- oben (gleiche Regeln: 90 s nicht naeher als 15 yd ans Ziel, dabei ueber 30 yd gelaufen, nicht im Kampf, nicht tot, nicht
+-- unterwegs, nicht beim Warten aufs Schiff). Laeuft nur, wenn das Test Log aus ist (sonst macht es Tick oben), schreibt
+-- nichts ins Log, ruft nur ns.HangNote (Teilen.lua, Art h). Zustand in ns.hangLight, damit hier keine neuen Locals dazukommen
+ns.HANG_LIGHT = { WAIT_S = 90, BETTER_YD = 15, MOVE_YD = 30, MIN_YD = 40 }
+function ns.HangLightTick()
+  if On() or not ns.HangNote then return end
+  local H, C = ns.hangLight, ns.HANG_LIGHT
+  if not H then H = {}; ns.hangLight = H end
+  local idx, txt, s = StepInfo()
+  local key = tostring(idx) .. "|" .. tostring(s or txt)
+  local m, x, y = Where()
+  if key ~= H.key then H.key, H.bestD, H.bestT, H.walk, H.warned, H.prog = key, nil, GetTime(), 0, false, nil end
+  if m and H.pos and ns.WorldDist and not ns.Api.U(UnitOnTaxi, "player") then
+    local ok, dd = pcall(ns.WorldDist, H.pos, { m, x, y })
+    if ok and dd and dd < 60 then H.walk = H.walk + dd end
+  end
+  H.pos = m and { m, x, y } or nil
+  local d = Dist()
+  if d and ns.UwHold and ns.UwHold() then H.bestD = nil; d = nil end
+  if not d then return end
+  local prog = type(txt) == "string" and txt:match("(%d+)/%d+") or nil
+  if prog ~= H.prog then H.prog = prog; if prog then H.bestT, H.walk0 = GetTime(), H.walk end end
+  if not H.bestD or d < H.bestD - C.BETTER_YD then
+    H.bestD, H.bestT, H.walk0 = d, GetTime(), H.walk
+  elseif d > C.MIN_YD and not H.warned and GetTime() - H.bestT > C.WAIT_S and H.walk - (H.walk0 or 0) > C.MOVE_YD
+    and not ns.Api.U(UnitAffectingCombat, "player") and not ns.Api.U(UnitIsDeadOrGhost, "player") and not ns.Api.U(UnitOnTaxi, "player")
+    and not (ns.WaitsForRide and ns.WaitsForRide()) then
+    H.warned = true
+    pcall(ns.HangNote)
+  end
+end
+C_Timer.After(5, function() ns.Ticker(1, function() local ok = pcall(ns.HangLightTick) end) end)

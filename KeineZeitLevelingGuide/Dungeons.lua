@@ -175,15 +175,35 @@ function ns.SetDungeonArt(tex, d, bottomCrop)
   return Styled(tex, false)
 end
 
+-- 1.4zzo (M54): Quest > Dungeon Schluessel fuer Quests, die Questie einer anderen Zone zuordnet (Pr Abgleich 08:20)
+ns.DUNG_EXTRA_Q = {
+  [92819] = "The Deadmines", [3765] = "Blackfathom Deeps", [6141] = "Scarlet Monastery",
+  [78699] = "Scarlet Monastery", [1394] = "Scarlet Monastery", [707] = "Uldaman", [2769] = "Zul'Farrak", [93404] = "Maraudon",
+  [7848] = "Blackrock Depths", [5281] = "Stratholme", [6521] = "Razorfen Kraul", [96395] = "The Hall of Thanes", [96403] = "The Hall of Thanes",
+  -- 1.4zzp (Pr ANT 09:55): 1740 gehoert zu Schattenfang und Grotte (Teile aus beiden), 78307 zu Schattenfang
+  [1740] = { "Shadowfang Keep", "Blackfathom Deeps" }, [78307] = "Shadowfang Keep",
+  -- 1.4zzp (Pr BER 11:16): 95140 Old Fire-Eye auch Schattenfang und Grotte, Horde Strath 5961 Champion of the Banshee Queen
+  [95140] = { "The Deadmines", "Shadowfang Keep", "Blackfathom Deeps" }, [5961] = "Stratholme",
+}
 local INFO = {
   ["Ragefire Chasm"]            = { 13, 18, TR"Flammenschlund" },
   ["Wailing Caverns"]           = { 17, 24, TR"Höhlen des Wehklagens" },
   ["The Deadmines"]             = { 17, 26, TR"Die Todesminen" },
-  ["Ruins of Lordaeron"]        = { 15, 20, TR"Ruinen von Lordaeron (Forever)" },
+  -- 1.4zzk (M54, Pr BER 02:15): Level der Forever Dungeons an ihre Quests angepasst (Ruinen 21/22, Ausgrabung 28 bis 31),
+  -- neu The Hall of Thanes (Quests 15/16, Eingang Eisenschmiede)
+  ["The Hall of Thanes"]        = { 13, 19, TR"Hallen der Thane (Forever)", TR"Quests vor Ort: An Ancient Grudge, Important Heirlooms (noch nicht in den Daten)." },
+  -- 1.4zzl (M54, Pr BER 03:55 DungeonJournal Abgleich): fehlende Forever Dungeons. Questie kennt ihre Quests nicht (DJ hat nur
+  -- Platzhalter, die echten Nummern kommen erst beim Annehmen), darum Feld 4 = Hinweis statt Quest Liste
+  ["The Drowned City"]          = { 35, 40, TR"Die Versunkene Stadt (Forever)", TR"Die Quests gibt es vor Ort, sie sind noch nicht in den Daten." },
+  ["Krol'dok Stronghold"]       = { 40, 45, TR"Festung Krol'dok (Forever)", TR"Die Quests gibt es vor Ort, sie sind noch nicht in den Daten." },
+  ["Alcaz Prison"]              = { 48, 53, TR"Gefängnis von Alcaz (Forever)", TR"Quests vor Ort: Commander Folkar im Gefängnis, Sergeant Ulka auf der Insel." },
+  ["Blackmaw Hold"]             = { 55, 60, TR"Die Schwarzschlundfeste (Forever)", TR"Die Quests gibt es vor Ort, sie sind noch nicht in den Daten." },
+  ["Shaper's Terrace"]          = { 58, 60, TR"Die Terrasse des Formers (Forever)", TR"Die Quests gibt es vor Ort, sie sind noch nicht in den Daten." },
+  ["Ruins of Lordaeron"]        = { 18, 24, TR"Ruinen von Lordaeron (Forever)" },
   ["Shadowfang Keep"]           = { 22, 30, TR"Burg Schattenfang" },
   ["Blackfathom Deeps"]         = { 24, 32, TR"Tiefschwarze Grotte" },
   ["The Stockade"]              = { 24, 32, TR"Das Verlies" },
-  ["Excavation Site: Wetlands"] = { 24, 29, TR"Ausgrabung Sumpfland (Forever)" },
+  ["Excavation Site: Wetlands"] = { 26, 32, TR"Ausgrabung Sumpfland (Forever)" },
   ["City of Dalaran"]           = { 28, 33, TR"Stadt Dalaran (Forever)" },
   ["Gnomeregan"]                = { 29, 38, "Gnomeregan" },
   ["Razorfen Kraul"]            = { 29, 38, TR"Kral der Klingenhauer" },
@@ -226,11 +246,16 @@ end
 -- nicht in die Dungeon Liste und ihre Quests nicht als Dungeon Quests (sonst fehlen sie bei Dungeon Quests aus)
 local NOT_DUNGEON = { ["Deeprun Tram"] = true }
 ns.NOT_DUNGEON = NOT_DUNGEON
+ns.DUNG_RARE_KILLS = 10 -- 1.4zo (M38): ab so vielen Kills je Stueck gilt ein Quest Gegenstand als zu selten fuer die Dungeon Route
 ns.dungeons = nil      -- Liste, nach Level sortiert
 local byArea = {}      -- Dungeon Zone (areaId) -> Dungeon
 local building
 
 local function Q(id, k)
+  -- 1.4zh (M30, S Log 13:23 Dungeons.lua:234 QDB nil): Questie noch nicht bereit, dann nichts. 1.4zl: das Ausruestung
+  -- Fenster fragt vor dem Dungeon Index (QDB kommt sonst erst mit BuildDungeonIndex), darum hier selbst holen
+  if not QDB and ns.QDBAccess then QDB, ZDB, QLib, QPlayer = ns.QDBAccess() end
+  if not QDB then return end
   local ok, v = pcall(QDB.QueryQuestSingle, id, k)
   if not ok then return end
   -- 19.34 (Pruefer 09:42 LEICHT 4): Vorquest Ketten mit der Daten Korrektur (vorquest_fehlt), wie die Route
@@ -258,9 +283,10 @@ local function DKGiverOf(qid, by)
   if not g then return nil end
   return g.name, g.map, g.x, g.y, g.innen
 end
-local function N(id, k) local ok, v = pcall(QDB.QueryNPCSingle, id, k); if ok then return v end end
+local function N(id, k) if not QDB then return end local ok, v = pcall(QDB.QueryNPCSingle, id, k); if ok then return v end end
 local function O(id, k)
   if not QDB.QueryObjectSingle then return end
+  if not QDB then return end
   local ok, v = pcall(QDB.QueryObjectSingle, id, k); if ok then return v end
 end
 
@@ -291,7 +317,8 @@ end
 
 -- Dungeon ohne eine Quest fuer dich (andere Fraktion, Klasse): wird in den Listen ausgeblendet
 function ns.DungeonHidden(d)
-  return d and not d.pvp and #(d.quests or {}) == 0 and true or false
+  -- 1.4zzl (M54): Forever Dungeons mit Quests erst vor Ort (vorOrt) trotzdem zeigen
+  return d and not d.pvp and not d.vorOrt and #(d.quests or {}) == 0 and true or false
 end
 
 ------------------------------------------------------------
@@ -330,7 +357,7 @@ function ns.BuildDungeonIndex(done)
         -- englischer Client: der Questie Schluessel ist schon der englische Name (ausser Forever Dungeons)
         local nm = info[3]
         if ns.EN and not info.auto and type(nm) == "string" and not nm:find("Forever", 1, true) then nm = e[1] end
-        d = { key = e[1], name = nm, min = info[1], max = info[2], areas = {}, quests = {}, auto = info.auto }
+        d = { key = e[1], name = nm, min = info[1], max = info[2], areas = {}, quests = {}, auto = info.auto, vorOrt = type(info[4]) == "string" and info[4] or nil }
         byName[e[1]] = d
         local loc = type(e[4]) == "table" and e[4][1]
         if loc then
@@ -341,6 +368,30 @@ function ns.BuildDungeonIndex(done)
       byArea[area] = d
       for _, alt in ipairs(e[2] or {}) do byArea[alt] = d end
     end
+  end
+  -- 1.4i (P160, Pr P143): Dungeons aus der Daten Korrektur (Lueckenfueller). Fehlt er in Questie, kommt er neu dazu,
+  -- sonst nur Name und Level, wenn Questie keine hat. Quests kommen weiter unten dazu (ohne Doppelte)
+  local dkD = ns.DKDungeons and ns.DKDungeons() or {}
+  for _, e in ipairs(dkD) do
+    local d = byName[e.key]
+    -- 1.4zzm (M54, Pr ANT 04:50: die 5 neuen kommen aus der Daten Korrektur, nicht aus Questie): INFO gilt auch hier
+    local inf = INFO[e.key]
+    if not d then
+      local nm = (not ns.EN and e.name) or e.key
+      d = { key = e.key, name = nm, min = e.min or 0, max = e.max or 0, areas = {}, quests = {}, auto = not (e.min and e.max), dk = true }
+      if inf then
+        d.min, d.max, d.auto = inf[1], inf[2], nil
+        if not ns.EN and type(inf[3]) == "string" then d.name = inf[3] end
+        if type(inf[4]) == "string" then d.vorOrt = inf[4] end
+      end
+      if e.entrance then d.entrance = { e.entrance[1], e.entrance[2], e.entrance[3] } end
+      byName[e.key] = d
+    else
+      if d.auto and e.min and e.max then d.min, d.max, d.auto = e.min, e.max, nil end
+      if d.auto and e.name and not ns.EN then d.name = e.name end
+      if not d.entrance and e.entrance then d.entrance = { e.entrance[1], e.entrance[2], e.entrance[3] } end
+    end
+    d.dkQuests = e.quests
   end
   local list = {}
   for _, d in pairs(byName) do table.insert(list, d) end
@@ -364,11 +415,29 @@ function ns.BuildDungeonIndex(done)
       if d and Allowed(qid) then table.insert(d.quests, qid) end
     end
     if i < #ids then C_Timer.After(0, SafeStep); return end
+    -- 1.4zzo (M54, Pr BER 04:25 und 08:20, DungeonJournal Abgleich): Quests, die Questie hat, aber unter einer anderen Zone
+    -- fuehrt (zb 707 Ironband Wants You unter Loch Modan). Feste Zuordnung Quest > Dungeon (Datentabelle), nur wenn erlaubt
+    for qid, keys in pairs(ns.DUNG_EXTRA_Q or {}) do
+      for _, key in ipairs(type(keys) == "table" and keys or { keys }) do
+        local d = byName[key]
+        local hasN = d and Q(qid, "name")
+        local ok = hasN and Allowed(qid)
+        if ok then
+          local dup = false
+          for _, q0 in ipairs(d.quests) do if q0 == qid then dup = true; break end end
+          if not dup then table.insert(d.quests, qid) end
+        elseif ns.TestLog then
+          -- 1.4zzp (Pr BER 11:16): warum eine Zusatz Quest fehlt (fuer djdump): kein Dungeon, Questie kennt sie nicht, oder nicht erlaubt
+          ns.TestLog("DUNG_EXTRA", ("%d > %s fehlt: %s"):format(qid, tostring(key), not d and "Dungeon unbekannt" or (not hasN and "nicht in Questie" or "nicht erlaubt (Fraktion, Volk, Klasse)")))
+        end
+      end
+    end
     -- 1.3q (Daten 13): Quests, die Questie gar nicht hat, aus der Korrektur in ihren Dungeon (nur eigene Fraktion)
     if ns.DKMissQuestIds then
       local fac = UnitFactionGroup and UnitFactionGroup("player")
       for _, qid in ipairs(ns.DKMissQuestIds()) do
-        local okN, nm = pcall(QDB.QueryQuestSingle, qid, "name")
+        local okN, nm = false, nil
+        if QDB then okN, nm = pcall(QDB.QueryQuestSingle, qid, "name") end
         local fq = ns.DKMissQuest(qid, okN and nm ~= nil)
         if fq and fq.dungeon and (not fq.fac or fq.fac == fac) then
           for _, d in ipairs(list) do
@@ -380,6 +449,17 @@ function ns.BuildDungeonIndex(done)
             end
           end
         end
+      end
+    end
+    -- 1.4i (P160): Quests aus der Daten Korrektur (Questie kennt sie, aber ohne Dungeon Zone), ohne Doppelte
+    for _, d in ipairs(list) do
+      if d.dkQuests then
+        local have = {}
+        for _, q0 in ipairs(d.quests) do have[q0] = true end
+        for _, qid in ipairs(d.dkQuests) do
+          if not have[qid] and Allowed(qid) then have[qid] = true; table.insert(d.quests, qid) end
+        end
+        if ns.TestLog then ns.TestLog("DUNGEON", ("Daten Korrektur: %s%s, %d Quests"):format(tostring(d.key), d.dk and " (neu)" or "", #d.quests)) end
       end
     end
     -- unbekannte Dungeons: Level aus den Quests, ohne Quests weglassen
@@ -451,13 +531,26 @@ end
 ------------------------------------------------------------
 -- Quest Status und Kette
 ------------------------------------------------------------
+-- 1.4zp (M41, S 22:26 ZF Tour: Quest schon im Log, Route wollte trotzdem nach Donnerfels): nicht nur Questie fragen
+-- (dessen Liste kann alt oder leer sein), sondern auch das echte Questlog (ns.logProgress) und das Spiel
 local function Complete(qid)
   local c = Questie and Questie.db and Questie.db.char and Questie.db.char.complete
-  return c and c[qid] and true or false
+  if c and c[qid] then return true end
+  if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
+    local ok, v = pcall(C_QuestLog.IsQuestFlaggedCompleted, qid)
+    if ok and v then return true end
+  end
+  return false
 end
 local function InLog(qid)
+  if ns.logProgress and ns.logProgress[qid] then return true end
   local l = QPlayer and QPlayer.currentQuestlog
-  return l and l[qid] and true or false
+  if l and l[qid] then return true end
+  if C_QuestLog and C_QuestLog.GetLogIndexForQuestID then
+    local ok, i = pcall(C_QuestLog.GetLogIndexForQuestID, qid)
+    if ok and i and i > 0 then return true end
+  end
+  return false
 end
 
 local function Who(by)
@@ -1006,6 +1099,27 @@ function ns.DungeonRoute(d)
         if not anyP then byQ[qid] = false; return nil end
       end
     end
+    -- 1.4zo (M38, S Log 19:08 Oedland: "Zerrissene Halskette 0/1", 8 % Drop bei wenigen Gegnern draussen): eine Vorquest
+    -- ausserhalb, deren Gegenstand sehr selten droppt (mehr als DUNG_RARE_KILLS Kills je Stueck laut cMaNGOS und Gelerntem),
+    -- kommt nicht in die Dungeon Route, solange sie nicht schon im Log ist. Die Kette dahinter faellt mit raus
+    -- 1.4zt (Pr m38t ROT: 2283 blieb in der Uldaman Tour): auch fuer Quests aus der Dungeon Liste (2283 steht dort mit
+    -- drin). Draussen liegende Ziele haben objNodes, Ziele im Dungeon nicht, die Regel trifft also nur Drops draussen
+    local preBQ
+    if st ~= "log" and st ~= "ready" and ns.QuestDropKills then
+      preBQ = tools.BuildQuest(qid, any, nil, false, nil)
+      for _, o in ipairs(preBQ and preBQ.objNodes or {}) do
+        -- 1.4zw: passt keiner der Gegner aus Questie zu den Drop Daten, das Mittel ueber alle Gegner mit dem Item
+        local kpi = o.item and (ns.QuestDropKills(o.item, o.npcs, true) or ns.QuestDropKills(o.item, o.npcs, false))
+        if o.item then
+          DungLogOnce(d.name, "rareChk" .. qid .. ":" .. o.item, ("%s: Quest %d Item %d draussen, ca %s Kills je Stueck (Grenze %d)"):format(tostring(d.name), qid, o.item, kpi and tostring(math.floor(kpi + 0.5)) or "unbekannt", ns.DUNG_RARE_KILLS))
+        end
+        if kpi and kpi > ns.DUNG_RARE_KILLS then
+          byQ[qid] = false
+          DungLogOnce(d.name, "rare" .. qid, ("%s: Quest %d braucht Item %d, selten (ca %d Kills je Stueck), nicht in der Route"):format(tostring(d.name), qid, o.item, math.floor(kpi + 0.5)))
+          return nil
+        end
+      end
+    end
     if st ~= "log" and st ~= "ready" then
       local sb = Q(qid, "startedBy")
       local m, x, y, who = Place(sb)
@@ -1034,7 +1148,7 @@ function ns.DungeonRoute(d)
       table.insert(entrance.acts, { k = "O", qid = qid, quest = q.name, dungeon = true })
     elseif st ~= "ready" and not isDungeonQuest then
       -- Vorquest ausserhalb: Ziele wie im Optimierer (dichteste Stelle)
-      local bq = tools.BuildQuest(qid, any, nil, false, nil)
+      local bq = preBQ or tools.BuildQuest(qid, any, nil, false, nil)
       if bq then
         for _, o in ipairs(bq.objNodes or {}) do
           local on = Node("O", q, o.map, o.x, o.y, o.dur, { obj = o.obj, count = o.count })
@@ -1197,4 +1311,45 @@ function ns.IsDungeonQuest(qid)
   if e == nil then return false end
   if type(e) == "table" and NOT_DUNGEON[e[1]] then return false end
   return true
+end
+
+-- 1.4i (P160 Punkt 2): Ort einer Quest nur auf der Karte zeigen (keine Route, kein Pfeil). Der Punkt bleibt, bis die
+-- Karte zu geht. Karte oeffnet sich auf der Zone (nur ausserhalb vom Kampf)
+local pinHooked = false
+function ns.ShowTempPin(map, x, y, name)
+  if not (map and x and y) then return end
+  ns.tempPin = { map = map, x = x, y = y, name = name }
+  if WorldMapFrame and not pinHooked then
+    pinHooked = true
+    WorldMapFrame:HookScript("OnHide", function() ns.tempPin = nil end)
+  end
+  if WorldMapFrame and not (InCombatLockdown and InCombatLockdown()) then
+    if not WorldMapFrame:IsShown() then pcall(ShowUIPanel, WorldMapFrame) end
+    pcall(WorldMapFrame.SetMapID, WorldMapFrame, map)
+  end
+  if ns.Draw then ns.Draw() end
+  if ns.TestLog then ns.TestLog("KARTE", ("Punkt gezeigt: %s Karte %s %.3f,%.3f"):format(tostring(name), tostring(map), x, y)) end
+end
+
+-- 1.4i (P160 Punkt 2, S: "eine Angabe wie lange die Questreihe gehen koennte"): grobe Dauer einer Kette, nur offene
+-- Quests. Je Quest DCH.QUEST_S fuer die Ziele, dazu der Weg von Geber zu Geber (Luftlinie mal DCH.PATH bei deinem Tempo),
+-- anderer Kontinent DCH.CONT_S. Ergebnis Sekunden (ca), nil ohne Daten
+ns.DCH = { QUEST_S = 300, PATH = 1.3, CONT_S = 600 }
+function ns.ChainEstimate(chain)
+  if not (chain and #chain > 0) then return nil end
+  local speed = (ns.PlanSpeed and ns.PlanSpeed()) or 7
+  local total, prev, n = 0, nil, 0
+  for _, c in ipairs(chain) do
+    if c.st ~= "done" then
+      n = n + 1
+      total = total + ns.DCH.QUEST_S
+      local q = ns.DungeonQuestInfo(c.id)
+      if q.gm and prev then
+        local d = ns.WorldDistXY and ns.WorldDistXY(prev[1], prev[2], prev[3], q.gm, q.gx, q.gy)
+        total = total + (d and d * ns.DCH.PATH / speed or ns.DCH.CONT_S)
+      end
+      if q.gm then prev = { q.gm, q.gx, q.gy } end
+    end
+  end
+  return n > 0 and total or nil, n
 end

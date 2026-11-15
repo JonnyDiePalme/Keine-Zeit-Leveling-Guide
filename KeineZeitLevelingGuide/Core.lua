@@ -52,10 +52,28 @@ function ns.LogWarn()
   return m - 1
 end
 
+-- 1.4b (P158, S M13 "Chat nur Wichtiges, keine Wiederholung"): gleiche Meldung hoechstens einmal je ns.PRINT_SAME_S,
+-- Wiederholungen nur ins Test Log (CHAT doppelt)
+ns.PRINT_SAME_S = 600
+ns.printSeen, ns.printN = {}, 0   -- in ns statt local (Core Hauptteil hat kaum Platz fuer Locals)
 local function Print(msg)
+  local now = GetTime and GetTime() or 0
+  local k = tostring(msg)
+  local t = ns.printSeen[k]
+  if t and now - t < ns.PRINT_SAME_S then
+    if ns.TestLog then ns.TestLog("CHAT", "doppelt, nicht gezeigt: " .. k:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+    return
+  end
+  ns.printN = ns.printN + 1
+  if ns.printN > 300 then ns.printSeen, ns.printN = {}, 0 end
+  ns.printSeen[k] = now
   DEFAULT_CHAT_FRAME:AddMessage(TR"|cff7fd1b9Keine Zeit Leveling Guide|r: " .. msg)
 end
 ns.Print = Print
+-- 1.4b (P158, M13): Schritt Wechsel steht im Mini Fenster, im Chat nur noch ins Test Log
+function ns.PrintStep(msg)
+  if ns.TestLog then ns.TestLog("CHAT", "leise: " .. tostring(msg):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+end
 
 local function ZoneName(mapID)
   local info = mapID and C_Map.GetMapInfo(mapID)
@@ -470,6 +488,27 @@ end
 local fall = {}
 local function FallTick()
   if not db then return end
+  -- 1.4zu (M44): letzte Kampf Zeit, fuer den Tod (im Kampf gestorben ist kein Sturz)
+  if ns.Api.U(UnitAffectingCombat, "player") then
+    local now = GetTime()
+    ns.combatT = now
+    -- Gegner merken (fuer die TOD Zeile): dein Ziel, wenn es angreifbar ist, sonst eine Namensplakette, die auf dich zielt
+    if not ns.lastFoeScan or now - ns.lastFoeScan > 1 then
+      ns.lastFoeScan = now
+      local foe
+      if ns.Api.U(UnitExists, "target") and ns.Api.U(UnitCanAttack, "player", "target") and ns.Api.U(UnitIsUnit, "targettarget", "player") then foe = "target" end
+      for k = 1, 20 do
+        if foe then break end
+        local u = "nameplate" .. k
+        if ns.Api.U(UnitExists, u) and ns.Api.U(UnitIsUnit, u .. "target", "player") and ns.Api.U(UnitCanAttack, "player", u) then foe = u end
+      end
+      if not foe and ns.Api.U(UnitExists, "target") and ns.Api.U(UnitCanAttack, "player", "target") then foe = "target" end
+      local nm = foe and Plain(UnitName(foe))
+      -- andere Spieler nie mit Namen (wie im Log sonst auch)
+      if foe and ns.Api.U(UnitIsPlayer, foe) then nm = TR"Spieler" end
+      if type(nm) == "string" and nm ~= "" then ns.lastFoe = { name = nm, t = now } end
+    end
+  end
   local falling = IsFalling and ns.Api.U(IsFalling)
   local mapID = PlayerMap()
   if falling and not fall.active then
@@ -509,8 +548,16 @@ local function OnFallDamage(amount)
   end
 end
 
+-- 1.4zu (M44, S 23:33 Hinterland: "das war kein sturtz ich wurde getoetet durch gegner"): im Kampf (oder bis 5 s danach)
+-- gestorben zaehlt nur als Sturz, wenn der Fall selbst viel Schaden machte (Gegner werfen dich auch mal hoch oder du springst)
 local function OnDeath()
   if fall.map and not fall.boat and (fall.active or (fall.landed and GetTime() - fall.landed < 3)) then
+    local maxHp = Plain(UnitHealthMax("player")) or 1
+    local fight = ns.combatT and GetTime() - ns.combatT < 5
+    if fight and (fall.dmg or 0) < maxHp * 0.3 then
+      if ns.TestLog then ns.TestLog("TOD", ("im Kampf gestorben, kein Sturz (Fallschaden %d)"):format(math.floor(fall.dmg or 0))) end
+      return
+    end
     ns.AddDanger(fall.map, fall.x, fall.y, TR"Tod durch Sturz")
   end
 end
@@ -1365,7 +1412,8 @@ local function AddLine(ax, ay, bx, by, c, a, thick)
     lines[nLine] = l
   end
   local w, h = overlay:GetWidth(), overlay:GetHeight()
-  l:SetThickness(math.max(1.2, (thick or 4) * ZF))
+  -- 1.4zv (P201, K 01:50): fuer Test Bilder die Linie dicker (ns.lineBoost, TestLauf setzt es nur waehrend dem Bild)
+  l:SetThickness(math.max(1.2, (thick or 4) * ZF * (ns.lineBoost or 1)))
   l:SetColorTexture(c[1], c[2], c[3], a)
   l:ClearAllPoints()
   l:SetStartPoint("TOPLEFT", overlay, ax * w, -ay * h)
@@ -1783,7 +1831,9 @@ local function DrawOpt(mapID, optArg)
     local x, y = View(st.map, st.x, st.y, st.travel or i == start)
     if x and wide and (x < 0 or x > 1 or y < 0 or y > 1) then x, y = nil, nil end
     if x then drawn = drawn + 1 end
-    if x and zoneView and allZones and not st.travel and ((ns.cityParent and ns.cityParent[st.map]) or st.map) ~= viewZone then x, y = nil, nil end
+    -- 1.4zr (M39, S 22:10 Duestermarschen, Dungeon Tour ZF, Schritt 5 in Tanaris: "linie auf map fehlt"): der jetzige
+    -- Schritt bleibt auch in einer anderen Zone (am Kartenrand), damit die Linie ab dir zeigt, wohin es geht
+    if x and zoneView and allZones and not st.travel and i ~= start and ((ns.cityParent and ns.cityParent[st.map]) or st.map) ~= viewZone then x, y = nil, nil end
     if x then
       if lastX then
         -- Farbverlauf: Schritt 1 gruen, je weiter weg desto roter
@@ -1990,13 +2040,33 @@ local function NaviLabel(x, y, text, below)
     l:Show()
   else l:Hide() end
 end
+-- 1.4d (P152, S 11.11. Karte Punkt 1 "keine 12 Steps bis zum Zeppelin, praegnante Punkte"): auf der Karte nur markante
+-- Navi Punkte mit Ring und Nummer: jetziger Abschnitt, Ziel, jede Reise (Flug, Schiff, Zeppelin, Ruhestein, Teleport),
+-- Flugmeister und Orte aus Punkte.lua (Ka, FWW_AUTO_PUNKTE: Flugmeister, Stadttor, Aufzug, Steg, Turm, Tunnel, Dungeon)
+-- naeher als ns.NAVI_MARK.YD. Die Linie und der Pfeil gehen weiter ueber alle Punkte. Ohne Punkte.lua wie bisher alle
+ns.NAVI_MARK = { YD = 30 }
+function ns.NaviPunktMarkant(map, x, y)
+  local P = _G.FWW_AUTO_PUNKTE
+  local F = type(P) == "table" and type(P.forever) == "table" and P.forever
+  if not F then return true end
+  local D = ns.WorldDistXY
+  for _, ui in ipairs({ map, ns.cityParent and ns.cityParent[map] }) do
+    for _, e in ipairs(F[ui] or {}) do
+      if type(e) == "table" and e[1] and e[2] then
+        local d = D and D(map, x, y, ui, e[1], e[2])
+        if d and d <= ns.NAVI_MARK.YD then return true, e[3] end
+      end
+    end
+  end
+  return false
+end
 local function DrawNavi(mapID)
   local nv = ns.navi
   local lx, ly
   local pm = PlayerMap()
   local pp = pm and C_Map.GetPlayerMapPosition(pm, "player")
   local from -- Startpunkt des Abschnitts in Zonen Koordinaten (fuer die Wegsuche)
-  local nSeg, nVis = 0, 0
+  local nSeg, nVis, nHid = 0, 0, 0
   if pp then local px, py = pp:GetXY(); lx, ly = NaviView(pm, px, py, mapID); from = { pm, px, py } end
   -- Laufen den Wegen entlang (17.5): Linie ueber die Punkte der Wegsuche, sonst gerade
   local function Walk(i, gx, gy, col, wd)
@@ -2044,7 +2114,10 @@ local function DrawNavi(mapID)
       NaviLabel(lx, ly, "|cff40ff40" .. i .. "|r |cffffffff" .. (lg.text or "") .. "|r", true)
     end
     from = { lg.to.map, lg.to.x, lg.to.y }
-    if In01(x, y) then
+    local mark = i == (nv.cur or 1) or i == #nv.legs or lg.kind ~= "walk" or (nv.legs[i + 1] and nv.legs[i + 1].kind ~= "walk")
+      or lg.flyTo ~= nil or ns.NaviPunktMarkant(lg.to.map, lg.to.x, lg.to.y)
+    if In01(x, y) and not mark then nHid = nHid + 1 end
+    if In01(x, y) and mark then
       nVis = nVis + 1
       if i == #nv.legs then AddRing(x, y, 30, GREEN, 0.5, 1) end
       AddRing(x, y, 18, col, 0.95, 3)
@@ -2072,8 +2145,8 @@ local function DrawNavi(mapID)
     if not nv.mapSeen[key] then
       nv.mapSeen[key] = true
       local ci = C_Map.GetMapInfo(mapID)
-      ns.TestLog("NAVI", ("Karte %s (%s): %d von %d Punkten, %d Linien, ab Schritt %d"):format(tostring(mapID),
-        tostring(ci and ci.name), nVis, #nv.legs - (nv.cur or 1) + 1, nSeg, nv.cur or 1))
+      ns.TestLog("NAVI", ("Karte %s (%s): %d von %d Punkten, %d Linien, ab Schritt %d, %d Zwischenpunkte ohne Marke"):format(tostring(mapID),
+        tostring(ci and ci.name), nVis, #nv.legs - (nv.cur or 1) + 1, nSeg, nv.cur or 1, nHid))
     end
   end
 end
@@ -2090,11 +2163,22 @@ Draw = function()
   HideAll()
   if not db or db.paused or not WorldMapFrame or not WorldMapFrame:IsShown() then return end
   -- Route auf der Karte aus: das Navi (17.4) zeichnet trotzdem
-  if (not db.show or db.mapShow == false) and not (ns.navi and not ns.navi.hidden and ns.navi.legs) then return end
+  if (not db.show or db.mapShow == false) and not (ns.navi and not ns.navi.hidden and ns.navi.legs) and not ns.tempPin then return end
   EnsureOverlay()
   ZF = ZoomFactor()
   local mapID = WorldMapFrame:GetMapID()
   local info = mapID and C_Map.GetMapInfo(mapID)
+  -- 1.4i (P160 Punkt 2, S: "Klick auf einen Punkt der Kette zeigt auf der Karte, wo das ist, keine Route, ein Marker der
+  -- verschwindet, wenn ich die Karte zu mache"): ns.tempPin = { map, x, y, name }, geloescht beim Schliessen der Karte
+  if ns.tempPin then
+    local tp = ns.tempPin
+    local px, py = NaviView(tp.map, tp.x, tp.y, mapID)
+    if px and px >= 0 and px <= 1 and py >= 0 and py <= 1 then
+      AddRing(px, py, 30, { 1, 0.82, 0 }, 0.55, 1); AddRing(px, py, 18, { 1, 0.82, 0 }, 0.95, 3); AddRing(px, py, 10, { 0, 0, 0 }, 0.85, 4)
+      NaviLabel(px, py, "|cffffd100" .. tostring(tp.name or "?") .. "|r", true)
+    end
+    if (not db.show or db.mapShow == false) and not (ns.navi and not ns.navi.hidden and ns.navi.legs) then return end
+  end
   -- Navi aktiv: nur die Navi Strecke
   if ns.navi and not ns.navi.hidden and ns.navi.legs then
     local OMn = OpenMapAPI
@@ -3320,6 +3404,30 @@ end
 ns.LvlStat = LvlStat
 ns.ZoneStatOf = function(id) return ZoneStat(id) end
 ns.PerfData = function() return Perf() end
+-- 1.4n (P161 soll1 Punkt 3): Zonen eines Levels { name, t, xp, rate, exact }. Alte Daten ohne zt: Zonen, deren
+-- Level Spanne das Level enthaelt, mit dem Schnitt der Zone (exact = false, Anzeige mit ~)
+ns.ZoneLevelList = function(L)
+  local p = Perf()
+  local e = p.lvl and p.lvl[L]
+  local out = {}
+  if e and e.zt and next(e.zt) then
+    for id, t in pairs(e.zt) do
+      if t > 30 then
+        local xp = (e.zx and e.zx[id]) or 0
+        out[#out + 1] = { name = ZoneName(id), t = t, xp = xp, rate = xp / t * 3600, exact = true }
+      end
+    end
+  else
+    for _, id in ipairs(p.order or {}) do
+      local z = p.zones[id]
+      if z and z.t > 60 and (z.lvlFrom or 0) <= L and (z.lvlTo or 0) >= L then
+        out[#out + 1] = { name = ZoneName(id), t = z.t, xp = z.xp, rate = z.xp / z.t * 3600, exact = false }
+      end
+    end
+  end
+  table.sort(out, function(a, b) return a.t > b.t end)
+  return out
+end
 ns.CurZone = function() return ZoneOnly(PlayerMap()) end
 
 -- Zaehler in einen Eintrag (Level oder Zone)
@@ -3393,6 +3501,7 @@ local function PerfTick()
   local ls = LvlStat(UnitLevel("player"))
   ls.t = ls.t + 1
   Bump(ls, "split", kind)
+  Bump(ls, "zt", mapID)   -- 1.4n (P161): Zeit je Zone in diesem Level
   p.split = p.split or {}
   p.split[kind] = (p.split[kind] or 0) + 1
   -- Zeit pro Level (bleibt gespeichert)
@@ -3537,7 +3646,7 @@ local function PerfXP(d)
   local ls = LvlStat()
   ls.xp = ls.xp + d
   local mapID = ZoneOnly(PlayerMap())
-  if mapID then ZoneStat(mapID).xp = ZoneStat(mapID).xp + d end
+  if mapID then ZoneStat(mapID).xp = ZoneStat(mapID).xp + d; Bump(ls, "zx", mapID, d) end
   Perf().xp = Perf().xp + d
   if ns.curAct == "route" then Perf().rxp = (Perf().rxp or 0) + d end
 end
@@ -4388,6 +4497,128 @@ local function SaneOpt(o)
   if o.title ~= nil and type(o.title) ~= "string" then o.title = nil end
   return o
 end
+-- P217 Punkt 1: Packen und Auspacken der Daten anderer Charaktere (siehe Login)
+ns.CHAR_PACK = { ON = true, V = 1, NIE = { knownFP = true, fpEcht = true, fpVermutet = true } }
+local function EU()
+  local E = C_EncodingUtil
+  if not (ns.CHAR_PACK.ON and E and E.SerializeCBOR and E.DeserializeCBOR and E.CompressString and E.DecompressString
+    and E.EncodeBase64 and E.DecodeBase64) then return nil end
+  return E, (Enum and Enum.CompressionMethod and Enum.CompressionMethod.Deflate) or 0
+end
+local function Same(a, b, depth)
+  if a == b then return true end
+  if type(a) ~= "table" or type(b) ~= "table" or depth > 60 then return false end
+  for k, v in pairs(a) do if not Same(v, b[k], depth + 1) then return false end end
+  for k in pairs(b) do if a[k] == nil then return false end end
+  return true
+end
+local function Decode(str)
+  local E, m = EU()
+  if not E or type(str) ~= "string" then return nil end
+  local ok, raw = pcall(E.DecodeBase64, str); if not ok or type(raw) ~= "string" then return nil end
+  local ok2, bin = pcall(E.DecompressString, raw, m); if not ok2 or type(bin) ~= "string" then return nil end
+  local ok3, t = pcall(E.DeserializeCBOR, bin); if not ok3 or type(t) ~= "table" then return nil end
+  return t
+end
+local function Note(msg)
+  ns.packNote = ns.packNote or {}
+  ns.packNote[#ns.packNote + 1] = msg
+  ns.migNote = (ns.migNote and (ns.migNote .. "; ") or "") .. msg
+  if C_Timer and C_Timer.After then C_Timer.After(12, function() if ns.TestLog then ns.TestLog("MIGRATION", msg) end end) end
+end
+-- gibt die Laenge des gepackten Texts zurueck (nil = nicht gepackt)
+function ns.CharPack(c, who)
+  if type(c) ~= "table" or c.pack then return nil end
+  local E, m = EU()
+  if not E then return nil end
+  local sub, n = {}, 0
+  -- 1.4zzz3 (M64, K 14:55): Flugpunkte nie packen, die bleiben immer als Tabelle (ns.CHAR_PACK.NIE)
+  local nie = ns.CHAR_PACK.NIE or {}
+  for f, v in pairs(c) do if type(v) == "table" and not nie[f] then sub[f] = v; n = n + 1 end end
+  if n == 0 then return nil end
+  local ok, bin = pcall(E.SerializeCBOR, sub); if not ok or type(bin) ~= "string" then Note("chars packen fehlgeschlagen (cbor)"); return nil end
+  local ok2, z = pcall(E.CompressString, bin, m); if not ok2 or type(z) ~= "string" then Note("chars packen fehlgeschlagen (deflate)"); return nil end
+  local ok3, str = pcall(E.EncodeBase64, z); if not ok3 or type(str) ~= "string" then Note("chars packen fehlgeschlagen (base64)"); return nil end
+  local back = Decode(str)
+  if not (back and Same(sub, back, 0)) then Note("chars packen: Pruefung ungleich, bleibt als Tabelle"); return nil end
+  for f in pairs(sub) do c[f] = nil end
+  c.pack, c.packV = str, ns.CHAR_PACK.V
+  return #str
+end
+function ns.CharUnpack(c)
+  if type(c) ~= "table" or type(c.pack) ~= "string" then return true end
+  local t = Decode(c.pack)
+  if not t then Note("chars auspacken fehlgeschlagen, Paket bleibt gespeichert"); return false end
+  for f, v in pairs(t) do if c[f] == nil then c[f] = v end end
+  c.pack, c.packV = nil, nil
+  return true
+end
+-- 1.4zzv (P217 Punkt 1 Rest): Fahrplan (db.plan60, bis 4.5 MB) beim Ausloggen als Paket speichern, beim Laden auspacken.
+-- Im Spiel braucht es ihn als Tabelle, das spart Platz in der Datei und Arbeit beim Laden. Gleiche Pruefung wie oben
+function ns.Plan60Pack(db)
+  if type(db) ~= "table" or type(db.plan60) ~= "table" or db.plan60Pack then return end
+  local E, m = EU()
+  if not E then return end
+  local ok, bin = pcall(E.SerializeCBOR, db.plan60); if not ok or type(bin) ~= "string" then return end
+  local ok2, z = pcall(E.CompressString, bin, m); if not ok2 or type(z) ~= "string" then return end
+  local ok3, str = pcall(E.EncodeBase64, z); if not ok3 or type(str) ~= "string" then return end
+  local back = Decode(str)
+  if not (back and Same(db.plan60, back, 0)) then return end
+  db.plan60Pack, db.plan60 = str, nil
+end
+function ns.Plan60Unpack(db)
+  if type(db) ~= "table" or type(db.plan60Pack) ~= "string" then return end
+  local t = Decode(db.plan60Pack)
+  if not t then
+    Note("Fahrplan auspacken fehlgeschlagen, Paket bleibt gespeichert (plan60PackFail)")
+    db.plan60PackFail, db.plan60Pack = db.plan60Pack, nil
+    return
+  end
+  if type(db.plan60) ~= "table" then db.plan60 = t end
+  db.plan60Pack = nil
+end
+do
+  local lf = CreateFrame("Frame")
+  lf:RegisterEvent("PLAYER_LOGOUT")
+  lf:SetScript("OnEvent", function() if ns.db and ns.CHAR_PACK.PLAN60 ~= false then pcall(ns.Plan60Pack, ns.db) end end)
+end
+-- einmaliger Umbau und danach bei jedem Login: alle anderen Charaktere packen, die noch Tabellen haben
+-- 1.4zzy (Pr BER 04:45: keine gepackt Zeile bei S): warum nicht gepackt wird, einmal je Sitzung ins Log
+function ns.PackWhy()
+  if not ns.CHAR_PACK.ON then return "aus (ns.CHAR_PACK.ON)" end
+  local E = C_EncodingUtil
+  if not E then return "C_EncodingUtil fehlt im Client" end
+  local miss = {}
+  for _, k in ipairs({ "SerializeCBOR", "DeserializeCBOR", "CompressString", "DecompressString", "EncodeBase64", "DecodeBase64" }) do
+    if not E[k] then miss[#miss + 1] = k end
+  end
+  if #miss > 0 then return "C_EncodingUtil ohne " .. table.concat(miss, ", ") end
+  return nil
+end
+function ns.CharPackAll(chars, cur)
+  if type(chars) ~= "table" then return end
+  if not EU() then
+    local why = ns.PackWhy() or "?"
+    if C_Timer and C_Timer.After then C_Timer.After(12, function() if ns.TestLog then ns.TestLog("MIGRATION", "chars und Fahrplan nicht gepackt: " .. why) end end) end
+    return
+  end
+  local nOther = 0
+  for ck, cv in pairs(chars) do if ck ~= cur and type(cv) == "table" then nOther = nOther + 1 end end
+  local n, len = 0, 0
+  for ck, cv in pairs(chars) do
+    if ck ~= cur and type(cv) == "table" and not cv.pack then
+      local l = ns.CharPack(cv, ck)
+      if l then n = n + 1; len = len + l end
+    end
+  end
+  if n > 0 then Note(("chars gepackt %d Charaktere, zusammen %d KB Text"):format(n, math.floor(len / 1024 + 0.5)))
+  elseif C_Timer and C_Timer.After then
+    local packed = 0
+    for ck, cv in pairs(chars) do if ck ~= cur and type(cv) == "table" and cv.pack then packed = packed + 1 end end
+    C_Timer.After(12, function() if ns.TestLog then ns.TestLog("MIGRATION", ("chars: %d andere Charaktere, %d schon gepackt, nichts neu"):format(nOther, packed)) end end)
+  end
+end
+
 local function SaneFields(t)
   local n = 0
   for _, k in ipairs(SV_TABLES) do
@@ -4453,6 +4684,8 @@ f:SetScript("OnEvent", function(_, event, ...)
     end
     if type(KeineZeitLevelingGuideDB) ~= "table" then KeineZeitLevelingGuideDB = {} end
     db = KeineZeitLevelingGuideDB
+    -- 1.4zzv (P217 Punkt 1 Rest, plan60 4.5 MB): Fahrplan beim Ausloggen gepackt gespeichert, hier zuerst auspacken
+    if ns.Plan60Unpack then pcall(ns.Plan60Unpack, db) end
     do
       local okS, nBad = pcall(SaneFields, db)
       if okS and nBad > 0 then
@@ -4487,6 +4720,19 @@ f:SetScript("OnEvent", function(_, event, ...)
         "bigScale" }
       local k = CharKey()
       db.chars = db.chars or {}
+      -- 1.4zzq+ (P217 Punkt 1, S Ja 03:19): Daten anderer Charaktere gepackt speichern (CBOR, Deflate, Base64 ueber
+      -- C_EncodingUtil). Tabellen brauchen in Lua ein Vielfaches vom Platz, chars war 13 bis 14 MB. Erst nach Pruefung
+      -- (zurueck entpacken und Feld fuer Feld vergleichen) wird die Tabelle ersetzt, sonst bleibt sie wie sie war.
+      -- Beim Einloggen auf dem Charakter wird wieder ausgepackt. Fehlt C_EncodingUtil, bleibt alles wie vorher.
+      if ns.CharPackAll then pcall(ns.CharPackAll, db.chars, k) end
+      if db.chars[k] and ns.CharUnpack then
+        pcall(ns.CharUnpack, db.chars[k])
+        -- nicht auspackbar (zb Client ohne C_EncodingUtil): Paket aufheben statt mit dem Eintrag zu loeschen
+        if type(db.chars[k].pack) == "string" then
+          db.charsPackFail = type(db.charsPackFail) == "table" and db.charsPackFail or {}
+          db.charsPackFail[k] = db.chars[k].pack
+        end
+      end
       -- 19.33 (Pruefer 04:50 Punkt 4): kennt das Addon diesen Charakter schon (zuletzt gespielt oder gemerkt)?
       -- Fuer den ersten Start (Services.lua FirstStart): bekannte Charaktere werden nicht als neu behandelt
       ns.charSeenBefore = (db.lastChar == k) or (db.chars[k] ~= nil)
@@ -4495,6 +4741,7 @@ f:SetScript("OnEvent", function(_, event, ...)
           local old = {}
           for _, f in ipairs(CHAR_FIELDS) do old[f] = db[f] end
           db.chars[db.lastChar] = old
+          if ns.CharPack then pcall(ns.CharPack, old, db.lastChar) end
         end
         local c = db.chars[k]
         if c or db.lastChar then
@@ -4582,11 +4829,12 @@ f:SetScript("OnEvent", function(_, event, ...)
 
     ns.Ticker(0.5, Tick)
     ns.TickNow = Tick
-    ns.Ticker(0.2, FallTick, true)
+    -- 1.4zzg (M51, S 17:16): sammeln und teilen auch in der Pause (Kampf, aktive Zeit, Leistung, Tempo)
+    ns.Ticker(0.2, FallTick, true, true)
     ns.Ticker(2, MobScan)
-    ns.Ticker(1, PerfTick, true)
-    ns.Ticker(1, ActiveTick, true)
-    ns.Ticker(15, ns.SpeedTick)
+    ns.Ticker(1, PerfTick, true, true)
+    ns.Ticker(1, ActiveTick, true, true)
+    ns.Ticker(15, ns.SpeedTick, nil, true)
     C_Timer.After(5, ns.SpeedTick)
     SLASH_TAURENROUTE1 = "/tr"
     SLASH_TAURENROUTE2 = "/taurenroute"

@@ -382,9 +382,18 @@ function ns.TourQuestLog()
       b:SetSize(w, 22); b:SetPoint("BOTTOMLEFT", x, y); b:SetText(text); b:SetScript("OnClick", fn)
       return b
     end
-    Btn(TR"Alle", 80, 12, 42, function() for qid in pairs(f.log) do sel[qid] = true end; f.Fill() end)
-    Btn(TR"Keine", 80, 96, 42, function() for qid in pairs(f.log) do sel[qid] = false end; f.Fill() end)
-    Btn(TR"Nur fertige", 100, 180, 42, function() for qid, p in pairs(f.log) do sel[qid] = p.complete and true or false end; f.Fill() end)
+    Btn(TR"Alle", 60, 12, 42, function() for qid in pairs(f.log) do sel[qid] = true end; f.Fill() end)
+    Btn(TR"Keine", 60, 76, 42, function() for qid in pairs(f.log) do sel[qid] = false end; f.Fill() end)
+    Btn(TR"Nur fertige", 90, 140, 42, function() for qid, p in pairs(f.log) do sel[qid] = p.complete and true or false end; f.Fill() end)
+    -- 1.4zzf (M49, K 13:55): die angehakten Quests mit der Gruppe teilen. Ohne Gruppe grau mit Tip
+    f.share = Btn(TR"Mit Gruppe teilen", 136, 234, 42, function()
+      local list = {}
+      for qid in pairs(f.log) do if sel[qid] then list[#list + 1] = qid end end
+      if #list == 0 then ns.Print(TR"Keine Quest angehakt."); return end
+      table.sort(list)
+      if ns.ShareRouteQuests then ns.ShareRouteQuests(list) end
+    end)
+    if ns.ShareButtonSetup then ns.ShareButtonSetup(f.share, TR"Mit Gruppe teilen", TR"Teilt die angehakten Quests, die teilbar sind, der Reihe nach mit der Gruppe. Am Ende steht, was bei wem nicht ankam.") end
     Btn(TR"Route berechnen", 170, 12, 12, function()
       local set, n = {}, 0
       for qid in pairs(f.log) do if sel[qid] then set[qid] = true; n = n + 1 end end
@@ -446,6 +455,7 @@ function ns.TourQuestLog()
   end
   f.Fill()
   f:Show()
+  if f.share and ns.ShareButtonState then ns.ShareButtonState(f.share) end
 end
 
 ------------------------------------------------------------

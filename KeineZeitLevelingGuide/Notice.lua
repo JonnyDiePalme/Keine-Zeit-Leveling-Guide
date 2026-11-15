@@ -17,6 +17,10 @@ local gone = {} -- in dieser Sitzung weggeklickt (Warnungen, Ueberspringen)
 -- ausgeblendet"): jede Hinweis Karte mit x ist nach dem Klick sofort weg, HINT_GONE_S lang (Art und Text), egal ob der
 -- Hinweis selbst seine Ruhe kennt
 local HINT_GONE_S = 900
+-- 1.4a (P150 Punkt 1, S 11.11.): jede Karte hat ein x, keine steht laenger als NOTE.MAX_S da. Verschwindet eine Karte
+-- NOTE.BACK_S lang, darf sie spaeter wieder kommen. Unterwegs (Flug, Schiff, Zeppelin, Tiefenbahn, Laden): keine Karten
+ns.NOTE = { MAX_S = 300, BACK_S = 60, IDLE_S = 900 }
+local seenAt, lastSeen, logged = {}, {}, {}
 local hintGone = {}
 local function HintKey(h) return tostring(h.kind) .. ":" .. tostring(h.key or h.text) end
 
@@ -50,7 +54,8 @@ function ns.NoticeList()
   local db = ns.db
   if not db then return out end
   local combat = InCombatLockdown and InCombatLockdown()
-  local function Add(n) if not (n.key and gone[n.key]) then table.insert(out, n) end end
+  -- 1.4za (P150 M Mini 1x, Pr 05:10: Karte blieb nach x stehen): Karten ohne eigenen Schluessel merken sich das x ueber Art und Text
+  local function Add(n) if not gone[n.key or (tostring(n.kind) .. ":" .. tostring(n.text))] then table.insert(out, n) end end
   -- Hinweise: Gruppe, Ruhestein, Taschen, Reparieren, Lehrer, Questlog, Buecher, Dungeon, Flugpunkt, Gasthaus
   local function AddHints()
     local now = GetTime()
@@ -113,9 +118,10 @@ function ns.NoticeList()
   -- Pfeil zeigt gerade nicht auf die Route
   local st = ns.serviceTarget
   if st then
-    Add({ kind = "target", text = TR"Pfeil zeigt zu: " .. tostring(st.name or "?"), go = TR"Route", noX = true,
-      tip = TR"Knopf: Pfeil wieder auf die Route",
-      onGo = function() ns.serviceTarget = nil; Redraw() end })
+    Add({ kind = "target", text = TR"Pfeil zeigt zu: " .. tostring(st.name or "?"), go = TR"Route",
+      tip = TR"Knopf oder x: Pfeil wieder auf die Route",
+      onGo = function() ns.serviceTarget = nil; Redraw() end,
+      onX = function() ns.serviceTarget = nil end })
   end
   -- naechster Punkt zu hoch (Zonen Route)
   if not db.optMode and ns.SkipSuggestion then
@@ -192,8 +198,10 @@ local function Card0(i)
   c.x:SetScript("OnClick", function(self)
     local n = self.card.n
     if not n then return end
-    if n.key then gone[n.key] = true end
+    gone[n.key or (tostring(n.kind) .. ":" .. tostring(n.text))] = true
     if n.onX then n.onX() end
+    self.card:Hide()
+    if ns.TestLog then ns.TestLog("HINWEIS", "x geklickt: " .. tostring(n.text)) end
     Redraw()
   end)
   c.x:SetScript("OnEnter", function(self)
@@ -237,7 +245,29 @@ local function Update()
   end
   local on = ns.NoticeOn() and hud and hud:IsShown() and not db.paused
   if hud then frame:SetScale(hud:GetScale() or 1) end
-  local list = on and ns.NoticeList() or {}
+  -- 1.4zzn (P217 Punkt 5): in Ruhe (keine Route, kein Navi) Hinweise nur alle 15 Min neu suchen, dazwischen die letzte Liste
+  local list
+  if on and ns.Idle and ns.Idle() then
+    local now = GetTime()
+    if not ns.noteIdleList or now - (ns.noteIdleAt or 0) > ns.NOTE.IDLE_S then ns.noteIdleList, ns.noteIdleAt = ns.NoticeList(), now end
+    list = ns.noteIdleList
+  else
+    ns.noteIdleList = nil
+    list = on and ns.NoticeList() or {}
+  end
+  -- 1.4a (P150 Punkt 1): unterwegs keine Karten, keine Karte laenger als NOTE.MAX_S
+  if on and ns.Unterwegs and ns.Unterwegs() then list = {} end
+  do
+    local now, keep = GetTime(), {}
+    for _, e in ipairs(list) do
+      local k = tostring(e.kind) .. ":" .. tostring(e.key or e.text)
+      if not lastSeen[k] or now - lastSeen[k] > ns.NOTE.BACK_S then seenAt[k] = now; logged[k] = nil end
+      lastSeen[k] = now
+      if now - seenAt[k] <= ns.NOTE.MAX_S then keep[#keep + 1] = e
+      elseif not logged[k] and ns.TestLog then logged[k] = true; ns.TestLog("HINWEIS", ("nach %d Min ausgeblendet: %s"):format(ns.NOTE.MAX_S / 60, tostring(e.text))) end
+    end
+    list = keep
+  end
   local small = (db.hudSize or "normal") == "small"
   local max = small and 2 or 4
   -- oben genug Platz? sonst unter das Mini Fenster (und unter das Menue)
@@ -254,8 +284,8 @@ local function Update()
     c.bar:SetColorTexture(col[1], col[2], col[3], 1)
     c.go:SetShown(e.go ~= nil)
     if e.go then c.go:SetText(e.go) end
-    c.x:SetShown(not e.noX)
-    local right = 5 + (e.noX and 0 or 19) + (e.go and 61 or 0)
+    c.x:Show()
+    local right = 5 + 19 + (e.go and 61 or 0)
     c.text:SetWidth(W - 12 - right - 4)
     c.text:SetText(e.text or "")
     local h = math.max(24, math.floor((c.text:GetStringHeight() or 12) + 12))
@@ -271,7 +301,8 @@ local function Update()
       local anchor = prev or ((hud.ext and hud.ext:IsShown()) and hud.ext or hud)
       c:SetPoint("TOP", anchor, "BOTTOM", 0, -2)
     else
-      c:SetPoint("BOTTOM", prev or hud, "TOP", 0, 2)
+      -- 1.4zzf (P216): laeuft ein Test, stehen die Hinweise ueber dem Test Balken
+      c:SetPoint("BOTTOM", prev or (ns.TestBarAnchor and ns.TestBarAnchor()) or hud, "TOP", 0, 2)
     end
     c:Show()
     prev = c

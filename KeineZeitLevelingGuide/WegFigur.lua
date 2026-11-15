@@ -44,6 +44,9 @@ local function Snap(L)
   if not g then return end
   if type(db.wegGear) ~= "table" then db.wegGear = {} end
   db.wegGear[L] = g
+  -- 1.4n (P162, S: "bei 60 einmal das Gear, was er auf 60 hatte, nicht das aktuelle"): nur der erste Stand auf Hoechststufe
+  local maxL = GetMaxPlayerLevel and GetMaxPlayerLevel() or 60
+  if L >= maxL and type(db.wegGearMax) ~= "table" then db.wegGearMax = g end
 end
 ns.WegGearSnap = Snap
 
@@ -221,12 +224,24 @@ local function Refresh()
   DressNow()
 end
 
+-- 1.4n (P162, S: "sehr ruckelig, da bei jedem Item Wechsel neu laedt"): das Modell nur beim ersten Mal laden (SetUnit),
+-- danach nur aus und anziehen (Undress, TryOn bzw Dress), das laedt nichts neu
 local function SetGear(g)
   local key = g and tostring(g) or "jetzt"
   if key == gearKey then return end
+  local first = gearKey == nil
   gearKey, wantGear = key, g
-  Call("SetUnit", "player")
-  Refresh()
+  if first or not (fig and fig.Undress and fig.TryOn) then
+    Call("SetUnit", "player")
+    Refresh()
+  elseif g then
+    DressNow()
+  elseif fig.Dress then
+    Call("Dress")
+  else
+    Call("SetUnit", "player")
+    Refresh()
+  end
 end
 
 local function SetAnim(a)
@@ -241,14 +256,78 @@ local function SetFace(f)
   Call("SetFacing", f)
 end
 
+-- 1.4n (P162): Stopps an jeder Karte, bei langen Abschnitten (mehr als FILL Level zwischen zwei Karten) alle FILL Level.
+-- An jedem Stopp wird die Figur kurz groesser (POP), zieht die Ausruestung von damals an und laeuft dann weiter.
+-- Ueber der Figur ein kleines Level Schild wie eine Namensplakette
+local STOP = { FILL = 5, POP = 1.5, POP_IN = 0.25 }
+local stops, lastStop, popScale, holdStart = nil, nil, 1, nil
+local plate
+local function BuildStops()
+  stops = {}
+  local a = path and path.anc or {}
+  for i, p in ipairs(a) do
+    stops[#stops + 1] = p.lvl
+    local nx = a[i + 1]
+    if nx and nx.lvl - p.lvl > STOP.FILL then
+      local l = p.lvl - (p.lvl % STOP.FILL) + STOP.FILL
+      while l < nx.lvl do stops[#stops + 1] = l; l = l + STOP.FILL end
+    end
+  end
+end
+local function StopAtOrBelow(L)
+  local r
+  for _, v in ipairs(stops or {}) do if v <= L + 0.001 then r = v end end
+  return r
+end
+local function StopBetween(L0, L1)
+  for _, v in ipairs(stops or {}) do
+    if v > L0 + 0.001 and v <= L1 + 0.001 and (not lastStop or v > lastStop) then return v end
+  end
+end
+-- Strecke zu Level L ohne das Halten in der eigenen Karte (Umkehrung von LOf)
+local function SLin(L)
+  local a = path and path.anc
+  if not a or #a == 0 then return 0 end
+  if L <= a[1].lvl then return a[1].s end
+  for i = 2, #a do
+    if L <= a[i].lvl then
+      local p = a[i - 1]
+      return p.s + (a[i].s - p.s) * (L - p.lvl) / math.max(0.01, a[i].lvl - p.lvl)
+    end
+  end
+  return a[#a].s
+end
+-- Ausruestung an einem Stopp: Hoechststufe = der erste Stand dort, sonst der Stand vom Stopp (GearFor)
+local function GearAt(L)
+  local st = StopAtOrBelow(L) or L
+  local a = path and path.anc
+  local maxL = a and a[#a] and a[#a].lvl or 60
+  if st >= maxL and ns.db and type(ns.db.wegGearMax) == "table" then return ns.db.wegGearMax, st end
+  return GearFor(st)
+end
+
 local function Place()
   if not (fig and path and cur) then return end
   local x, y, dx, dy = PointAt(cur)
-  local h = math.max(28, math.floor((path.ch or 80) * FIG_H))
+  local h = math.max(28, math.floor((path.ch or 80) * FIG_H * (popScale or 1)))
   fig:SetSize(h * 0.75, h)
   fig:ClearAllPoints()
   -- das Modell hat unter den Fuessen etwas Luft: ein Stueck tiefer setzen
   fig:SetPoint("BOTTOM", pgRef, "TOPLEFT", x, y - h * 0.06)
+  if not plate then
+    plate = CreateFrame("Frame", nil, fig)
+    plate:SetSize(60, 14)
+    plate:SetPoint("BOTTOM", fig, "TOP", 0, -2)
+    plate.bg = plate:CreateTexture(nil, "BACKGROUND"); plate.bg:SetAllPoints(); plate.bg:SetColorTexture(0, 0, 0, 0.55)
+    plate.fs = plate:CreateFontString(nil, "OVERLAY", ns.FontName and ns.FontName("GameFontHighlightSmall") or "GameFontHighlightSmall")
+    plate.fs:SetPoint("CENTER")
+  end
+  local lv = math.floor(LOf(cur) + 0.001)
+  if plate.lv ~= lv then
+    plate.lv = lv
+    plate.fs:SetText((TR"Level %d"):format(lv))
+    plate:SetWidth((plate.fs:GetStringWidth() or 40) + 10)
+  end
   return dx, dy
 end
 
@@ -266,55 +345,82 @@ local function Arrive()
   animAcc = 0
   SetAnim(ANIM_STAND)
   SetFace(FRONT)
-  if replay then replay = false; SetGear(nil) end
+  popScale, holdStart = 1, nil
+  if replay then replay = false end
+  -- am Ziel (dein Level): was du jetzt traegst, auf Hoechststufe der erste Stand dort
+  local maxL = GetMaxPlayerLevel and GetMaxPlayerLevel() or 60
+  local gm = ns.db and ns.db.wegGearMax
+  SetGear(((UnitLevel("player") or 1) >= maxL and type(gm) == "table") and gm or nil)
+  Place()
   if ns.db then ns.db.wegSeen = LOf(cur) end
   if fig then fig:SetScript("OnUpdate", nil) end
 end
 
-local holdUntil, lastGearL
+local holdUntil
+local function PopTick(now)
+  local dur = (holdUntil or now) - (holdStart or now)
+  local t = now - (holdStart or now)
+  local k = STOP.POP_IN / Tempo()
+  local f
+  if t < k then f = t / k elseif t > dur - k then f = math.max(0, (dur - t) / k) else f = 1 end
+  popScale = 1 + (STOP.POP - 1) * f
+  Place()
+end
 local function OnUpdate(_, el)
   if not (path and cur and target) then return end
-  -- 1.1: bei einem Ausruestungs Wechsel kurz stehen bleiben (zum Betrachter gedreht)
+  -- 1.4n: am Stopp stehen, kurz groesser werden, dann weiter
   if holdUntil then
-    if GetTime() < holdUntil then return end
-    holdUntil = nil
+    local now = GetTime()
+    if now < holdUntil then PopTick(now); return end
+    holdUntil, holdStart, popScale = nil, nil, 1
+    Place()
   end
   AnimPace(el)
   el = math.min(el or 0, 0.1)
   local d = target - cur
   local stepLen = SPEED * Tempo() * el
-  if math.abs(d) <= stepLen then
+  local nxt = (math.abs(d) <= stepLen) and target or (cur + (d > 0 and stepLen or -stepLen))
+  if d > 0 then
+    local st = StopBetween(LOf(cur), LOf(nxt))
+    if st then
+      lastStop = st
+      cur = SLin(st)
+      SetGear((GearAt(st)))
+      holdStart = GetTime()
+      holdUntil = holdStart + UPGRADE_STOP_S / Tempo()
+      Call("SetPaused", false)
+      SetAnim(ANIM_STAND)
+      SetFace(FRONT)
+      Place()
+      if ns.TestLog then ns.TestLog("FENSTER", ("Mein Weg Stopp Level %d"):format(st)) end
+      return
+    end
+  end
+  if nxt == target then
     cur = target
     Place()
     Arrive()
     return
   end
-  cur = cur + (d > 0 and stepLen or -stepLen)
+  cur = nxt
   local dx, dy = Place()
   if d < 0 then dx, dy = -(dx or 0), -(dy or 0) end
   SetAnim(ANIM_WALK)
   if dx and math.abs(dx) > math.abs(dy or 0) then SetFace(dx > 0 and SIDE or -SIDE) else SetFace(0) end
-  -- 1.1: unterwegs (und im Rueckblick) die Ausruestung von damals, bei einem Wechsel kurz stehen bleiben
-  local g, gl = GearFor(LOf(cur))
-  if (g and tostring(g) or "jetzt") ~= gearKey then
-    -- nur bei einem echten Upgrade unterwegs (spaeteres Level als bisher) stehen bleiben, nicht beim Start
-    local up = d > 0 and lastGearL ~= nil and (gl or 99) > lastGearL
-    lastGearL = gl or 99
-    SetGear(g)
-    if up then
-      holdUntil = GetTime() + UPGRADE_STOP_S / Tempo()
-      Call("SetPaused", false)
-      SetAnim(ANIM_STAND)
-      SetFace(FRONT)
-    end
-  end
 end
 
 local function Walk()
   if not (fig and path) then return end
-  lastGearL, holdUntil = nil, nil
-  if not cur then cur = SOf((ns.db and tonumber(ns.db.wegSeen)) or 1) end
+  if not stops then BuildStops() end
+  -- 1.4zl (M33): laeuft sie schon, nur das Ziel nachfuehren (vorher Neustart bei jedem Aufbau: Stopp abgebrochen,
+  -- Ausruestung neu, Ruck)
+  if cur and fig:GetScript("OnUpdate") then target = SOf(LevelNow()); return end
+  holdUntil, holdStart, popScale = nil, nil, 1
+  if not cur then cur = SLin((ns.db and tonumber(ns.db.wegSeen)) or 1) end
   target = SOf(LevelNow())
+  -- Start: Ausruestung vom Stopp, auf dem die Figur steht, ohne Halt
+  lastStop = StopAtOrBelow(LOf(cur))
+  SetGear((GearAt(LOf(cur))))
   Place()
   if math.abs(target - cur) < 0.5 then cur = target; Place(); Arrive(); return end
   fig:SetScript("OnUpdate", OnUpdate)
@@ -344,7 +450,8 @@ local function MakeFig(pg)
   end)
   pg:HookScript("OnHide", function()
     if fig then fig:SetScript("OnUpdate", nil); Call("SetPaused", false) end
-    if replay then replay = false; cur = target; SetGear(nil) end
+    if replay then replay = false; cur = target end
+    holdUntil, holdStart, popScale = nil, nil, 1
     if ns.db and cur and path then ns.db.wegSeen = LOf(cur) end
   end)
   return f
@@ -367,7 +474,6 @@ local function ReplayButton(pg, b)
       replay = true
       gearKey = nil
       cur = SOf(1)
-      SetGear(GearFor(1))
       Walk()
     end)
     r:SetScript("OnEnter", function(self)
@@ -414,6 +520,12 @@ local function ReplayButton(pg, b)
 end
 
 -- aus CharTab (Mein Weg): nach jedem Layout und Fuellen
+-- 1.4zm (M33 Test, Pr 18:48): Stelle der Figur (Strecke, Ziel, Level an der Stelle) und Neuaufbau fuer den Sim Waechter
+function ns.WegFigurPos()
+  if not (path and cur) then return nil end
+  return cur, target, LOf(cur)
+end
+function ns.WegFigurRelayout() if pgRef and ns.WegFigurLayout then return ns.WegFigurLayout(pgRef) end end
 function ns.WegFigurLayout(pg)
   pgRef = pg
   -- Symbole in einen eigenen Rahmen ueber der Figur: sie laeuft hinter ihnen durch
@@ -432,8 +544,12 @@ function ns.WegFigurLayout(pg)
   local keepL = (path and cur) and LOf(cur) or nil
   local keepT = (path and target) and LOf(target) or nil
   path = (w > 300) and BuildPath(pg) or nil
-  if path and keepL then cur = SOf(keepL) end
-  if path and keepT then target = SOf(keepT) end
+  stops = nil
+  if path then BuildStops() end
+  -- 1.4zl (M33, S 13:34 "springt oft hin und her"): Stelle mit der genauen Umkehrung (SLin) halten. Vorher SOf, das in
+  -- der eigenen Karte auf 30 % staucht: bei jedem neuen Aufbau der Seite sprang die Figur ein Stueck zurueck
+  if path and keepL then cur = SLin(keepL) end
+  if path and keepT then target = SLin(keepT) end
   local last
   for _, b in ipairs(pg.cards or {}) do if b:IsShown() and b.st then last = b end end
   ReplayButton(pg, last)

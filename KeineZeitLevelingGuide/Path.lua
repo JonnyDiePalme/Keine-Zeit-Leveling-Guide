@@ -796,6 +796,33 @@ local function StadtDaten(ui)
   local st = type(f) == "table" and type(f.staedte) == "table" and f.staedte[ui]
   if type(st) == "table" then return st end
 end
+-- 1.4zzm (P217 Punkt 2, Pr BER 05:45: FWW_AUTO_STADT 9.4 MB, je Stadt ist netz der Brocken): Hauptstaedte der anderen Fraktion
+-- betrittst du nicht, dort nach dem Login netz, innen, wege und tore wegwerfen (rect, name, zone bleiben, die braucht die
+-- Planung fuer den Stadt Zuschlag). Spart je Fraktion rund 4.5 MB. Ausschalten: ns.STADT_PRUNE = false
+ns.STADT_FRAKTION = { [1453] = "Alliance", [1455] = "Alliance", [1457] = "Alliance", [1454] = "Horde", [1456] = "Horde", [1458] = "Horde" }
+do
+  local f = CreateFrame("Frame")
+  if ns.RegEv then ns.RegEv(f, "PLAYER_LOGIN") else f:RegisterEvent("PLAYER_LOGIN") end
+  f:SetScript("OnEvent", function()
+    if ns.STADT_PRUNE == false then return end
+    local fac = UnitFactionGroup and UnitFactionGroup("player")
+    local A = _G.FWW_AUTO_STADT
+    local st = fac and type(A) == "table" and type(A.forever) == "table" and type(A.forever.staedte) == "table" and A.forever.staedte
+    if not st then return end
+    local n = 0
+    for ui, c in pairs(st) do
+      local cf = ns.STADT_FRAKTION[ui]
+      if cf and cf ~= fac and type(c) == "table" then
+        c.netz, c.innen, c.wege, c.tore = nil, nil, nil, nil
+        n = n + 1
+      end
+    end
+    if n > 0 then
+      collectgarbage("step", 2000)
+      if ns.TestLog then C_Timer.After(5, function() ns.TestLog("SPEICHER", ("Stadt Daten der anderen Fraktion weg: %d Staedte"):format(n)) end) end
+    end
+  end)
+end
 -- Felder lesen: mit Namen oder als Liste
 local function TorF(t) return t.id or t[1], t.x or t[2], t.y or t[3], t.art or t[4], t.breite_yd or t[5] or 0, (t.sicher ~= nil and t.sicher or t[6]) end
 local function PxPy(p) return p.x or p[1], p.y or p[2] end

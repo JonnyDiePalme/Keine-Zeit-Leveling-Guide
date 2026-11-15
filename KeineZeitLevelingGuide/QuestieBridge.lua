@@ -62,10 +62,18 @@ end
 local QEvent
 function ns.IsEventQuestSkipped(qid)
   if QEvent == nil then QEvent = (QuestieLoader and Import("QuestieEvent")) or false end
-  if not QEvent or not QEvent.IsEventQuest then return false end
-  local ok, isEv = pcall(QEvent.IsEventQuest, qid)
-  if not (ok and isEv) then return false end
-  if ns.db and ns.db.eventQuests and QEvent.IsEventActiveForQuest and QEvent.IsEventActiveForQuest(qid) then return false end
+  local isEv = false
+  if QEvent and QEvent.IsEventQuest then
+    local ok, ev = pcall(QEvent.IsEventQuest, qid)
+    isEv = ok and ev and true or false
+  end
+  -- 1.4ze (P197, Pr 09:55: 8768 fehlt in Questies Fest Liste): Fest Quests auch aus der Daten Korrektur (quest[id].fest).
+  -- Ob das Fest laeuft, weiss nur Questie. Kennt Questie die Quest nicht als Fest, gilt das Fest als nicht laufend
+  if not isEv then return (ns.DKFest and ns.DKFest(qid)) and true or false end
+  if ns.db and ns.db.eventQuests and QEvent.IsEventActiveForQuest then
+    local okA, act = pcall(QEvent.IsEventActiveForQuest, qid)
+    if okA and act then return false end
+  end
   return true
 end
 

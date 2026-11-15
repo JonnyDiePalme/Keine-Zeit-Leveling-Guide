@@ -1,10 +1,15 @@
 local ADDON, ns = ...
 local TR = ns.TR
 
--- Benutzbare Quest Items als klickbare Knoepfe unter dem Pfeil.
+-- Benutzbare Quest Items als klickbare Knoepfe.
+-- 1.4a (P151 Pfeil Punkt 2, S 11.11.): nicht mehr unter dem Pfeil, sondern links neben dem Mini Fenster untereinander,
+-- nur Items fuer die jetzige Quest und fuer Quests, die auf dem Weg mitgemacht werden. Ohne Mini Fenster wie frueher
+-- unter dem Pfeil. Der Test Kasten (Fehler melden) rueckt dann darueber (DebugLog.lua TesterBox).
 -- Sichere Knoepfe von Blizzard: umbauen nur ausserhalb vom Kampf.
 
 local MAX = 4
+ns.QI = { SIZE = 32, STEP = 36, GAP = 6 }
+local side = nil   -- "links", "rechts" (neben dem Mini Fenster) oder "pfeil"
 local bar, buttons = nil, {}
 local pending = false
 
@@ -107,8 +112,11 @@ local function Collect()
   -- 1.1 (S Log L14.3 "Quest Items zum Benutzen nur zeigen, wenn die Quest gerade gemacht wird"): mit Route nur Quests aus
   -- dem aktuellen Schritt (und dem Buendel an derselben Stelle, Quest.lua StepWindowQuests). Ohne Route wie bisher alle
   local cur = ns.StepWindowQuests and ns.StepWindowQuests()
+  -- 1.4a (P151 Punkt 2): dazu die Quests, die auf dem Weg mitgemacht werden (Mini Fenster "Mitnehmen")
+  local along
+  if cur and ns.HudInfo then local ok, i = pcall(ns.HudInfo); along = ok and i and i.alongQ end
   for qid, q in pairs(ns.logProgress or {}) do
-    if not cur or cur[qid] then qs[#qs + 1] = { qid, q } end
+    if not cur or cur[qid] or (along and along[qid]) then qs[#qs + 1] = { qid, q } end
   end
   table.sort(qs, function(a, b) return a[1] < b[1] end)
   for pass = 1, 2 do
@@ -127,11 +135,35 @@ local function Collect()
   return list
 end
 
--- Leiste unter den Pfeil setzen, ohne sie daran zu haengen
+-- Leiste links neben das Mini Fenster (oder unter den Pfeil) setzen, ohne sie daran zu haengen (sichere Knoepfe duerfen
+-- nicht an einem Fenster haengen, das man im Kampf verschiebt)
 local updSoon = false
+local function HudPos()
+  local hud = _G.TaurenRouteHUD
+  if not (hud and hud:IsShown()) then return nil end
+  local l, t, r = hud:GetLeft(), hud:GetTop(), hud:GetRight()
+  if not (l and t and r) then return nil end
+  local k = hud:GetEffectiveScale() / UIParent:GetEffectiveScale()
+  return l * k, t * k, r * k
+end
+function ns.QuestItemsSide() return bar and bar:IsShown() and buttons[1] and buttons[1]:IsShown() and side or nil end
 local function Place()
   local a = _G.TaurenRouteArrow
   bar:ClearAllPoints()
+  local l, t, r = HudPos()
+  if l then
+    if l > ns.QI.STEP + ns.QI.GAP + 4 then
+      side = "links"
+      bar:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", l - ns.QI.GAP, t)
+    else
+      side = "rechts"
+      bar:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", r + ns.QI.GAP, t)
+    end
+    bar.hudKey = ("%d:%d"):format(math.floor(l), math.floor(t))
+    return
+  end
+  side = "pfeil"
+  bar.hudKey = nil
   local x, y = a and a:GetCenter(), a and a:GetBottom()
   if x and y and a:IsShown() then
     -- Pfeil kann groesser oder kleiner sein: in die Masse vom UIParent umrechnen
@@ -155,7 +187,16 @@ local function Update()
     local b = buttons[i] or MakeButton(i)
     ns.Api.Mark("Questitem Knopf")
     b:ClearAllPoints()
-    b:SetPoint("LEFT", bar, "LEFT", (i - 1) * 36, 0)
+    if side == "pfeil" then
+      b:SetPoint("LEFT", bar, "LEFT", (i - 1) * ns.QI.STEP, 0)
+    else
+      b:SetPoint("TOP", bar, "TOP", 0, -(i - 1) * ns.QI.STEP)
+    end
+    -- "jetzt klicken" neben den Knopf (untereinander waere es unter dem naechsten Knopf)
+    b.lbl:ClearAllPoints()
+    if side == "links" then b.lbl:SetPoint("RIGHT", b, "LEFT", -3, 0)
+    elseif side == "rechts" then b.lbl:SetPoint("LEFT", b, "RIGHT", 3, 0)
+    else b.lbl:SetPoint("TOP", b, "BOTTOM", 0, -2) end
     if it and it.spell then
       b:SetAttribute("type", "spell")
       b:SetAttribute("spell", it.spell)
@@ -185,7 +226,9 @@ local function Update()
       b:Hide()
     end
   end
-  bar:SetWidth(math.max(1, math.min(#list, MAX) * 36))
+  local nb = math.max(1, math.min(#list, MAX))
+  if side == "pfeil" then bar:SetSize(nb * ns.QI.STEP, ns.QI.SIZE) else bar:SetSize(ns.QI.SIZE, nb * ns.QI.STEP) end
+  if ns.TesterBoxUpdate then pcall(ns.TesterBoxUpdate) end
 end
 
 function ns.InitQuestItems()
@@ -220,7 +263,11 @@ function ns.InitQuestItems()
     -- 1.1: neuer Schritt, dann passen die Quest Items vielleicht nicht mehr
     local o = ns.db and ns.db.opt
     local st = o and o.steps and o.steps[o.idx or 1]
-    if k ~= lastWant or st ~= lastStep then lastWant, lastStep = k, st; Update() end
+    if k ~= lastWant or st ~= lastStep then lastWant, lastStep = k, st; Update(); return end
+    -- 1.4a: Mini Fenster verschoben oder ein/aus: Leiste mitnehmen (nur ausserhalb vom Kampf, Update prueft das)
+    local l, t = HudPos()
+    local key = l and ("%d:%d"):format(math.floor(l), math.floor(t)) or nil
+    if key ~= bar.hudKey then Update() end
   end)
 end
 

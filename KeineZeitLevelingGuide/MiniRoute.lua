@@ -106,6 +106,7 @@ local function FallbackPath(K, mapID, px, py, p1, slow)
   return pathFb.pts
 end
 
+ns.MINI_MOVE_S = 0.3
 local function Update()
   if not overlay then return end
   if ns.db and ns.db.paused then HideAll(); last.map = nil; return end
@@ -142,11 +143,16 @@ local function Update()
   local startNow = useOpt and (db.opt.idx or 1) or (db.progress[mapID] or 1)
   local now = GetTime()
   local naviKey = naviOn and (tostring(nv) .. ":" .. tostring(nv.cur)) or nil
-  if last.map == mapID and last.route == route and last.start == startNow and last.navi == naviKey and last.zoom == zoomNow
-    and math.abs(last.px - px) < 0.0002 and math.abs(last.py - py) < 0.0002 and math.abs(last.face - faceNow) < 0.02
+  local same = last.map == mapID and last.route == route and last.start == startNow and last.navi == naviKey and last.zoom == zoomNow
+  if same and math.abs(last.px - px) < 0.0002 and math.abs(last.py - py) < 0.0002 and math.abs(last.face - faceNow) < 0.02
     and now < forceAt then
     return
   end
+  -- 1.4zzu (Pr BER 18:25, S neuer Char: Lua +104 MB je 5 Min, MiniRoute.lua:606 teuerster Takt): beim Laufen wurde alles
+  -- 10 mal je Sekunde neu gebaut (Punkte, Wege, Linien, viele neue Tabellen). Hat sich nur Position oder Blick geaendert,
+  -- jetzt hoechstens alle MINI_MOVE_S neu (schwacher PC doppelt)
+  if same and now < forceAt and now - (last.at or 0) < ns.MINI_MOVE_S * (db.slowPC and 2 or 1) then return end
+  last.at = now
   last.map, last.route, last.start, last.zoom, last.px, last.py, last.face = mapID, route, startNow, zoomNow, px, py, faceNow
   last.navi = naviKey
   forceAt = now + ((db.slowPC and 2) or 1) -- spaetestens jede Sekunde trotzdem (z.B. neues Quest Ziel), schwacher PC alle 2 s

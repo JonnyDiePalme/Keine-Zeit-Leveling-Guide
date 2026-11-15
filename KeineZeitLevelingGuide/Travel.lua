@@ -65,13 +65,29 @@ end
 
 local epCache = {}
 local cacheRev = 0
-local function Endpoint(e)
+-- 1.4l (K 11:15, Pr 16:05: Nauticus Linie 14 Powderfuse Port nach Steamwheedle Port): Steg ohne feste Koordinaten aus
+-- Ka Punkte.lua (Art s Steg, z Turm, ziel_ui = Karte der anderen Seite), wenn nichts gelernt ist. Allgemein fuer jede Linie
+local function PunktSteg(map, other)
+  local P = rawget(_G, "FWW_AUTO_PUNKTE")
+  local F = type(P) == "table" and type(P.forever) == "table" and P.forever
+  local best
+  for _, p in ipairs(F and F[map] or {}) do
+    if type(p) == "table" and (p[3] == "s" or p[3] == "z") and p[1] and p[2] then
+      if other and p[6] == other then return p[1], p[2] end
+      best = best or p
+    end
+  end
+  if best then return best[1], best[2] end
+end
+local function Endpoint(e, other)
   local c = epCache[e]
   if c and c.rev == cacheRev then return c.ok and c or nil end
   local map, x, y = e[1], e[2], e[3]
   if not x then
     local learned = ns.db and ns.db.docks and ns.db.docks[map]
+    local px, py = PunktSteg(map, other)
     if learned then x, y = learned[1], learned[2]
+    elseif px then x, y = px, py
     else
       local d = ns.dockNpcs[map] and ns.dockNpcs[map][1]
       if d then x, y = d[1], d[2]
@@ -205,7 +221,8 @@ local FLY_SPEED, FLY_OVER = 32, 25 -- Yards pro Sekunde, Sekunden fuer Reden, St
 local FLY = { id = "fly", kind = TR"Flug" }
 local fpList, fpRev, fpAt = nil, -1, 0
 local function FlightPoints()
-  local rev = ns.db and ns.db.knownFPRev or 0
+  -- 1.4zzd (P206 fp): Rev mit der Szenario Liste (ns.KnownFPRev)
+  local rev = ns.KnownFPRev and ns.KnownFPRev() or (ns.db and ns.db.knownFPRev or 0)
   if fpList and fpRev == rev and GetTime() - fpAt < 60 then return fpList end
   fpList, fpRev, fpAt = {}, rev, GetTime()
   for _, f in ipairs(ns.KnownFlightMasters and ns.KnownFlightMasters() or {}) do
@@ -319,7 +336,7 @@ function ns.TravelBest(a, b, speed)
   end
   for _, l in ipairs(LINKS) do
     local ea, eb
-    if Usable(l) then ea, eb = Endpoint(l.a), Endpoint(l.b) end
+    if Usable(l) then ea, eb = Endpoint(l.a, l.b[1]), Endpoint(l.b, l.a[1]) end
     if ea and eb then
       for s = 1, 2 do
         local from, to, side = ea, eb, "a"
@@ -349,7 +366,7 @@ function ns.TravelReach(fromCont)
     changed = false
     for _, l in ipairs(LINKS) do
       local ea, eb
-      if Usable(l) then ea, eb = Endpoint(l.a), Endpoint(l.b) end
+      if Usable(l) then ea, eb = Endpoint(l.a, l.b[1]), Endpoint(l.b, l.a[1]) end
       if ea and eb then
         if out[ea.cont] and not out[eb.cont] then out[eb.cont] = true; changed = true end
         if out[eb.cont] and not out[ea.cont] then out[ea.cont] = true; changed = true end

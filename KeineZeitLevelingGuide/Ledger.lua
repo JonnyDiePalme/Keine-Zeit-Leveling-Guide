@@ -89,22 +89,40 @@ local function Num(n) n = math.floor(n or 0); local s = tostring(n):reverse():gs
 local function Money(c) return ns.Money and ns.Money(c or 0) or tostring(c) end
 
 -- e: Eintrag (Level, Zone oder gesamt) mit t, xp, cnt, src, split, moneyIn, moneyOut
+-- 1.4n (P161 soll2): zweite Rueckgabe mk fuer die Statistik Seite, damit dort kleine Diagramme neben den Abschnitten
+-- und das Gold in Spalten stehen. mk.src/cnt/split = Zeile der Ueberschrift mit Teilen {name, v, col},
+-- mk.gold = { line = erste Zeile, rows = { {v, name, plus} } } (die Gold Zeilen sind dann Platzhalter)
+ns.DETAIL_COL = {
+  quest = { 1, 0.6, 0.1 }, kill = { 0.9, 0.25, 0.25 }, explore = { 0.4, 0.7, 1 },
+  death = { 0.55, 0.55, 0.55 }, flight = { 0.4, 0.9, 0.5 }, repair = { 0.8, 0.6, 0.3 },
+  fight = { 0.9, 0.25, 0.25 }, walk = { 0.3, 0.75, 1 }, fly = { 0.4, 0.9, 0.5 }, dead = { 0.55, 0.55, 0.55 }, idle = { 1, 0.8, 0.2 },
+}
 function ns.DetailLines(e, title)
   local out = { "|cffffd100" .. title .. "|r", "" }
-  if not e then table.insert(out, TR"Noch keine Daten."); return out end
+  local mk = {}
+  if not e then table.insert(out, TR"Noch keine Daten."); return out, mk end
+  local C = ns.DETAIL_COL
   local t = e.t or e.total or 0
   local c = e.cnt or {}
   table.insert(out, TR"|cffffd100Zeit und XP|r")
-  table.insert(out, (TR"   Spielzeit: %s"):format(Clock(t)))
-  table.insert(out, (TR"   XP: %s, also %s pro Stunde"):format(Num(e.xp), t > 60 and Num((e.xp or 0) / t * 3600) or "?"))
   local src = e.src or {}
   local sum = (src.quest or 0) + (src.kill or 0) + (src.explore or 0)
+  if sum > 0 then
+    mk.src = { line = #out, parts = { { name = TR"Quests", v = src.quest or 0, col = C.quest }, { name = TR"Kills", v = src.kill or 0, col = C.kill }, { name = TR"Entdecken", v = src.explore or 0, col = C.explore } } }
+  end
+  table.insert(out, (TR"   Spielzeit: %s"):format(Clock(t)))
+  table.insert(out, (TR"   XP: %s, also %s pro Stunde"):format(Num(e.xp), t > 60 and Num((e.xp or 0) / t * 3600) or "?"))
   if sum > 0 then
     table.insert(out, (TR"   Woher: Quests %d%%, Kills %d%%, Entdecken %d%%"):format(
       math.floor((src.quest or 0) / sum * 100 + 0.5), math.floor((src.kill or 0) / sum * 100 + 0.5), math.floor((src.explore or 0) / sum * 100 + 0.5)))
   end
   table.insert(out, "")
   table.insert(out, TR"|cffffd100Zähler|r")
+  local cs = (c.kill or 0) + (c.quest or 0) + (c.death or 0) + (c.explore or 0) + (c.flight or 0) + (c.repair or 0)
+  if cs > 0 then
+    mk.cnt = { line = #out, parts = { { name = TR"Kills", v = c.kill or 0, col = C.kill }, { name = TR"Quests", v = c.quest or 0, col = C.quest }, { name = TR"Tode", v = c.death or 0, col = C.death },
+      { name = TR"Entdeckt", v = c.explore or 0, col = C.explore }, { name = TR"Flüge", v = c.flight or 0, col = C.flight }, { name = TR"Reparaturen", v = c.repair or 0, col = C.repair } } }
+  end
   table.insert(out, (TR"   Kills %d, Quests %d, Tode %d, Entdeckt %d, Flüge %d, Reparaturen %d"):format(
     c.kill or 0, c.quest or 0, c.death or 0, c.explore or 0, c.flight or 0, c.repair or 0))
   if t > 300 then
@@ -115,23 +133,34 @@ function ns.DetailLines(e, title)
   if st > 0 then
     table.insert(out, "")
     table.insert(out, TR"|cffffd100Wofür die Zeit drauf ging|r")
+    mk.split = { line = #out, parts = { { name = TR"Kampf", v = sp.fight or 0, col = C.fight }, { name = TR"Laufen", v = sp.walk or 0, col = C.walk }, { name = TR"Fliegen", v = sp.fly or 0, col = C.fly },
+      { name = TR"Tot", v = sp.dead or 0, col = C.dead }, { name = TR"Stillstand", v = sp.idle or 0, col = C.idle } } }
     local function P(k) return math.floor((sp[k] or 0) / st * 100 + 0.5) end
     table.insert(out, (TR"   Kampf %d%%, Laufen %d%%, Fliegen %d%%, Tot %d%%, Stillstand %d%%"):format(P("fight"), P("walk"), P("fly"), P("dead"), P("idle")))
+    table.insert(out, "")   -- Platz fuer die Legende des kleinen Diagramms
   end
   table.insert(out, "")
   table.insert(out, TR"|cffffd100Gold|r")
   local inn, outt = e.moneyIn or {}, e.moneyOut or {}
   local tin, tout = 0, 0
+  local rows = {}
   local order = { "quest", "loot", "sell", "mail", "auction", "trade", "other" }
   for _, k in ipairs(order) do
-    if (inn[k] or 0) > 0 then table.insert(out, ("   |cff40ff40+ %s|r  %s"):format(Money(inn[k]), ns.MONEY_NAMES[k])); tin = tin + inn[k] end
+    if (inn[k] or 0) > 0 then rows[#rows + 1] = { v = inn[k], name = ns.MONEY_NAMES[k], plus = true }; tin = tin + inn[k] end
   end
   for _, k in ipairs({ "flight", "repair", "train", "buy", "mail", "auction", "trade", "other" }) do
-    if (outt[k] or 0) > 0 then table.insert(out, ("   |cffff5050- %s|r  %s"):format(Money(outt[k]), ns.MONEY_NAMES[k])); tout = tout + outt[k] end
+    if (outt[k] or 0) > 0 then rows[#rows + 1] = { v = outt[k], name = ns.MONEY_NAMES[k] }; tout = tout + outt[k] end
   end
-  if tin == 0 and tout == 0 then table.insert(out, TR"   noch nichts erfasst") end
+  if tin == 0 and tout == 0 then table.insert(out, TR"   noch nichts erfasst")
+  else
+    -- Platzhalter: der Text steht als Zeile da (fuer Tests und ohne Fenster), die Seite legt die Spalten darueber
+    mk.gold = { line = #out + 1, rows = rows }
+    for _, r in ipairs(rows) do
+      table.insert(out, r.plus and ("   |cff40ff40+ %s|r  %s"):format(Money(r.v), r.name) or ("   |cffff5050- %s|r  %s"):format(Money(r.v), r.name))
+    end
+  end
   local net = tin - tout
   table.insert(out, (TR"   Saldo: %s%s|r%s"):format(net >= 0 and "|cff40ff40+" or "|cffff5050-", Money(math.abs(net)),
     t > 300 and ("  (" .. Money(math.abs(net) / t * 3600) .. TR" pro Stunde)") or ""))
-  return out
+  return out, mk
 end

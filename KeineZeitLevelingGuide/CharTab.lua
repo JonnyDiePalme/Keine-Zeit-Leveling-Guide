@@ -194,6 +194,27 @@ local function MakeChart(parent, title)
   c.empty = c.area:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontDisableSmall"))
   c.empty:SetPoint("CENTER")
   c.bars, c.labels = {}, {}
+  -- 1.4m (P161 soll1, S: "Knopf oben mittig, Level 5 +-"): Bereich Knoepfe, c.AddRange(get, set) zeigt "- 5 Level +"
+  function c.AddRange(get, set)
+    local mk = function(txt, d)
+      local b = CreateFrame("Button", nil, c)
+      b:SetSize(18, 14)
+      b.fs = b:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontNormalSmall")); b.fs:SetPoint("CENTER")
+      -- 1.4o (Pr 19:15: Skala Knoepfe nicht gefunden): Text am Knopf selbst (GetText), Tooltip und Log
+      b:SetFontString(b.fs); b:SetText(txt)
+      b.tip = d < 0 and TR"5 Level weniger zeigen" or TR"5 Level mehr zeigen"
+      b:SetScript("OnEnter", function(self) ns.TipOwner(self, "ANCHOR_TOP"); GameTooltip:AddLine(self.tip); GameTooltip:Show() end)
+      b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+      local hl = b:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.15)
+      b:SetScript("OnClick", function() set(d) end)
+      return b
+    end
+    c.rLbl = c:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+    c.rLbl:SetPoint("TOP", c, "TOP", 0, -6)
+    c.rMinus = mk("-", -5); c.rMinus:SetPoint("RIGHT", c.rLbl, "LEFT", -4, 0)
+    c.rPlus = mk("+", 5); c.rPlus:SetPoint("LEFT", c.rLbl, "RIGHT", 4, 0)
+    c.rGet = get
+  end
   -- values: Zahlen, labels: Text unter den Balken (optional), hi: Index hervorheben
   function c.Set(values, labels, hi, col, emptyText)
     local n = #values
@@ -201,6 +222,7 @@ local function MakeChart(parent, title)
     -- Luecke auf und alte blieben stehen. Darum pairs
     for _, b in pairs(c.bars) do b:Hide() end
     for _, l in pairs(c.labels) do l:Hide() end
+    for _, hb in pairs(c.hits or {}) do hb:Hide() end
     local w, h = c.area:GetWidth(), c.area:GetHeight()
     if not w or w <= 0 or not h or h <= 0 then return end
     c.mid:ClearAllPoints()
@@ -232,6 +254,27 @@ local function MakeChart(parent, title)
         b:SetColorTexture(col[1], col[2], col[3], 0.85)
       end
       b:Show()
+      -- 1.4m (P161 soll3): Balken anklickbar (c.onBar), unsichtbarer Knopf ueber die ganze Hoehe
+      if c.onBar then
+        c.hits = c.hits or {}
+        local hb = c.hits[i]
+        if not hb then
+          hb = CreateFrame("Button", nil, c.area)
+          local hl = hb:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.08)
+          hb:SetScript("OnClick", function(self) if c.onBar then c.onBar(self.i) end end)
+          hb:SetScript("OnEnter", function(self)
+            if not c.tipBar then return end
+            ns.TipOwner(self, "ANCHOR_TOP"); c.tipBar(self.i); GameTooltip:Show()
+          end)
+          hb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+          c.hits[i] = hb
+        end
+        hb.i = i
+        hb:ClearAllPoints()
+        hb:SetPoint("BOTTOMLEFT", c.area, "BOTTOMLEFT", (i - 1) * (bw + gap), 0)
+        hb:SetSize(bw + gap, h)
+        hb:Show()
+      end
       if labels and labels[i] and (i - 1) % step == 0 then
         local l = c.labels[i]
         if not l then
@@ -571,10 +614,12 @@ local EASY_TOGGLES = {
   [TR"Quests automatisch annehmen und abgeben?"] = true, [TR"Quest Mobs markieren?"] = true, [TR"Questgeber markieren?"] = true,
   [TR"Tipps zu Lehrer, Händler, Ruhestein?"] = true, [TR"Knöpfe für Quest Items?"] = true, [TR"Belohnung vorschlagen?"] = true,
   [TR"Fortschritt der Gruppe zeigen?"] = true, [TR"Quests automatisch teilen?"] = true, [TR"Elite Quests in der Gruppe?"] = true,
+  -- 1.4zc (P153, Pr 06:45: Schalter im Modus Gefuehrt nicht zu finden): Auto Flug auch im einfachen Modus, Bereich Reisen
+  [TR"Flüge automatisch nehmen?"] = true,
 }
-local EASY_HIDE_HEAD = ns.TRKeys{ Questlog = true, [TR"Reisen"] = true, Gold = true }
+local EASY_HIDE_HEAD = ns.TRKeys{ Questlog = true, Gold = true }
 -- Modus Geführt: nur diese Themen und Fragen, der Rest hinter dem Knopf "Alle Einstellungen" (nie gesperrt)
-ns.EASY_SET_CATS = ns.TRKeys{ Tempo = true, Allgemein = true, [TR"Route und Karte"] = true, Quests = true, Gruppe = true, Farmen = true }
+ns.EASY_SET_CATS = ns.TRKeys{ Tempo = true, Allgemein = true, [TR"Route und Karte"] = true, [TR"Reisen"] = true, Quests = true, Gruppe = true, Farmen = true }
 
 local function BuildFunctions(parent, sfName, only, easyOnly)
   -- eigener Scrollbereich, falls das Fenster klein ist
@@ -780,6 +825,9 @@ local function BuildFunctions(parent, sfName, only, easyOnly)
     Toggle(TR"Test Notiz neben dem Mini Fenster?", function() return db.testerBox ~= false end, function()
       db.testerBox = (db.testerBox == false); if ns.TesterBoxUpdate then ns.TesterBoxUpdate() end end,
       TR"Kleiner Kasten mit Fehler melden und Verbesserung. Was du eintippst, landet im Test Log.")
+    -- 1.4zf (P199): Bild bei Meldung, Standard aus
+    Toggle(TR"Bild bei Meldung?", function() return db.logShot and true or false end, function() db.logShot = (not db.logShot) or nil end,
+      TR"Ja: bei Fehler melden, den Rückmelde Knöpfen und im Ingame Test macht das Spiel ein Bildschirm Foto (Ordner Screenshots), die Zeit steht im Log. Standard aus.")
   end
   -- Groesse vom Mini Fenster (in allen Modi)
   if Want() then
@@ -852,6 +900,9 @@ local function BuildFunctions(parent, sfName, only, easyOnly)
   y = y - 22 - GAP - 6
   end
   Header(TR"Route und Karte")
+  -- 1.4g (P193): beim Neu rechnen von Hand nach dem Gebiet fragen
+  Toggle(TR"Beim Neu rechnen nach Gebiet fragen?", function() return db.askZone ~= false end, function() db.askZone = (db.askZone == false) end,
+    TR"Klickst du Neu rechnen, kannst du statt der schnellsten Route ein anderes Gebiet für dein Level wählen. Enter nimmt die schnellste.")
   Toggle(TR"Route an?", function() return db.show end, function() Run(db.show and "aus" or "an") end, TR"Aus: kein Pfeil Ziel und keine Linie mehr, bis du sie wieder einschaltest.")
   Toggle(TR"Pfeil zeigen?", function() return TaurenRouteArrow and TaurenRouteArrow:IsShown() end, function() ns.ToggleArrow() end)
   -- Groesse vom Pfeil (in allen Modi): Schieberegler, nur der Pfeil selbst wird groesser
@@ -910,6 +961,9 @@ local function BuildFunctions(parent, sfName, only, easyOnly)
   Header(TR"Reisen")
   Toggle(TR"Flüge einplanen?", function() return db.useFlights ~= false end, function() db.useFlights = (db.useFlights == false) end,
     TR"Fliegen statt laufen, wenn es Zeit spart.")
+  -- 1.4b (P153, S 11.11. Flugkarte Punkt 1): Schalter fuer den Auto Flug (db.autoFly, NaviFlug.lua)
+  Toggle(TR"Flüge automatisch nehmen?", function() return db.autoFly ~= false end, function() db.autoFly = (db.autoFly == false) end,
+    TR"Beim Flugmeister fliegt das Addon nach kurzer Zeit selbst zum Ziel der Route. Nein: das Ziel leuchtet nur, du klickst selbst.")
   -- 19.32 (Navi Chat, Pruefer A2): Teleport im Navi, nur fuer Magier sichtbar
   if UnitClass and select(2, UnitClass("player")) == "MAGE" then
     Toggle(TR"Navi: Teleport benutzen?", function() return db.naviPorts ~= false end, function() db.naviPorts = (db.naviPorts == false) end,
@@ -1525,6 +1579,22 @@ local dungFilled = {}
 local detailFilledAt
 local repFilled, farmFilled, gearFilled
 
+-- 1.4o (P161 s3_1 Rest, Pr 19:15: noch 1 Scrollbalken ohne Bedarf): Balken Listen mit Scroll zeigen den Balken nur,
+-- wenn es etwas zu scrollen gibt (Scroll Bereich > 1)
+local function AutoBar(sf)
+  local function Upd()
+    local bar = sf.ScrollBar or (sf.GetName and sf:GetName() and _G[sf:GetName() .. "ScrollBar"])
+    if not bar then return end
+    local need = (sf.GetVerticalScrollRange and sf:GetVerticalScrollRange() or 0) > 1
+    bar:SetShown(need)
+    if not need and sf.SetVerticalScroll then sf:SetVerticalScroll(0) end
+  end
+  sf:HookScript("OnScrollRangeChanged", function() C_Timer.After(0, Upd) end)
+  sf:HookScript("OnSizeChanged", function() C_Timer.After(0, Upd) end)
+  sf.UpdateBar = sf.UpdateBar or Upd
+  return Upd
+end
+
 local function ScrollText(parent, name, font)
   local sf = CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate")
   SkinScroll(sf)
@@ -1537,10 +1607,70 @@ local function ScrollText(parent, name, font)
   fs:SetJustifyV("TOP")
   fs:SetSpacing(4)
   sf:SetScript("OnSizeChanged", function(_, w) if w and w > 0 then c:SetWidth(w); fs:SetWidth(w - 4) end end)
-  function sf.Set(lines)
-    fs:SetText(type(lines) == "table" and table.concat(lines, "\n") or (lines or ""))
-    c:SetHeight(fs:GetStringHeight() + 20)
+  -- 1.4m (P161 soll3, S: "Scrollbalken verschwindet, wenn er nicht gebraucht wird")
+  local function Bar()
+    local bar = sf.ScrollBar or (name and _G[name .. "ScrollBar"])
+    if not bar then return end
+    local need = (c:GetHeight() or 0) > (sf:GetHeight() or 0) + 2
+    bar:SetShown(need)
+    if not need and sf.SetVerticalScroll then sf:SetVerticalScroll(0) end
   end
+  sf.UpdateBar = Bar
+  sf:HookScript("OnSizeChanged", function() C_Timer.After(0, Bar) end)
+  function sf.Set(lines)
+    sf.lines = type(lines) == "table" and lines or nil
+    fs:SetText(type(lines) == "table" and table.concat(lines, "\n") or (lines or ""))
+    c:SetHeight(fs:GetStringHeight() + 20 + (sf.extraH or 0))
+    Bar()
+  end
+  -- 1.4n (P161): wo steht Zeile i (Abstand von oben und Hoehe), gemessen mit einer unsichtbaren Schrift gleicher Breite
+  function sf.LineY(i)
+    local L = sf.lines
+    if not L or not L[i] then return nil end
+    if not sf.meas then
+      sf.meas = c:CreateFontString(nil, "BACKGROUND", font or ns.FontName("GameFontHighlight"))
+      sf.meas:SetSpacing(4); sf.meas:SetJustifyH("LEFT"); sf.meas:SetAlpha(0)
+      sf.meas:SetPoint("TOPLEFT")
+    end
+    sf.meas:SetWidth(fs:GetWidth() or 300)
+    local y = 0
+    if i > 1 then sf.meas:SetText(table.concat(L, "\n", 1, i - 1)); y = (sf.meas:GetStringHeight() or 0) + 4 end
+    sf.meas:SetText(L[i] ~= "" and L[i] or " ")
+    local h = math.max(10, sf.meas:GetStringHeight() or 12)
+    sf.meas:SetText("")
+    return y, h
+  end
+  -- Klick auf einzelne Zeilen: map[Zeile] = Schluessel, fn(Schluessel)
+  function sf.SetClicks(map, fn, enter)
+    sf.clk = sf.clk or {}
+    for _, b in ipairs(sf.clk) do b:Hide() end
+    if not map then return end
+    local n = 0
+    for i, key in pairs(map) do
+      local y, h = sf.LineY(i)
+      if y then
+        n = n + 1
+        local b = sf.clk[n]
+        if not b then
+          b = CreateFrame("Button", nil, c)
+          local hl = b:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.07)
+          sf.clk[n] = b
+        end
+        b:ClearAllPoints(); b:SetPoint("TOPLEFT", fs, "TOPLEFT", 0, -y + 1); b:SetPoint("RIGHT", fs, "RIGHT"); b:SetHeight(h + 2)
+        b.key = key
+        b:SetScript("OnClick", function(self) fn(self.key, self) end)
+        -- 1.4w: optional Maus drauf (zb Item Tooltip)
+        if enter then
+          b:SetScript("OnEnter", function(self) enter(self.key, self) end)
+          b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        else
+          b:SetScript("OnEnter", nil); b:SetScript("OnLeave", nil)
+        end
+        b:Show()
+      end
+    end
+  end
+  sf.child, sf.fs = c, fs   -- 1.4i: fuer Knoepfe unter dem Text (Dungeon Kette)
   return sf
 end
 
@@ -1684,6 +1814,7 @@ local function HBarsScroll(parent, maxRows)
   local bars = HBars(child, maxRows)
   bars:SetPoint("TOPLEFT"); bars:SetPoint("TOPRIGHT")
   sf:SetScript("OnSizeChanged", function(self, w) if w and w > 0 then child:SetWidth(w); bars:SetWidth(w) end end)
+  AutoBar(sf)
   function sf.Set(list, col)
     local n = math.min(#list, maxRows)
     child:SetHeight(math.max(10, n * HBARS_ROW_H + 4))
@@ -1694,40 +1825,81 @@ local function HBarsScroll(parent, maxRows)
 end
 
 -- 1.3z (P110 Punkt 2): Liste mit zwei Balken je Zeile (gruen Einnahmen vin, rot Ausgaben vout), scrollbar
-local function HBars2Scroll(parent, maxRows)
+-- 1.4l (P161 Statistik soll4, S 11.11.): je Level Zeile: Name, Saldo kurz (+2.5g / -0.5g), zwei Balken, rechts zwei Spalten
+-- (gruen Einnahmen, rot Ausgaben, je rechtsbuendig untereinander). Maus drauf: Rahmen ueber die ganze Zeile. Klick: onClick(e)
+local function HBars2Scroll(parent, maxRows, onClick)
   local sf = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
   local child = CreateFrame("Frame", nil, sf)
   child:SetSize(10, 10)
   sf:SetScrollChild(child)
+  AutoBar(sf)
+  local LBL_W, NET_W, COL_W = 64, 52, 78
   local rows = {}
   for i = 1, maxRows do
-    local r = {}
-    r.label = child:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
-    r.label:SetPoint("TOPLEFT", 0, -(i - 1) * HBARS_ROW_H)
-    r.label:SetWidth(70); r.label:SetJustifyH("LEFT")
-    r.bi = child:CreateTexture(nil, "ARTWORK"); r.bi:SetPoint("TOPLEFT", 74, -(i - 1) * HBARS_ROW_H - 1); r.bi:SetHeight(7)
-    r.bo = child:CreateTexture(nil, "ARTWORK"); r.bo:SetPoint("TOPLEFT", 74, -(i - 1) * HBARS_ROW_H - 9); r.bo:SetHeight(7)
+    local r = CreateFrame("Button", nil, child, BackdropTemplateMixin and "BackdropTemplate" or nil)
+    r:SetHeight(HBARS_ROW_H)
+    r:SetPoint("TOPLEFT", 0, -(i - 1) * HBARS_ROW_H)
+    r:SetPoint("RIGHT", child, "RIGHT", 0, 0)
+    r.label = r:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+    r.label:SetPoint("TOPLEFT", 0, 0); r.label:SetWidth(LBL_W); r.label:SetJustifyH("LEFT")
+    r.net = r:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+    r.net:SetPoint("TOPLEFT", LBL_W, 0); r.net:SetWidth(NET_W - 4); r.net:SetJustifyH("RIGHT")
+    local bx = LBL_W + NET_W
+    r.bi = r:CreateTexture(nil, "ARTWORK"); r.bi:SetPoint("TOPLEFT", bx, -1); r.bi:SetHeight(7)
+    r.bo = r:CreateTexture(nil, "ARTWORK"); r.bo:SetPoint("TOPLEFT", bx, -9); r.bo:SetHeight(7)
     r.bi:SetColorTexture(0.25, 0.85, 0.35, 0.9); r.bo:SetColorTexture(1, 0.38, 0.3, 0.9)
-    r.val = child:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontDisableSmall"))
-    r.val:SetPoint("TOPRIGHT", child, "TOPRIGHT", 0, -(i - 1) * HBARS_ROW_H)
+    r.vo = r:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+    r.vo:SetPoint("TOPRIGHT", r, "TOPRIGHT", -2, 0); r.vo:SetWidth(COL_W); r.vo:SetJustifyH("RIGHT")
+    r.vi = r:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+    r.vi:SetPoint("TOPRIGHT", r.vo, "TOPLEFT", -8, 0); r.vi:SetWidth(COL_W); r.vi:SetJustifyH("RIGHT")
+    -- Rahmen beim Drueberfahren und beim gewaehlten Level
+    r.hl = r:CreateTexture(nil, "BACKGROUND")
+    r.hl:SetAllPoints(); r.hl:SetColorTexture(1, 1, 1, 0.07); r.hl:Hide()
+    r.edge = {}
+    for k, pt in ipairs({ { "TOPLEFT", "TOPRIGHT" }, { "BOTTOMLEFT", "BOTTOMRIGHT" } }) do
+      local t = r:CreateTexture(nil, "OVERLAY"); t:SetHeight(1)
+      t:SetPoint(pt[1]); t:SetPoint(pt[2]); t:SetColorTexture(1, 0.82, 0, 0.7); t:Hide()
+      r.edge[k] = t
+    end
+    local function Light(on) r.hl:SetShown(on or r.sel); for _, t in ipairs(r.edge) do t:SetShown(on or r.sel) end end
+    r.Light = Light
+    r:SetScript("OnEnter", function(self) Light(true)
+      if self.e then
+        ns.TipOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(self.e.name)
+        GameTooltip:AddLine(TR"Klick: Einnahmen und Ausgaben bis zu diesem Level rechts im Detail", 1, 1, 1, true)
+        GameTooltip:Show()
+      end
+    end)
+    r:SetScript("OnLeave", function() Light(false); GameTooltip:Hide() end)
+    r:SetScript("OnClick", function(self)
+      if not self.e then return end
+      for _, o in ipairs(rows) do o.sel = (o == self); o.Light(false) end
+      Light(true)
+      if onClick then onClick(self.e) end
+    end)
     rows[i] = r
   end
   sf:SetScript("OnSizeChanged", function(_, w) if w and w > 0 then child:SetWidth(w) end end)
   function sf.Set(list)
     local mx = 0
     for _, e in ipairs(list) do mx = math.max(mx, e.vin or 0, e.vout or 0) end
-    local w = math.max(10, (child:GetWidth() or 300) - 74 - 150)
+    local w = math.max(10, (child:GetWidth() or 300) - LBL_W - NET_W - 2 * COL_W - 20)
     local n = math.min(#list, maxRows)
     child:SetHeight(math.max(10, n * HBARS_ROW_H + 4))
     for i, r in ipairs(rows) do
       local e = list[i]
       if e and mx > 0 then
-        r.label:SetText(e.name); r.label:Show()
+        r.e = e
+        r.label:SetText(e.name)
+        r.net:SetText(e.net or "")
         r.bi:SetWidth(math.max(1, (e.vin or 0) / mx * w)); r.bi:SetShown((e.vin or 0) > 0)
         r.bo:SetWidth(math.max(1, (e.vout or 0) / mx * w)); r.bo:SetShown((e.vout or 0) > 0)
-        r.val:SetText(e.text or ""); r.val:Show()
+        r.vi:SetText(e.tin or ""); r.vo:SetText(e.tout or (e.text or ""))
+        r:Show()
       else
-        r.label:Hide(); r.bi:Hide(); r.bo:Hide(); r.val:Hide()
+        r.e = nil; r.sel = nil
+        r:Hide()
       end
     end
   end
@@ -1748,7 +1920,7 @@ local function StackBar(parent)
     for _, p in ipairs(parts) do total = total + p.v end
     local w = f:GetWidth() or 300
     local x = 0
-    local lx = 0
+    local lx, ly = 0, -22
     for i = 1, 6 do
       local p = parts[i]
       local s, l = f.segs[i], f.leg[i]
@@ -1757,8 +1929,10 @@ local function StackBar(parent)
         s:ClearAllPoints(); s:SetPoint("TOPLEFT", f, "TOPLEFT", x, 0); s:SetWidth(math.max(1, sw))
         s:SetColorTexture(p.col[1], p.col[2], p.col[3], 0.9); s:Show()
         x = x + sw
-        l:ClearAllPoints(); l:SetPoint("TOPLEFT", f, "TOPLEFT", lx, -22)
         l:SetText((TR"|cff%02x%02x%02x%s|r %d%%"):format(math.floor(p.col[1] * 255), math.floor(p.col[2] * 255), math.floor(p.col[3] * 255), p.name, math.floor(p.v / total * 100 + 0.5)))
+        -- 1.4n (P161 soll2): kleine Diagramme, die Legende bricht in eine zweite Zeile um
+        if lx > 0 and lx + l:GetStringWidth() > w then lx = 0; ly = ly - 14 end
+        l:ClearAllPoints(); l:SetPoint("TOPLEFT", f, "TOPLEFT", lx, ly)
         l:Show()
         lx = lx + l:GetStringWidth() + 18
       else
@@ -2399,6 +2573,13 @@ local function BuildBig()
     split:SetPoint("TOPRIGHT", toEntry, "BOTTOMRIGHT", 0, -4)
     split:SetShown(not isPvp)
     split:SetScript("OnClick", function() if sel and ns.PartySplit then ns.PartySplit(sel) end end)
+    -- 1.4zzf (M50, K 13:55): nur die Quests dieses Dungeons teilen (im Log und teilbar), ohne Gruppe grau mit Tip
+    pg.dshare = FlatButton(ban, TR"Dungeon Quests teilen", 150, 24)
+    pg.dshare:SetPoint("TOPRIGHT", split, "BOTTOMRIGHT", 0, -4)
+    pg.dshare:SetShown(not isPvp)
+    if not isPvp then ns.dungeonShareBtn = pg.dshare end
+    pg.dshare:SetScript("OnClick", function() if sel and ns.ShareRouteQuests then ns.ShareRouteQuests(sel.quests or {}) end end)
+    if ns.ShareButtonSetup then ns.ShareButtonSetup(pg.dshare, TR"Dungeon Quests teilen", TR"Teilt die Quests dieses Dungeons, die du im Log hast und die teilbar sind, der Reihe nach mit der Gruppe. Am Ende steht, was bei wem nicht ankam.") end
     follow:SetScript("OnClick", function()
       local d = sel
       if not d then return end
@@ -2501,14 +2682,98 @@ local function BuildBig()
       if q.text then
         table.insert(lines, ""); table.insert(lines, Section(TR"Aufgabe")); table.insert(lines, q.text)
       end
-      if q.chain and #q.chain > 1 then
+      -- 1.4i (P160 Punkt 2, S notizen soll2): Kette als Knoepfe. Erledigt gruen mit Haken, im Log blau, jetzige gelb.
+      -- Klick: Ort des Gebers nur auf der Karte (ns.ShowTempPin). Darunter die Reihe Schritt fuer Schritt und ca Dauer
+      local chainOn = q.chain and #q.chain > 1
+      if chainOn then
         table.insert(lines, ""); table.insert(lines, Section(TR"Kette"))
-        for i, c in ipairs(q.chain) do
-          local col = (c.st == "done") and "|cff6d6d6d" or ((c.id == qid) and "|cffffd100" or "|cffffffff")
-          table.insert(lines, ("%s%d  %s|r%s"):format(col, i, c.name, c.st == "done" and TR"  |cff6d6d6derledigt|r" or ""))
+        -- 1.4v (Pr 23:20: Kette im Sim nie sichtbar, keine Log Zeile): ein Fehler in der Dauer Schaetzung brach ShowQuest ab,
+        -- bevor Text und Knoepfe kamen. Jetzt geschuetzt, der Fehler geht ins Test Log
+        local okE, est, nOpen = pcall(function() if ns.ChainEstimate then return ns.ChainEstimate(q.chain) end end)
+        if not okE then
+          if ns.TestLog then ns.TestLog("FEHLER", "Dungeon Kette Dauer: " .. tostring(est)) end
+          est = nil
         end
+        if est and nOpen then table.insert(lines, (TR"|cff9d9d9dnoch %d Quests, ca %s|r"):format(nOpen, ns.Clock(est))) end
       end
+      pg.qrChain = pg.qrChain or {}
+      local child, fs = pg.qText.child, pg.qText.fs
+      local extra = 0
+      for _, b in ipairs(pg.qrChain) do b:Hide() end
+      if pg.qrDetail then pg.qrDetail:Hide() end
+      pg.qText.extraH = 0
       pg.qText.Set(lines)
+      if chainOn and child and fs then
+        local prevB
+        for ci, c in ipairs(q.chain) do
+          local b = pg.qrChain[ci]
+          if not b then
+            b = CreateFrame("Button", nil, child)
+            b:SetHeight(18)
+            b.fs = b:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlight"))
+            b.fs:SetPoint("LEFT", 2, 0); b.fs:SetJustifyH("LEFT")
+            local hl = b:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.08)
+            b:SetScript("OnEnter", function(self)
+              ns.TipOwner(self, "ANCHOR_RIGHT")
+              GameTooltip:AddLine(self.qname or "?")
+              GameTooltip:AddLine(TR"Klick: zeigt auf der Karte, wo der Geber steht (kein Pfeil, keine Route).", 1, 1, 1, true)
+              GameTooltip:Show()
+            end)
+            b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            pg.qrChain[ci] = b
+          end
+          local col, tag
+          if c.st == "done" then col, tag = "|cff40ff40", " |TInterface\\RaidFrame\\ReadyCheck-Ready:14:14|t"
+          elseif c.st == "log" or c.st == "ready" then col, tag = "|cff66ccff", (c.st == "ready" and TR"  |cff40ff40fertig, abgeben|r" or TR"  |cff66ccffim Questlog|r")
+          elseif c.id == qid then col, tag = "|cffffd100", ""
+          else col, tag = "|cffffffff", "" end
+          b.qname = c.name
+          b.fs:SetText(("%s%d  %s|r%s"):format(col, ci, c.name, tag))
+          b:SetWidth(math.max(120, (fs:GetWidth() or 300)))
+          b:ClearAllPoints()
+          if prevB then b:SetPoint("TOPLEFT", prevB, "BOTTOMLEFT", 0, -2) else b:SetPoint("TOPLEFT", fs, "BOTTOMLEFT", 0, -4) end
+          b:SetScript("OnClick", function()
+            local qi = ns.DungeonQuestInfo(c.id)
+            if qi.gm then ns.ShowTempPin(qi.gm, qi.gx, qi.gy, (qi.giver or c.name) .. " (" .. c.name .. ")")
+            else ns.Print(TR"Für diese Quest ist kein Ort bekannt.") end
+          end)
+          b:Show()
+          prevB = b
+          extra = extra + 20
+        end
+        -- 1.4r (Pr 20:35): Knoepfe sind Kinder von pg.qText.child, sichtbar nur mit pg.mode "detail" und Reiter "quests"
+        if ns.TestLog then ns.TestLog("FENSTER", ("Dungeon Kette %d Knoepfe fuer Quest %d, sichtbar %s (mode %s, tab %s)"):format(#q.chain, qid,
+          tostring(pg.qText:IsVisible() and true or false), tostring(pg.mode), tostring(pg.tab))) end
+        -- Reihe Schritt fuer Schritt (nur offene): Annehmen, Aufgabe, Abgeben
+        if not pg.qrDetail then
+          pg.qrDetail = child:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+          pg.qrDetail:SetJustifyH("LEFT"); pg.qrDetail:SetJustifyV("TOP"); pg.qrDetail:SetSpacing(3)
+        end
+        local dl = { "", Section(TR"Reihe Schritt für Schritt") }
+        local sn = 0
+        for _, c in ipairs(q.chain) do
+          if c.st ~= "done" then
+            local qi = ns.DungeonQuestInfo(c.id)
+            sn = sn + 1
+            dl[#dl + 1] = ("|cffffd100%d. %s|r"):format(sn, c.name)
+            if c.st ~= "log" and c.st ~= "ready" then dl[#dl + 1] = (TR"   Annehmen bei %s%s"):format(qi.giver or "?", qi.giverZone and ("  |cff9d9d9d" .. qi.giverZone .. "|r") or "") end
+            if qi.text and c.st ~= "ready" then
+              local t = qi.text
+              if #t > 160 then t = t:sub(1, 158):gsub("[\192-\255][\128-\191]*$", "") .. ".." end
+              dl[#dl + 1] = "   |cffd8d8d8" .. t .. "|r"
+            end
+            dl[#dl + 1] = (TR"   Abgeben bei %s%s"):format(qi.ender or "?", qi.enderZone and ("  |cff9d9d9d" .. qi.enderZone .. "|r") or "")
+          end
+        end
+        pg.qrDetail:SetText(table.concat(dl, "\n"))
+        pg.qrDetail:ClearAllPoints()
+        pg.qrDetail:SetPoint("TOPLEFT", prevB, "BOTTOMLEFT", 0, -4)
+        pg.qrDetail:SetWidth(math.max(120, (fs:GetWidth() or 300)))
+        pg.qrDetail:Show()
+        extra = extra + (pg.qrDetail:GetStringHeight() or 0) + 8
+        pg.qText.extraH = extra
+        child:SetHeight((fs:GetStringHeight() or 0) + 20 + extra)
+      end
       pg.toGiver:SetShown(q.gm ~= nil and q.st ~= "done")
       for _, r in ipairs(pg.qrows) do if r.SetSelected then r.SetSelected(r.qid == qid) end end
     end
@@ -2580,7 +2845,17 @@ local function BuildBig()
           r.tint:SetShown(inChain and true or false); r.bar:SetShown(inChain and true or false)
           local nm = (ns.QuestName and ns.QuestName(qid)) or (TR"Quest " .. qid)
           local pre = inChain and ("|cffff9a30%d.|r "):format(num) or ""
-          r:SetText(("%s%s[%d]|r %s"):format(pre, st == "done" and "|cff6d6d6d" or "|cffffd100", okL and lv or 0, st == "done" and ("|cff6d6d6d" .. nm .. "|r") or nm))
+          -- 1.4i (P160 Punkt 1, S: "im Questlog markieren"): im Log blau mit Hinweis, fertig zum Abgeben gruen
+          local inLog = st == "log" or st == "ready"
+          local nmc = st == "done" and ("|cff6d6d6d" .. nm .. "|r") or (st == "ready" and ("|cff40ff40" .. nm .. "|r") or (st == "log" and ("|cff66ccff" .. nm .. "|r") or nm))
+          r:SetText(("%s%s[%d]|r %s%s"):format(pre, st == "done" and "|cff6d6d6d" or "|cffffd100", okL and lv or 0, nmc,
+            st == "ready" and TR"  |cff40ff40fertig|r" or (st == "log" and TR"  |cff66ccffim Log|r" or "")))
+          if not r.logTint then
+            r.logTint = r:CreateTexture(nil, "BACKGROUND", nil, 2)
+            r.logTint:SetPoint("TOPLEFT", 1, -1); r.logTint:SetPoint("BOTTOMRIGHT", -1, 1)
+          end
+          r.logTint:SetColorTexture(st == "ready" and 0.25 or 0.4, st == "ready" and 1 or 0.8, st == "ready" and 0.4 or 1, 0.10)
+          r.logTint:SetShown(inLog)
           r:ClearAllPoints(); r:SetPoint("TOPLEFT", 0, -y)
           r:SetScript("OnClick", function() pg.ShowQuest(qid) end)
           r:Show()
@@ -2614,7 +2889,8 @@ local function BuildBig()
         for k = hn + 1, #qheads do qheads[k]:Hide() end
         qchild:SetHeight(y + 8)
         if i == 0 then
-          pg.qName:SetText(TR"Keine Quests"); pg.qText.Set({ TR"Für deine Fraktion, Klasse oder dein Volk gibt es hier keine Quests." }); pg.toGiver:Hide()
+          -- 1.4zzl (M54): Forever Dungeons, deren Quests erst vor Ort bekannt werden (DungeonJournal hat nur Platzhalter)
+          pg.qName:SetText(TR"Keine Quests"); pg.qText.Set({ d.vorOrt or TR"Für deine Fraktion, Klasse oder dein Volk gibt es hier keine Quests." }); pg.toGiver:Hide()
         else
           pg.ShowQuest(qsel and shown[qsel.id] and qsel.id or first or (chain and chain[1]) or d.quests[1])
         end
@@ -2863,16 +3139,27 @@ local function BuildBig()
     det:SetPoint("TOPRIGHT", 0, -232)
     det:SetFrameLevel(pg:GetFrameLevel() + 10)
     det:SetScript("OnClick", function() bigView = "detail"; ns.RefreshBig() end)
-    local sb = Box(pg, TR"Wofür geht die Zeit drauf (diese Session)")
-    sb:SetPoint("TOPLEFT", 0, -230); sb:SetPoint("TOPRIGHT", 0, -230); sb:SetHeight(64)
+    -- 1.4n (P161 soll1 Punkt 2, S: "zwei solche Balken, Sitzung und darunter dieses Level")
+    local sb = Box(pg, TR"Wofür geht die Zeit drauf")
+    sb:SetPoint("TOPLEFT", 0, -230); sb:SetPoint("TOPRIGHT", 0, -230); sb:SetHeight(104)
+    local function Lab(y, txt)
+      local l = sb:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontNormalSmall"))
+      l:SetPoint("TOPLEFT", 8, y); l:SetWidth(86); l:SetJustifyH("LEFT"); l:SetText(txt)
+      return l
+    end
+    Lab(-26, TR"Sitzung")
+    pg.splitLvlLab = Lab(-66, TR"Dieses Level")
     pg.split = StackBar(sb)
-    pg.split:SetPoint("TOPLEFT", 8, -24); pg.split:SetPoint("TOPRIGHT", -8, -24)
+    pg.split:SetPoint("TOPLEFT", 98, -24); pg.split:SetPoint("TOPRIGHT", -8, -24)
+    pg.splitLvl = StackBar(sb)
+    pg.splitLvl:SetPoint("TOPLEFT", 98, -64); pg.splitLvl:SetPoint("TOPRIGHT", -8, -64)
     local zb = Box(pg, TR"XP pro Stunde je Zone")
-    zb:SetPoint("TOPLEFT", 0, -302); zb:SetPoint("BOTTOMRIGHT", pg, "BOTTOM", -4, 0)
+    zb:SetPoint("TOPLEFT", 0, -342); zb:SetPoint("BOTTOMRIGHT", pg, "BOTTOM", -4, 0)
+    pg.zoneBox = zb
     pg.zones = HBars(zb, 10)
     pg.zones:SetPoint("TOPLEFT", 8, -24); pg.zones:SetPoint("BOTTOMRIGHT", -8, 8)
     local tb = Box(pg, TR"Details")
-    tb:SetPoint("TOPLEFT", pg, "TOP", 4, -302); tb:SetPoint("BOTTOMRIGHT")
+    tb:SetPoint("TOPLEFT", pg, "TOP", 4, -342); tb:SetPoint("BOTTOMRIGHT")
     pg.text = ScrollText(tb, "TaurenRouteBigPerf", ns.FontName("GameFontHighlightSmall"))
     pg.text:SetPoint("TOPLEFT", 8, -24); pg.text:SetPoint("BOTTOMRIGHT", -26, 8)
   end
@@ -2903,7 +3190,9 @@ local function BuildBig()
     pg.outb:SetPoint("TOPLEFT", 8, -24); pg.outb:SetPoint("TOPRIGHT", -8, -24)
     local lb = Box(pg, TR"Einnahmen und Ausgaben je Level")
     lb:SetPoint("TOPLEFT", 0, -222); lb:SetPoint("BOTTOMRIGHT", pg, "BOTTOM", -4, 0)
-    pg.lvls = HBars2Scroll(lb, 60)
+    pg.lvls = HBars2Scroll(lb, 60, function(e)
+      if e.L and ns.GoldLinesTo then pg.text.Set(ns.GoldLinesTo(e.L)) end
+    end)
     pg.lvls:SetPoint("TOPLEFT", 8, -24); pg.lvls:SetPoint("BOTTOMRIGHT", -28, 8)
     local bx = Box(pg, TR"Details")
     bx:SetPoint("TOPLEFT", pg, "TOP", 4, -222); bx:SetPoint("BOTTOMRIGHT")
@@ -2980,7 +3269,7 @@ local function BuildBig()
     local groups = {}
     -- 20.4b2 (K 20:05 c, S 19:56): oben die Top 10 ueber alle Zonen, per Auswahl je Zone die besten 10 bis 20.
     -- Gleiche Gegner Art (gleicher Name, verschiedene NPC Nummern) ist eine Zeile
-    local FARM_TOP_N, FARM_ZONE_N = 10, 20
+    local FARM_TOP_N, FARM_ZONE_N, FARM_H_N = 10, 20, 5
     local zoneFilter = "top"
     local lb = Box(pg, TR"Mobs für dein Level")
     lb:SetPoint("TOPLEFT"); lb:SetPoint("BOTTOMLEFT"); lb:SetWidth(300)
@@ -3072,7 +3361,7 @@ local function BuildBig()
       return out
     end
     local function CurGroup()
-      for _, g in ipairs(groups) do if g.key == curMob then return g end end
+      for _, g in ipairs(groups) do if g.key and g.key == curMob then return g end end
     end
 
     function pg.FillRight()
@@ -3123,8 +3412,13 @@ local function BuildBig()
     function pg.ShowSel()
       local lines = {}
       for _, l in ipairs(ns.FarmSessionLines and ns.FarmSessionLines() or {}) do table.insert(lines, l) end
+      local imap
       if farmSel then
+        local off = #lines
         for _, l in ipairs(ns.FarmSpotLines(farmSel)) do table.insert(lines, l) end
+        -- 1.4w (P171 Punkt 2): Item Zeilen mit Tooltip, Shift Klick in den Chat
+        imap = {}
+        for idx, id in pairs(ns.farmLineItems or {}) do imap[idx + off] = id end
       else
         table.insert(lines, TR"Links einen Mob anklicken, rechts ein Gebiet wählen. Oben stehen die mit dem meisten Gold pro Stunde.")
         table.insert(lines, "")
@@ -3133,6 +3427,17 @@ local function BuildBig()
         table.insert(lines, TR"|cff9d9d9dDer Wert pro Kill wird aus deiner Beute gelernt (Geld und Items), Items mit Auktionator Preisen.|r")
       end
       pg.text.Set(lines)
+      pg.text.SetClicks(imap, function(id)
+        if IsModifiedClick and IsModifiedClick("CHATLINK") and ChatEdit_InsertLink then
+          local _, link = ns.Api.GetItemInfo(id)
+          if link then ChatEdit_InsertLink(link) end
+        end
+      end, function(id, btn)
+        ns.TipOwner(btn, "ANCHOR_RIGHT")
+        local ok = GameTooltip.SetItemByID and pcall(GameTooltip.SetItemByID, GameTooltip, id)
+        if not ok then pcall(GameTooltip.SetHyperlink, GameTooltip, "item:" .. id) end
+        GameTooltip:Show()
+      end)
       if farmSel then pg.goBtn:Enable() else pg.goBtn:Disable() end
     end
 
@@ -3146,8 +3451,23 @@ local function BuildBig()
         if #list == 0 then zoneFilter = "top"; list = all end
       end
       groups = Groups(list)
-      local cap = (zoneFilter == "top") and FARM_TOP_N or FARM_ZONE_N
-      while #groups > cap do table.remove(groups) end
+      -- 1.4w (P171 Punkt 1, S: "oben 10 fuer AH Verkaeufe und unten 5 fuer Haendler, etwas getrennt"): je Gruppe die Art
+      -- des besten Gebiets (mehr Wert ueber AH oder ueber Haendler)
+      do
+        local capA = (zoneFilter == "top") and FARM_TOP_N or FARM_ZONE_N
+        local capH = (zoneFilter == "top") and FARM_H_N or FARM_ZONE_N
+        local ga, gh = {}, {}
+        for _, g0 in ipairs(groups) do
+          g0.kind = g0.spots[1] and g0.spots[1].kind or "H"
+          if g0.kind == "AH" then if #ga < capA then ga[#ga + 1] = g0 end elseif #gh < capH then gh[#gh + 1] = g0 end
+        end
+        groups = {}
+        if #ga > 0 then groups[#groups + 1] = { head = TR"Auktionshaus" } end
+        for _, g0 in ipairs(ga) do groups[#groups + 1] = g0 end
+        if #gh > 0 then groups[#groups + 1] = { head = TR"Händler" } end
+        for _, g0 in ipairs(gh) do groups[#groups + 1] = g0 end
+        if ns.TestLog and pg.goldSaid ~= #ga .. ":" .. #gh then pg.goldSaid = #ga .. ":" .. #gh; ns.TestLog("GOLD", ("Liste AH %d, Haendler %d, ohne Daten weg %d"):format(#ga, #gh, ns.farmHidden or 0)) end
+      end
       zbtn:SetText(zoneFilter == "top" and TR"Top 10, alle Zonen" or ((TR"Zone: %s"):format(ns.ZoneName and ns.ZoneName(zoneFilter) or "?")))
       zbtn:SetScript("OnClick", function(self)
         -- Zonen mit Spots, die beste zuerst
@@ -3167,7 +3487,10 @@ local function BuildBig()
       end)
       -- Auswahl halten, wenn es den Mob und die Stelle noch gibt, sonst der beste Mob und sein bestes Gebiet
       local g = CurGroup()
-      if not g then g = groups[1]; curMob = g and g.key end
+      if not g then
+        for _, g0 in ipairs(groups) do if g0.key then g = g0; break end end
+        curMob = g and g.key
+      end
       if g then
         local still = false
         for _, s in ipairs(g.spots) do if s == farmSel then still = true end end
@@ -3183,13 +3506,18 @@ local function BuildBig()
           b.fs:ClearAllPoints(); b.fs:SetPoint("LEFT", 6, 0); b.fs:SetPoint("RIGHT", -4, 0); b.fs:SetJustifyH("LEFT"); b.fs:SetWordWrap(false)
           pg.btns[i] = b
         end
+        if gr.head then
+          b:SetText("|cff" .. ACC_HEX .. gr.head .. "|r")
+          b:SetScript("OnClick", nil)
+        else
         local mark = gr.learned >= 0.7 and "|cff40ff40" or (gr.learned >= 0.2 and "|cffffd100" or "|cffff9030")
         local nz = #gr.spots
-        b:SetText(("%s%s|r  %s%s|r%s"):format(mark, ns.Money(gr.best), curMob == gr.key and "|cffffd100" or "|cffffffff", gr.name,
+        b:SetText(("|cff9d9d9d%s|r %s%s|r  %s%s|r%s"):format(gr.kind == "AH" and TR"AH" or TR"H", mark, ns.Money(gr.best), curMob == gr.key and "|cffffd100" or "|cffffffff", gr.name,
           nz > 1 and ("  |cff9d9d9d" .. (TR"%d Gebiete"):format(nz) .. "|r") or ("  |cff9d9d9d" .. (ns.ZoneName and ns.ZoneName(gr.spots[1].map) or "?") .. "|r")))
         -- 20.3y (S Test 17:05: Farm 23 Texte abgeschnitten): passend kuerzen (Zone faellt zuerst weg)
         if ns.FitText and b.fs then ns.FitText(b.fs, b.fs:GetText() or "") end
         b:SetScript("OnClick", function() curMob = gr.key; farmSel = gr.spots[1]; pg.Fill() end)
+        end
         b:Show()
       end
       for i = #groups + 1, #pg.btns do pg.btns[i]:Hide() end
@@ -3295,7 +3623,8 @@ local function BuildBig()
     -- Sortieren als Reiter (Level, Upgrade), daneben die Auswahl vom Platz
     local GSORT = { { "level", TR"Level" }, { "pct", TR"Upgrade" } }
     local sortTabs = T.TabBar(lb, 22)
-    sortTabs:SetPoint("TOPLEFT", 8, -20); sortTabs:SetWidth(170)
+    -- 1.4zn (M37, S 18:24): Zeile Wertung ueber Platz, darum Reiter und Platz eine Zeile tiefer
+    sortTabs:SetPoint("TOPLEFT", 8, -46); sortTabs:SetWidth(170)
     local sortL = sortTabs
     local slotB = FlatButton(lb, TR"Platz: alle", 130, 20)
     slotB:SetPoint("LEFT", sortTabs, "RIGHT", 6, 0)
@@ -3321,8 +3650,245 @@ local function BuildBig()
       end
       T.ShowMenu(self, list)
     end)
+    -- 1.4zzv (M55, S Skizze 01:49): Stat Filter. Abschnitte Haupt, Neben, Ruestung, Level, je auf und zu klappbar.
+    -- Im Abschnitt ODER, zwischen den Abschnitten UND, nichts an = keine Einschraenkung. Wahl in db.gearStatF gespeichert.
+    -- Eine Quest bleibt, wenn eine ihrer Belohnungen zu allen aktiven Abschnitten passt und ihr Level im Bereich liegt
+    local FSEC = {
+      { key = "main", name = TR"Hauptwerte", opts = { { "STR", TR"Stärke" }, { "AGI", TR"Beweglichkeit" }, { "INT", TR"Intelligenz" }, { "STA", TR"Ausdauer" }, { "SPI", TR"Willenskraft" } } },
+      { key = "sub", name = TR"Nebenwerte", opts = { { "HIT", TR"Trefferwertung" }, { "CRIT", TR"Kritische Treffer" }, { "MP5", TR"Mana alle 5 s" }, { "HP5", TR"Leben alle 5 s" },
+        { "HEAL", TR"Heilung" }, { "SP", TR"Zauberschaden" }, { "AP", TR"Angriffskraft" }, { "ARM", TR"Rüstung" }, { "DEF", TR"Verteidigung" }, { "RES", TR"Widerstand" } } },
+      { key = "armor", name = TR"Rüstungsart", opts = { { 1, TR"Stoff" }, { 2, TR"Leder" }, { 3, TR"Kette" }, { 4, TR"Platte" } } },
+      { key = "lvl", name = TR"Level Bereich" },
+    }
+    local SKEY = {
+      ITEM_MOD_STRENGTH_SHORT = "STR", ITEM_MOD_AGILITY_SHORT = "AGI", ITEM_MOD_INTELLECT_SHORT = "INT", ITEM_MOD_STAMINA_SHORT = "STA",
+      ITEM_MOD_SPIRIT_SHORT = "SPI", ITEM_MOD_HIT_RATING_SHORT = "HIT", ITEM_MOD_HIT_SPELL_RATING_SHORT = "HIT", ITEM_MOD_HIT_MELEE_RATING_SHORT = "HIT",
+      ITEM_MOD_HIT_RANGED_RATING_SHORT = "HIT", ITEM_MOD_CRIT_RATING_SHORT = "CRIT", ITEM_MOD_CRIT_SPELL_RATING_SHORT = "CRIT",
+      ITEM_MOD_CRIT_MELEE_RATING_SHORT = "CRIT", ITEM_MOD_CRIT_RANGED_RATING_SHORT = "CRIT", ITEM_MOD_POWER_REGEN0_SHORT = "MP5",
+      ITEM_MOD_MANA_REGENERATION_SHORT = "MP5", ITEM_MOD_HEALTH_REGEN_SHORT = "HP5", ITEM_MOD_HEALTH_REGENERATION_SHORT = "HP5",
+      ITEM_MOD_SPELL_HEALING_DONE_SHORT = "HEAL", ITEM_MOD_SPELL_POWER_SHORT = "SP", ITEM_MOD_SPELL_DAMAGE_DONE_SHORT = "SP",
+      ITEM_MOD_ATTACK_POWER_SHORT = "AP", ITEM_MOD_RANGED_ATTACK_POWER_SHORT = "AP", ITEM_MOD_MELEE_ATTACK_POWER_SHORT = "AP",
+      RESISTANCE0_NAME = "ARM", ITEM_MOD_DEFENSE_SKILL_RATING_SHORT = "DEF", RESISTANCE1_NAME = "RES", RESISTANCE2_NAME = "RES",
+      RESISTANCE3_NAME = "RES", RESISTANCE4_NAME = "RES", RESISTANCE5_NAME = "RES", RESISTANCE6_NAME = "RES",
+    }
+    local statMemo = setmetatable({}, { __mode = "k" })
+    local function ItemKeys(it)
+      local k = it and (it.link or it.id)
+      if not k then return {} end
+      local m = statMemo[it]
+      if m then return m end
+      m = {}
+      local ok, st = pcall(function() return ns.Api.GetItemStats and ns.Api.GetItemStats(it.link or ("item:" .. it.id)) end)
+      for sk, v in pairs(ok and type(st) == "table" and st or {}) do local c = SKEY[sk]; if c and (tonumber(v) or 0) > 0 then m[c] = true end end
+      local gi = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+      local okI, _, _, _, _, _, cls, sub = pcall(gi or function() end, it.id)
+      if okI and cls == 4 and sub and sub >= 1 and sub <= 4 then m.armor = sub end
+      -- erst gefunden, wenn der Client die Daten hat (sonst spaeter nochmal)
+      if next(m) then statMemo[it] = m end
+      return m
+    end
+    local function FState()
+      local db = ns.db
+      if not db then return { sel = {}, open = {} } end
+      local f = type(db.gearStatF) == "table" and db.gearStatF or {}
+      db.gearStatF = f
+      f.sel = type(f.sel) == "table" and f.sel or {}
+      f.open = type(f.open) == "table" and f.open or {}
+      return f
+    end
+    local function SecOn(f, key) local t = f.sel[key]; return type(t) == "table" and next(t) ~= nil end
+    local function FActive()
+      local f = FState()
+      return SecOn(f, "main") or SecOn(f, "sub") or SecOn(f, "armor") or tonumber(f.lvFrom) or tonumber(f.lvTo)
+    end
+    pg.FActive = FActive
+    -- 1.4zzy (M62): passt ein Item zu allen aktiven Abschnitten (ohne Level)
+    local function ItemPass(f, ks)
+      local m, s2, a2 = SecOn(f, "main"), SecOn(f, "sub"), SecOn(f, "armor")
+      local okM, okS, okA = not m, not s2, not a2
+      if m then for c in pairs(f.sel.main) do if ks[c] then okM = true; break end end end
+      if s2 then for c in pairs(f.sel.sub) do if ks[c] then okS = true; break end end end
+      if a2 then okA = ks.armor and f.sel.armor[ks.armor] and true or false end
+      return okM and okS and okA
+    end
+    -- Zahlen hinter jedem Wert: wie viele Belohnungen der jetzt gefilterten Quests (Platz und Level wie die Liste)
+    -- diesen Wert haben. Beim Oeffnen und bei jedem Haken neu, nicht im Takt
+    function pg.FCounts()
+      local f = FState()
+      local cnt = {}
+      local lo, hi = tonumber(f.lvFrom), tonumber(f.lvTo)
+      local slot = gearSlot
+      for _, q in ipairs(ns.gearQuests or {}) do
+        if not ((lo and (q.rl or 0) < lo) or (hi and (q.rl or 0) > hi)) then
+          for _, it in ipairs(q.items or {}) do
+            if not slot or SlotOf(it) == slot then
+              local ks = ItemKeys(it)
+              if ItemPass(f, ks) then
+                for c, v in pairs(ks) do
+                  if c == "armor" then cnt["armor:" .. v] = (cnt["armor:" .. v] or 0) + 1
+                  elseif v == true then cnt[c] = (cnt[c] or 0) + 1 end
+                end
+              end
+            end
+          end
+        end
+      end
+      return cnt
+    end
+    -- gibt true, wenn die Quest durch den Filter kommt
+    function pg.FPass(q)
+      local f = FState()
+      local lo, hi = tonumber(f.lvFrom), tonumber(f.lvTo)
+      if (lo and (q.rl or 0) < lo) or (hi and (q.rl or 0) > hi) then return false end
+      local m, s, a = SecOn(f, "main"), SecOn(f, "sub"), SecOn(f, "armor")
+      if not (m or s or a) then return true end
+      for _, it in ipairs(q.items or {}) do
+        local ks = ItemKeys(it)
+        local okM, okS, okA = not m, not s, not a
+        if m then for c in pairs(f.sel.main) do if ks[c] then okM = true; break end end end
+        if s then for c in pairs(f.sel.sub) do if ks[c] then okS = true; break end end end
+        if a then okA = ks.armor and f.sel.armor[ks.armor] and true or false end
+        if okM and okS and okA then return true end
+      end
+      return false
+    end
+    -- 1.4zzy (M61, S 04:06): Filter an die Stelle der Wertung, die Wertung wandert in den Filter Kasten (nichts geht verloren)
+    local fb = FlatButton(lb, TR"Filter", 130, 22)
+    fb:SetPoint("BOTTOMLEFT", slotB, "TOPLEFT", 0, 4)
+    pg.filterBtn = fb
+    local fp = CreateFrame("Frame", "TaurenRouteGearFilter", pg, BackdropTemplateMixin and "BackdropTemplate" or nil)
+    Template(fp, "Transparent")
+    fp:SetPoint("TOPLEFT", lb, "TOPRIGHT", 8, 0)
+    fp:SetWidth(300)
+    fp:SetFrameLevel((pg:GetFrameLevel() or 1) + 30)
+    fp:EnableMouse(true)
+    fp:Hide()
+    pg.filterPanel = fp
+    fp.title = fp:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontNormalSmall"))
+    fp.title:SetPoint("TOPLEFT", 8, -6)
+    fp.title:SetText(Section(TR"Filter"))
+    local fAll = FlatButton(fp, TR"alle", 50, 20)
+    local fNone = FlatButton(fp, TR"keine", 50, 20)
+    local fClose = FlatButton(fp, TR"zu", 36, 20)
+    fClose:SetPoint("TOPRIGHT", -6, -4)
+    fNone:SetPoint("RIGHT", fClose, "LEFT", -4, 0)
+    fAll:SetPoint("RIGHT", fNone, "LEFT", -4, 0)
+    fp.heads, fp.checks = {}, {}
+
+    local function Changed()
+      local f = FState()
+      fb:SetText(FActive() and TR"Filter an" or TR"Filter")
+      if pg.Fill then pg.Fill() end
+    end
+    local function Layout()
+      local f = FState()
+      local y = pg.weightBtn and -54 or -30
+      local cnt = pg.FCounts and pg.FCounts() or {}
+      for _, sec in ipairs(FSEC) do
+        local h = fp.heads[sec.key]
+        if not h then
+          h = FlatButton(fp, "", 284, 20)
+          h:SetScript("OnClick", function() local ff = FState(); ff.open[sec.key] = not ff.open[sec.key]; fp.Layout() end)
+          fp.heads[sec.key] = h
+        end
+        local open = f.open[sec.key]
+        local n = 0
+        if sec.opts then for _, o in pairs(f.sel[sec.key] or {}) do if o then n = n + 1 end end
+        else n = (tonumber(f.lvFrom) or tonumber(f.lvTo)) and 1 or 0 end
+        h:SetText((open and "- " or "+ ") .. sec.name .. (n > 0 and ("  (" .. n .. ")") or ""))
+        h:ClearAllPoints(); h:SetPoint("TOPLEFT", 8, y)
+        y = y - 22
+        if sec.opts then
+          for i, o in ipairs(sec.opts) do
+            local id = sec.key .. ":" .. tostring(o[1])
+            local c = fp.checks[id]
+            if not c then
+              c = T.CheckButton(fp); c:SetSize(20, 20)
+              c.t = fp:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+              c.t:SetPoint("LEFT", c, "RIGHT", 2, 0)
+              c.t:SetText(o[2])
+              c:SetScript("OnClick", function(self)
+                local ff = FState()
+                ff.sel[sec.key] = type(ff.sel[sec.key]) == "table" and ff.sel[sec.key] or {}
+                ff.sel[sec.key][o[1]] = self:GetChecked() and true or nil
+                fp.Layout(); Changed()
+              end)
+              fp.checks[id] = c
+            end
+            c:SetChecked(f.sel[sec.key] and f.sel[sec.key][o[1]] and true or false)
+            local nc = cnt[(sec.key == "armor" and ("armor:" .. o[1])) or o[1]]
+            c.t:SetText(o[2] .. ((nc and nc > 0) and ("  |cff9d9d9d" .. nc .. "|r") or ""))
+            if open then
+              -- zwei Spalten
+              local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
+              c:ClearAllPoints(); c:SetPoint("TOPLEFT", 14 + col * 140, y - row * 20)
+              c:Show(); c.t:Show()
+            else c:Hide(); c.t:Hide() end
+          end
+          if open then y = y - math.ceil(#sec.opts / 2) * 20 - 4 end
+        else
+          if not fp.lvFrom then
+            local function Box2(x)
+              local e = CreateFrame("EditBox", nil, fp, "InputBoxTemplate")
+              e:SetSize(34, 20); e:SetAutoFocus(false); e:SetNumeric(true); e:SetMaxLetters(2)
+              e:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+              e:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+              if SkinEdit then pcall(SkinEdit, e) end
+              return e
+            end
+            fp.lvFrom, fp.lvTo = Box2(), Box2()
+            fp.lvT1 = fp:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall")); fp.lvT1:SetText(TR"von")
+            fp.lvT2 = fp:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall")); fp.lvT2:SetText(TR"bis")
+            local function Save()
+              local ff = FState()
+              ff.lvFrom = tonumber(fp.lvFrom:GetText() or "")
+              ff.lvTo = tonumber(fp.lvTo:GetText() or "")
+              Changed()
+            end
+            fp.lvFrom:SetScript("OnEditFocusLost", Save); fp.lvTo:SetScript("OnEditFocusLost", Save)
+            fp.lvFrom:SetScript("OnTextChanged", function(_, user) if user then Save() end end)
+            fp.lvTo:SetScript("OnTextChanged", function(_, user) if user then Save() end end)
+          end
+          fp.lvFrom:SetText(f.lvFrom and tostring(f.lvFrom) or ""); fp.lvTo:SetText(f.lvTo and tostring(f.lvTo) or "")
+          if open then
+            fp.lvT1:ClearAllPoints(); fp.lvT1:SetPoint("TOPLEFT", 18, y - 4)
+            fp.lvFrom:ClearAllPoints(); fp.lvFrom:SetPoint("LEFT", fp.lvT1, "RIGHT", 10, 0)
+            fp.lvT2:ClearAllPoints(); fp.lvT2:SetPoint("LEFT", fp.lvFrom, "RIGHT", 10, 0)
+            fp.lvTo:ClearAllPoints(); fp.lvTo:SetPoint("LEFT", fp.lvT2, "RIGHT", 10, 0)
+            fp.lvT1:Show(); fp.lvT2:Show(); fp.lvFrom:Show(); fp.lvTo:Show()
+            y = y - 26
+          else fp.lvT1:Hide(); fp.lvT2:Hide(); fp.lvFrom:Hide(); fp.lvTo:Hide() end
+        end
+        y = y - 2
+      end
+      fp:SetHeight(-y + 8)
+    end
+    fp.Layout = Layout
+    fAll:SetScript("OnClick", function()
+      local f = FState()
+      for _, sec in ipairs(FSEC) do
+        if sec.opts then f.sel[sec.key] = {}; for _, o in ipairs(sec.opts) do f.sel[sec.key][o[1]] = true end end
+      end
+      Layout(); Changed()
+    end)
+    fNone:SetScript("OnClick", function()
+      local f = FState()
+      f.sel = {}; f.lvFrom, f.lvTo = nil, nil
+      Layout(); Changed()
+    end)
+    fClose:SetScript("OnClick", function() fp:Hide() end)
+    fb:SetScript("OnClick", function() if fp:IsShown() then fp:Hide() else Layout(); fp:Show() end end)
+    fb:HookScript("OnEnter", function(self)
+      ns.TipOwner(self, "ANCHOR_TOP")
+      GameTooltip:AddLine(TR"Filter")
+      GameTooltip:AddLine(TR"Nur Quests mit Belohnungen, die zu deiner Wahl passen. Im gleichen Abschnitt reicht einer der Werte, zwischen den Abschnitten muss alles passen. Nichts gewählt heisst keine Einschränkung.", 1, 1, 1, true)
+      GameTooltip:Show()
+    end)
+    fb:HookScript("OnLeave", function() GameTooltip:Hide() end)
+    pg:HookScript("OnHide", function() fp:Hide() end)
+    fb:SetText(FActive() and TR"Filter an" or TR"Filter")
     local sf = CreateFrame("ScrollFrame", "TaurenRouteGearList", lb, "UIPanelScrollFrameTemplate")
-    sf:SetPoint("TOPLEFT", 6, -48); sf:SetPoint("BOTTOMRIGHT", -26, 6)
+    sf:SetPoint("TOPLEFT", 6, -74); sf:SetPoint("BOTTOMRIGHT", -26, 6)
     SkinScroll(sf)
     local child = CreateFrame("Frame", nil, sf)
     child:SetSize(290, 10)
@@ -3333,6 +3899,47 @@ local function BuildBig()
     local route = FlatButton(rb, TR"Route berechnen", 120, 24, true)
     route:SetPoint("TOPRIGHT", -8, -8)
     pg.routeBtn = route
+    -- 1.4q (P163 M15): Wertung nach Klasse (Gewichte aus Daten\FWW_Stat_Gewichte.lua) oder nur nach einem Stat
+    local STATNAME = { str = TR"Stärke", agi = TR"Beweglichkeit", sta = TR"Ausdauer", int = TR"Intelligenz", spi = TR"Willenskraft",
+      sp = TR"Zaubermacht", heal = TR"Heilung" }
+    -- 1.4zf (M29, S Bild: Wertung lag unter Schlafsack holen). 1.4zn (M37, S 18:24): links ueber dem Knopf Platz
+    local wb = FlatButton(lb, TR"Wertung: Klasse", 130, 22)
+    wb:SetPoint("BOTTOMLEFT", slotB, "TOPLEFT", 0, 4)
+    pg.weightBtn = wb
+    -- 1.4zzy (M61): Wertung sitzt jetzt oben im Filter Kasten (Knopf Filter hat ihren Platz)
+    if pg.filterPanel then
+      local fp2 = pg.filterPanel
+      wb:SetParent(fp2); wb:ClearAllPoints(); wb:SetPoint("TOPLEFT", 8, -28); wb:SetWidth(284)
+      wb:SetFrameLevel(fp2:GetFrameLevel() + 3)
+    end
+    local function WLabel()
+      local f = ns.db and ns.db.gearFilter
+      wb:SetText(TR"Wertung: " .. (f and (STATNAME[f] or f) or TR"Klasse"))
+    end
+    pg.WLabel = WLabel
+    local function SetFilter(code)
+      if not ns.db then return end
+      ns.db.gearFilter = code
+      WLabel()
+      pg.text.Set({ TR"Suche Quests ..." })
+      if ns.GearScan then ns.GearScan(function() gearSel = nil; pg.Fill() end) end
+    end
+    wb:SetScript("OnClick", function(self)
+      local cur = ns.db and ns.db.gearFilter
+      local list = { { text = TR"Klasse (Gewichte je Klasse)", checked = cur == nil, fn = function() SetFilter(nil) end } }
+      for _, f in ipairs(ns.GearFilters and ns.GearFilters() or {}) do
+        local code = f.code
+        table.insert(list, { text = TR"nur " .. (STATNAME[code] or f.key), checked = cur == code, fn = function() SetFilter(code) end })
+      end
+      T.ShowMenu(self, list)
+    end)
+    wb:HookScript("OnEnter", function(self)
+      ns.TipOwner(self, "ANCHOR_TOP")
+      GameTooltip:AddLine(TR"Wertung")
+      GameTooltip:AddLine(TR"Klasse: jedes Teil wird mit den Werten für deine Klasse gewertet. Oder nur ein Stat, dann zählen nur Teile mit diesem Stat.", 1, 1, 1, true)
+      GameTooltip:Show()
+    end)
+    wb:HookScript("OnLeave", function() GameTooltip:Hide() end)
     route:SetScript("OnClick", function() if ns.GearRoute then ns.GearRoute() end end)
     local scan = FlatButton(rb, TR"Neu suchen", 90, 24)
     scan:SetPoint("RIGHT", route, "LEFT", -6, 0)
@@ -3418,6 +4025,7 @@ local function BuildBig()
       for _, q in ipairs(ns.gearQuests or {}) do
         local ok = not gearSlot
         if gearSlot then for _, it in ipairs(q.items or {}) do if SlotOf(it) == gearSlot then ok = true end end end
+        if ok and pg.FPass and not pg.FPass(q) then ok = false end
         if ok then table.insert(list, q) end
       end
       -- Upgrade: neu (leerer Platz) zuerst, dann die groessten Prozent
@@ -3429,11 +4037,13 @@ local function BuildBig()
         end
         return q.pct or 1000
       end
+      -- 1.4q (M15): Dungeon Quests immer unten
       if gearSort == "pct" then
-        table.sort(list, function(a, b) local x, y = Up(a), Up(b); if x ~= y then return x > y end; return a.rl < b.rl end)
+        table.sort(list, function(a, b) if a.dungeon ~= b.dungeon then return not a.dungeon end; local x, y = Up(a), Up(b); if x ~= y then return x > y end; return a.rl < b.rl end)
       else
-        table.sort(list, function(a, b) if a.rl ~= b.rl then return a.rl < b.rl end; return Up(a) > Up(b) end)
+        table.sort(list, function(a, b) if a.dungeon ~= b.dungeon then return not a.dungeon end; if a.rl ~= b.rl then return a.rl < b.rl end; return Up(a) > Up(b) end)
       end
+      if pg.WLabel then pg.WLabel() end
       local L = UnitLevel("player")
       for i, q in ipairs(list) do
         local r = pg.rows[i]
@@ -3461,7 +4071,7 @@ local function BuildBig()
         r.cb:SetScript("OnClick", function() ns.GearToggle(q.id); pg.Fill() end)
         r.b:SetText(("%s%d|r %s%s|r |cff40ff40%s|r%s"):format(col, q.rl, gearSel == q and "|cffffd100" or "|cffffffff", q.name,
           q.pct and ("+" .. math.floor(q.pct + 0.5) .. "%") or TR"neu",
-          #(q.pre or {}) > 0 and (" |cffff9030+" .. #q.pre .. TR" Vorquest|r") or ""))
+          (#(q.pre or {}) > 0 and (" |cffff9030+" .. #q.pre .. TR" Vorquest|r") or "") .. (q.rep and TR" |cffff9030Ruf|r" or "")))
         r.b:SetScript("OnClick", function() gearSel = q; pg.ShowSel(); pg.Fill() end)
         r.cb:Show(); r.b:Show()
       end
@@ -3469,8 +4079,9 @@ local function BuildBig()
       child:SetHeight(#list * 24 + 10)
       if #list == 0 and not (ns.GearBusy and ns.GearBusy()) then
         for _, r in ipairs(pg.items) do r:Hide() end
-        pg.text.Set({ gearSlot and (TR"Für " .. gearSlot .. TR" gibt es gerade keine Quest mit besserer Belohnung. Platz: alle zeigt wieder alles.")
-          or TR"Keine Quests mit besserer Ausrüstung gefunden. Neu suchen, wenn Questie fertig geladen hat." })
+        pg.text.Set({ (pg.FActive and pg.FActive() and TR"Mit diesem Filter gibt es keine Quest. Im Filter auf keine klicken zeigt wieder alles.")
+          or gearSlot and (TR"Für " .. gearSlot .. TR" gibt es gerade keine Quest mit besserer Belohnung. Platz: alle zeigt wieder alles.")
+          or ns.gearScanWhy or TR"Keine Quests mit besserer Ausrüstung gefunden. Neu suchen, wenn Questie fertig geladen hat." })
       else
         pg.ShowSel()
       end
@@ -3601,6 +4212,88 @@ local function BuildBig()
     pg.text = ScrollText(rb, "TaurenRouteDetailText", ns.FontName("GameFontHighlightSmall"))
     pg.text:SetPoint("TOPLEFT", 8, -10); pg.text:SetPoint("BOTTOMRIGHT", -26, 8)
     pg.sel = { kind = "all" }
+    -- 1.4n (P161 soll2, S: "Diagramm so wie bei Jetzt, klein daneben, mit Prozenten" und Gold "Zahlen in einer Spalte,
+    -- rechts die Namen in einer Spalte", Balken rot gruen wie auf der Gold Seite)
+    local CH = { W = 300, MIN_W = 160, GAP = 30, AMT_W = 90, NAME_X = 104, BAR_X = 290, BAR_W = 140 }
+    pg.charts = {}
+    for _, k in ipairs({ "src", "cnt", "split" }) do
+      local b = StackBar(pg.text.child); b:SetWidth(CH.W); b:Hide(); pg.charts[k] = b
+    end
+    pg.goldRows = {}
+    local function GoldRow(i)
+      local r = pg.goldRows[i]
+      if r then return r end
+      r = CreateFrame("Frame", nil, pg.text.child)
+      r:SetSize(CH.BAR_X + CH.BAR_W, 14)
+      r.amt = r:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+      r.amt:SetPoint("TOPLEFT", 0, 0); r.amt:SetWidth(CH.AMT_W); r.amt:SetJustifyH("RIGHT")
+      r.name = r:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+      r.name:SetPoint("TOPLEFT", CH.NAME_X, 0); r.name:SetWidth(CH.BAR_X - CH.NAME_X - 8); r.name:SetJustifyH("LEFT"); r.name:SetWordWrap(false)
+      r.bar = r:CreateTexture(nil, "ARTWORK")
+      r.bar:SetPoint("TOPLEFT", CH.BAR_X, -2); r.bar:SetHeight(10)
+      pg.goldRows[i] = r
+      return r
+    end
+    function pg.PlaceCharts(mk)
+      local tx = pg.text
+      local fw = tx.fs:GetWidth() or 0
+      mk = mk or {}
+      -- Diagramme rechts neben dem breitesten Text der Abschnitte
+      local first, last = nil, nil
+      for _, k in ipairs({ "src", "cnt", "split" }) do
+        local m = mk[k]
+        if m then first = first or m.line; last = m.line end
+      end
+      local x = 0
+      if first and not tx.meas then tx.LineY(1) end
+      if first and tx.meas then
+        for i = first, math.min(#(tx.lines or {}), last + 3) do
+          tx.meas:SetWidth(4000); tx.meas:SetText(tx.lines[i])
+          local w = tx.meas.GetUnboundedStringWidth and tx.meas:GetUnboundedStringWidth() or tx.meas:GetStringWidth()
+          if (w or 0) > x then x = w end
+        end
+        tx.meas:SetText("")
+      end
+      x = x + CH.GAP
+      local cw = math.min(CH.W, fw - x - 10)
+      local shown = 0
+      for k, b in pairs(pg.charts) do
+        local m = mk[k]
+        local y = m and cw >= CH.MIN_W and tx.LineY(m.line)
+        if y then
+          b:ClearAllPoints(); b:SetPoint("TOPLEFT", tx.fs, "TOPLEFT", x, -y - 2); b:SetWidth(cw)
+          b.Set(m.parts); b:Show(); shown = shown + 1
+        else
+          b:Hide()
+        end
+      end
+      -- Gold: Betrag, Name, Balken je Zeile
+      local g = mk.gold
+      local n = 0
+      if g then
+        local mx = 0
+        for _, r in ipairs(g.rows) do if r.v > mx then mx = r.v end end
+        local M = ns.Money or tostring
+        for i, row in ipairs(g.rows) do
+          local y = tx.LineY(g.line + i - 1)
+          if y then
+            n = n + 1
+            local r = GoldRow(n)
+            r:ClearAllPoints(); r:SetPoint("TOPLEFT", tx.fs, "TOPLEFT", 12, -y)
+            r.amt:SetText((row.plus and "|cff40ff40+ " or "|cffff5050- ") .. M(row.v) .. "|r")
+            r.name:SetText(row.name or "")
+            r.bar:SetWidth(math.max(1, mx > 0 and row.v / mx * CH.BAR_W or 1))
+            if row.plus then r.bar:SetColorTexture(0.25, 0.8, 0.3, 0.85) else r.bar:SetColorTexture(0.9, 0.25, 0.25, 0.85) end
+            r:Show()
+          end
+        end
+      end
+      for i = n + 1, #pg.goldRows do pg.goldRows[i]:Hide() end
+      if ns.TestLog then
+        local key = shown .. ":" .. n
+        if pg.chartSaid ~= key then pg.chartSaid = key; ns.TestLog("FENSTER", ("Pro Level Diagramme %d, Gold Zeilen %d in Spalten"):format(shown, n)) end
+      end
+    end
     function pg.Entry(sel)
       local p = ns.PerfData and ns.PerfData()
       if not p then return nil, "?" end
@@ -3643,7 +4336,18 @@ local function BuildBig()
       for i = #list + 1, #pg.btns do pg.btns[i]:Hide() end
       child:SetHeight(#list * 22 + 10)
       local e, title = pg.Entry(pg.sel)
-      pg.text.Set(ns.DetailLines and ns.DetailLines(e, title) or {})
+      local lines, mk = {}, nil
+      if ns.DetailLines then lines, mk = ns.DetailLines(e, title) end
+      -- Gold Zeilen werden zu Platzhaltern, die Spalten liegen darueber (Text bleibt in pg.goldText fuer Tests)
+      if mk and mk.gold then
+        pg.goldText = {}
+        for i = 1, #mk.gold.rows do
+          local li = mk.gold.line + i - 1
+          pg.goldText[i] = lines[li]; lines[li] = " "
+        end
+      end
+      pg.text.Set(lines)
+      pg.PlaceCharts(mk)
     end
   end
 
@@ -3694,7 +4398,10 @@ local function BuildBig()
   end
 
 
-  ns.Ticker(1, function() if big:IsShown() then ns.RefreshBig("tick") end end)
+  -- 1.4zzn (P217 Punkt 6): grosses Fenster rechnet nur offen (wie bisher), jetzt alle BIG_TICK_S (5 s) statt jede Sekunde,
+  -- beim Oeffnen und bei Klicks sofort wie bisher
+  ns.BIG_TICK_S = ns.BIG_TICK_S or 5
+  ns.Ticker(ns.BIG_TICK_S, function() if big:IsShown() then ns.RefreshBig("tick") end end)
 end
 
 -- Erklaerung pro Seite, nur wo der Text allein nicht reicht
@@ -3887,12 +4594,38 @@ function ns.RefreshBig(auto)
     local mx = pg.rate.Set(g.rates, labels, #g.rates, ACCENT, TR"Daten kommen nach 2 Minuten")
     pg.rate.info:SetText(mx and mx > 0 and (TR"max %s XP/Std"):format(num(mx)) or "")
     local vals, lab, hi = {}, {}, nil
-    for i, e in ipairs(g.levels) do vals[i] = e.t; lab[i] = tostring(e.lv); if e.cur then hi = i end end
+    -- 1.4m (P161 soll1): nur die letzten N Level (Knoepfe - und + je 5, db.statLvlN), alle wenn N >= Anzahl
+    local nAll = #g.levels
+    if not pg.lvl.rLbl then
+      pg.lvl.AddRange(function() return ns.db.statLvlN end, function(d)
+        local n = (ns.db.statLvlN or 15) + d
+        ns.db.statLvlN = math.max(5, n)
+        if ns.RefreshBig then ns.RefreshBig() end
+      end)
+    end
+    local N = math.min(nAll, ns.db.statLvlN or 15)
+    pg.lvl.rLbl:SetText(N >= nAll and (TR"alle %d Level"):format(nAll) or (TR"letzte %d Level"):format(N))
+    if ns.TestLog and pg.lvlNSaid ~= N .. "/" .. nAll then pg.lvlNSaid = N .. "/" .. nAll; ns.TestLog("FENSTER", ("Leistung Skala Zeit pro Level %d von %d Level (Knoepfe pg.lvl.rMinus, pg.lvl.rPlus)"):format(N, nAll)) end
+    local k = 0
+    for i = nAll - N + 1, nAll do
+      local e = g.levels[i]
+      if e then k = k + 1; vals[k] = e.t; lab[k] = tostring(e.lv); if e.cur then hi = k end end
+    end
     local mx2 = pg.lvl.Set(vals, lab, hi, { 0.58, 0.35, 0.85 })
     pg.lvl.info:SetText(mx2 and mx2 > 0 and (TR"längstes: %s"):format(fmt(mx2)) or "")
     local list = {}
-    for _, z in ipairs(bs.zones or {}) do
-      table.insert(list, { name = z.name, v = z.rate, text = num(z.rate) .. TR" XP/Std" })
+    -- 1.4n (P161 soll1 Punkt 3): Klick auf ein Level rechts, dann links nur die Zonen dieses Levels
+    local selL = pg.selLvl
+    if selL and ns.ZoneLevelList then
+      for _, z in ipairs(ns.ZoneLevelList(selL)) do
+        table.insert(list, { name = z.name, v = z.rate, text = (z.exact and "" or "~") .. num(z.rate) .. TR" XP/Std" })
+      end
+      pg.zoneBox.title:SetText(Section((TR"XP pro Stunde je Zone, Level %d"):format(selL)))
+    else
+      for _, z in ipairs(bs.zones or {}) do
+        table.insert(list, { name = z.name, v = z.rate, text = num(z.rate) .. TR" XP/Std" })
+      end
+      pg.zoneBox.title:SetText(Section(TR"XP pro Stunde je Zone"))
     end
     table.sort(list, function(a, b) return a.v > b.v end)
     pg.zones.Set(list, ACCENT)
@@ -3925,6 +4658,17 @@ function ns.RefreshBig(auto)
       { name = TR"Tot", v = sp.dead or 0, col = { 0.55, 0.55, 0.55 } },
       { name = TR"Stillstand", v = sp.idle or 0, col = { 1, 0.8, 0.2 } },
     })
+    local curL = UnitLevel("player") or 1
+    local lsp = (ns.PerfData and (ns.PerfData().lvl or {})[curL] or {}).split or {}
+    pg.splitLvlLab:SetText((TR"Level %d"):format(curL))
+    pg.splitLvl.Set({
+      { name = TR"Kampf", v = lsp.fight or 0, col = { 0.9, 0.25, 0.25 } },
+      { name = TR"Laufen", v = lsp.walk or 0, col = { 0.3, 0.75, 1 } },
+      { name = TR"Fliegen", v = lsp.fly or 0, col = { 0.4, 0.9, 0.5 } },
+      { name = TR"Tot", v = lsp.dead or 0, col = { 0.55, 0.55, 0.55 } },
+      { name = TR"Stillstand", v = lsp.idle or 0, col = { 1, 0.8, 0.2 } },
+    })
+    if ns.TestLog and pg.splitLvlSaid ~= curL then pg.splitLvlSaid = curL; ns.TestLog("FENSTER", ("Leistung Zeit Balken Sitzung und Level %d"):format(curL)) end
     local lines = ns.PerfLines()
     local tips = ns.StatTips and ns.StatTips() or {}
     local bl = ns.BestLine and ns.BestLine() or ""
@@ -3933,7 +4677,9 @@ function ns.RefreshBig(auto)
     for _, t in ipairs(tips) do table.insert(head, TR"|cff7fd1b9Tipp:|r " .. t) end
     if #head > 0 then table.insert(head, ""); for _, l in ipairs(lines) do table.insert(head, l) end; lines = head end
     -- 1.3zze (K 04:33): Zeit nach Art oben, je Level ein Balken
-    local al = ns.ActLines and ns.ActLines() or {}
+    local al, alMap = {}, nil
+    if ns.ActLines then al, alMap = ns.ActLines(pg.selLvl) end
+    al = al or {}
     -- 1.3zzl (Pr 06:29: Zeile im Sim nicht gefunden): einmal je Anzahl ins Log, damit der Test es sieht
     if ns.TestLog and #al ~= (pg.actLogged or -1) then pg.actLogged = #al; ns.TestLog("FENSTER", ("Leistung Zeit nach Art %d Zeilen in TaurenRouteBigPerf: %s"):format(#al, tostring(al[2] and al[2]:gsub("|T.-|t", "") or "keine"))) end
     if #al > 0 then table.insert(al, ""); for _, l in ipairs(lines) do table.insert(al, l) end; lines = al end
@@ -3962,6 +4708,12 @@ function ns.RefreshBig(auto)
       end
     end
     pg.text.Set(lines)
+    -- 1.4n (P161 soll1 Punkt 3): Level Zeilen in "Zeit nach Art" sind klickbar (die Zeilen von al stehen ganz oben)
+    pg.text.SetClicks(alMap, function(lv)
+      pg.selLvl = (pg.selLvl ~= lv) and lv or nil
+      if ns.TestLog then ns.TestLog("FENSTER", ("Leistung Level %s aufgeklappt"):format(tostring(pg.selLvl or "zu"))) end
+      if ns.RefreshBig then ns.RefreshBig() end
+    end)
   elseif bigView == "statgold" then
     pg.text.Set(ns.GoldRepLines and ns.GoldRepLines() or {})
     local gd = ns.GoldStatData and ns.GoldStatData() or { inn = {}, out = {}, levels = {} }
@@ -3995,7 +4747,16 @@ function ns.RefreshBig(auto)
     })
     local vals, lab = {}, {}
     for i, e in ipairs(bs.levels or {}) do vals[i] = e.sum / 3600; lab[i] = tostring(e.lv) end
-    local mx = pg.curve.Set(vals, lab, #vals, { 0.58, 0.35, 0.85 })
+    -- 1.4m (P161 soll3, S: "Klick auf den Balken bei Level 28 zeigt alles von 1 bis 28"): rechts statt Prognose, nochmal Klick zurueck
+    pg.curve.onBar = function(i)
+      pg.curveSel = (pg.curveSel ~= i) and i or nil
+      if ns.RefreshBig then ns.RefreshBig() end
+    end
+    pg.curve.tipBar = function(i)
+      local e = (bs.levels or {})[i]
+      if e then GameTooltip:AddLine((TR"Level %d: %s gesamt"):format(e.lv, fmt(e.sum))); GameTooltip:AddLine(TR"Klick: alles bis zu diesem Level", 1, 1, 1) end
+    end
+    local mx = pg.curve.Set(vals, lab, pg.curveSel or #vals, { 0.58, 0.35, 0.85 })
     pg.curve.info:SetText(mx and mx > 0 and (TR"%.1f Std gesamt"):format(mx) or "")
     local fc = {}
     table.insert(fc, (TR"Erfasste Spielzeit: |cffffffff%s|r"):format(fmt(bs.totalTime or 0)))
@@ -4010,6 +4771,22 @@ function ns.RefreshBig(auto)
     local kills = c.kill or 0
     if kills > 0 then table.insert(fc, (TR"XP pro Kill im Schnitt: |cffffffff%s|r"):format(num((src.kill or 0) / kills))) end
     if (c.quest or 0) > 0 then table.insert(fc, (TR"XP pro Quest im Schnitt: |cffffffff%s|r"):format(num((src.quest or 0) / c.quest))) end
+    local selE = pg.curveSel and (bs.levels or {})[pg.curveSel]
+    if selE then
+      fc = { (TR"|cffffd100Level 1 bis %d|r  |cff9d9d9d(nochmal klicken: Prognose)|r"):format(selE.lv),
+        (TR"Spielzeit bis dahin: |cffffffff%s|r"):format(fmt(selE.sum)) }
+      local zs = {}
+      for _, z in ipairs(bs.zones or {}) do if (z.from or 99) <= selE.lv then zs[#zs + 1] = z end end
+      if #zs > 0 then
+        fc[#fc + 1] = ""
+        fc[#fc + 1] = TR"|cffffd100Zonen bis dahin|r"
+        for _, z in ipairs(zs) do fc[#fc + 1] = ("   %s  |cff9d9d9d%s, Lvl %d-%d|r"):format(z.name, fmt(z.t), z.from or 0, math.min(z.to or 0, selE.lv)) end
+      end
+      if ns.GoldLinesTo then
+        fc[#fc + 1] = ""
+        for _, l in ipairs(ns.GoldLinesTo(selE.lv)) do fc[#fc + 1] = l end
+      end
+    end
     pg.fc.Set(fc)
     local zl = {}
     for _, z in ipairs(bs.zones or {}) do
@@ -4597,6 +5374,88 @@ local STATUS_TXT = { ok = TR"|cff40ff40ok|r", danger = TR"|cffff9030gefährlich|
 
 -- 20.4b2 (K 20:05 a, S 19:52): Berufe Zonen. Nur EINE Zone waehlbar. Bei mehreren Sachen nur Zonen, in denen alle
 -- vorkommen; Sachen ohne gemeinsame Zone sind grau. Zone waehlen bei laufender Berufe Route rechnet die Runde dort neu.
+-- 1.4x (P172): Fenster "Optimale Route": Berufe waehlen, 5 Vorschlaege mit dem meisten Gold, Los uebernimmt Sachen und
+-- Zone und oeffnet das bekannte Fenster Route planen (Zeit, Menge, Endlos)
+local profBestWin
+local function ShowProfBest(onPick)
+  local w = profBestWin
+  if not w then
+    w = T.Window("ForeverWegweiserProfBest", 520, 420, TR"Optimale Route")
+    profBestWin = w
+    local top = w.top or 40
+    w.keys = {}
+    for _, pp in ipairs(ns.PROFS or {}) do if pp.key ~= "fish" and ns.ProfSkill(pp.key) then w.keys[pp.key] = true end end
+    w.cbs = {}
+    local prev
+    for i, pp in ipairs(ns.PROFS or {}) do
+      if pp.key ~= "fish" then
+        local cb = T.CheckButton(w); cb:SetSize(20, 20)
+        if prev then cb:SetPoint("LEFT", prev.lbl, "RIGHT", 10, 0) else cb:SetPoint("TOPLEFT", 18, -top - 8) end
+        cb.lbl = w:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+        cb.lbl:SetPoint("LEFT", cb, "RIGHT", 2, 0)
+        cb.lbl:SetText(("|T%s:14:14|t %s"):format(pp.icon, pp.short))
+        cb.key = pp.key
+        cb:SetScript("OnClick", function(self) w.keys[self.key] = self:GetChecked() and true or nil; w.Fill() end)
+        w.cbs[#w.cbs + 1] = cb
+        prev = cb
+      end
+    end
+    w.info = w:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontDisableSmall"))
+    w.info:SetPoint("TOPLEFT", 18, -top - 36); w.info:SetPoint("RIGHT", w, "RIGHT", -18, 0); w.info:SetJustifyH("LEFT")
+    w.rows = {}
+    for i = 1, ns.PROF_BEST.N do
+      local r = CreateFrame("Frame", nil, w)
+      r:SetHeight(46)
+      r:SetPoint("TOPLEFT", 18, -top - 56 - (i - 1) * 50); r:SetPoint("RIGHT", w, "RIGHT", -18, 0)
+      r.t = r:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontNormal"))
+      r.t:SetPoint("TOPLEFT", 0, -2); r.t:SetPoint("RIGHT", r, "RIGHT", -90, 0); r.t:SetJustifyH("LEFT")
+      r.s = r:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+      r.s:SetPoint("TOPLEFT", r.t, "BOTTOMLEFT", 0, -3); r.s:SetPoint("RIGHT", r, "RIGHT", -90, 0); r.s:SetJustifyH("LEFT"); r.s:SetWordWrap(true)
+      r.go = T.Button(r, TR"Los", 80, 22, true)
+      r.go:SetPoint("RIGHT", 0, 0)
+      w.rows[i] = r
+    end
+    w.close = T.Button(w, TR"Schliessen", 110, 24)
+    w.close:SetPoint("BOTTOMRIGHT", -18, 16)
+    w.close:SetScript("OnClick", function() w:Hide() end)
+    function w.Fill()
+      for _, cb in ipairs(w.cbs) do cb:SetChecked(w.keys[cb.key] and true or false) end
+      local res = ns.ProfBestRoutes(w.keys)
+      for _, r in ipairs(w.rows) do r:Hide() end
+      if not res then
+        w.info:SetText(TR"Gold pro Stunde wird gerechnet, gleich nochmal schauen ...")
+        if ns.ProfGoldList and not w.busy then w.busy = true; ns.ProfGoldList(function() w.busy = nil; if w:IsShown() then w.Fill() end end) end
+        return
+      end
+      local src = ns.AHSources and ns.AHSources() or {}
+      w.info:SetText((#res == 0 and TR"Nichts gefunden: Beruf anhaken (mit Skill) oder Neu suchen auf der Seite Berufe." or
+        TR"Die 5 Zonen mit dem meisten Gold pro Stunde für deine Berufe. Der Wert passt sich an, wenn du farmst.") ..
+        (#src > 0 and "" or TR"  Ohne AH Addon nur Händler Preise."))
+      for i, e in ipairs(res) do
+        local r = w.rows[i]
+        local names = {}
+        for _, it in ipairs(e.items) do
+          local o = ns.ProfItem and ns.ProfItem(it.id)
+          names[#names + 1] = o and ns.ProfItemName(o) or (ns.Api.GetItemInfo(it.id) or tostring(it.id))
+        end
+        r.t:SetText(("%d. %s  |cff40ff40ca %s/Std|r  |cff9d9d9d%s|r"):format(i, ns.ZoneName and ns.ZoneName(e.map) or "?",
+          ns.Money and ns.Money(e.gph) or tostring(e.gph), e.ah and TR"Verkauf im AH" or TR"Verkauf beim Händler"))
+        r.s:SetText(table.concat(names, ", "))
+        r.go:SetScript("OnClick", function()
+          if ns.TestLog then ns.TestLog("BERUFE", ("Optimale Route %d gewaehlt: Zone %s, %d Sachen"):format(i, tostring(e.map), #e.items)) end
+          w:Hide()
+          if onPick then onPick(e) end
+        end)
+        r:Show()
+      end
+      if ns.TestLog and w.said ~= #res then w.said = #res; ns.TestLog("BERUFE", ("Optimale Route: %d Vorschlaege"):format(#res)) end
+    end
+  end
+  w.onPick = onPick
+  w:Show()
+  w.Fill()
+end
+
 local function ProfCommonZones()
   local sel = ns.ProfSel()
   local common, nItems, missing = nil, 0, false
@@ -4681,6 +5540,103 @@ local function BuildBerufe(pg)
   pg.plan:SetPoint("TOPRIGHT", pg.hero.top, "TOPRIGHT", -14, -14)
   pg.reset = T.Button(pg.hero.top, TR"Zurücksetzen", 110, 26)
   pg.reset:SetPoint("RIGHT", pg.plan, "LEFT", -6, 0)
+  -- 1.4x (P172): Optimale Route, 5 Vorschlaege. Los: Sachen und Zone uebernehmen, dann Route planen wie gewohnt
+  pg.best5 = T.Button(pg.hero.top, TR"Optimale Route", 130, 26)
+  pg.best5:SetPoint("RIGHT", pg.reset, "LEFT", -6, 0)
+  pg.best5:SetScript("OnClick", function()
+    ShowProfBest(function(e)
+      ns.ProfReset()
+      for _, it in ipairs(e.items) do ns.ProfToggleItem(it.id) end
+      local zs = ns.ProfSel().zones
+      for m in pairs(zs) do zs[m] = nil end
+      zs[e.map] = true
+      if pg.Fill then pg.Fill() end
+      ShowProfPlan()
+    end)
+  end)
+  pg.best5:SetScript("OnEnter", function(self)
+    ns.TipOwner(self, "ANCHOR_BOTTOM"); GameTooltip:AddLine(TR"Optimale Route")
+    GameTooltip:AddLine(TR"Berufe wählen, dann zeigt es die 5 Zonen mit dem meisten Gold pro Stunde. Los übernimmt alles für Route planen.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  pg.best5:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  -- 1.4x (P170 Rest, S: "Gehe zu Beruf und das Berufefenster oeffnet sich"): sicherer Knopf, der den Berufs Zauber wirkt.
+  -- Nur fuer Berufe mit eigenem Fenster (Bergbau: Verhuettung, Stoff: Schneiderei, Kochen), Attribut nur ausserhalb vom Kampf
+  local gw = CreateFrame("Button", "ForeverWegweiserProfWindowBtn", pg.hero.top, "SecureActionButtonTemplate")
+  gw:SetSize(120, 26)
+  gw:SetPoint("RIGHT", pg.best5, "LEFT", -6, 0)
+  if T.SkinButton then pcall(T.SkinButton, gw) end
+  gw.fs = gw:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlight")); gw.fs:SetPoint("CENTER")
+  gw.fs:SetText(TR"Gehe zu Beruf")
+  gw.bg = gw:CreateTexture(nil, "BACKGROUND"); gw.bg:SetAllPoints(); gw.bg:SetColorTexture(0, 0, 0, 0.6)
+  local ghl = gw:CreateTexture(nil, "HIGHLIGHT"); ghl:SetAllPoints(); ghl:SetColorTexture(1, 1, 1, 0.1)
+  gw:RegisterForClicks("AnyUp")
+  gw:SetAttribute("type", "spell")
+  gw:HookScript("OnClick", function(self) if ns.TestLog then ns.TestLog("BERUFE", "Gehe zu Beruf: " .. tostring(self:GetAttribute("spell"))) end end)
+  gw:SetScript("OnEnter", function(self)
+    ns.TipOwner(self, "ANCHOR_BOTTOM"); GameTooltip:AddLine(TR"Gehe zu Beruf")
+    GameTooltip:AddLine((TR"Öffnet dein Berufsfenster: %s"):format(tostring(self:GetAttribute("spell") or "?")), 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  gw:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  gw:Hide()
+  pg.goProf = gw
+  -- 1.4zzw (P221 M60): Erz Runde, nur bei Bergbau. Laeuft sie, beendet der Knopf sie
+  local eb = FlatButton(pg.hero.top, TR"Erz Runde", 110, 26)
+  eb:SetPoint("RIGHT", gw, "LEFT", -6, 0)
+  eb:SetScript("OnClick", function()
+    if ns.ErzKreisAktiv and ns.ErzKreisAktiv() then ns.ErzKreisStop() elseif ns.ErzKreis then ns.ErzKreis() end
+    C_Timer.After(0.5, function() if pg.UpdateErzBtn then pg.UpdateErzBtn() end end)
+  end)
+  eb:HookScript("OnEnter", function(self)
+    ns.TipOwner(self, "ANCHOR_BOTTOM"); GameTooltip:AddLine(TR"Erz Runde")
+    GameTooltip:AddLine(TR"Läuft alle Erz Stellen dieser Zone ab, die zu deinem Bergbau Skill passen, in kurzer Reihenfolge und am Ende wieder von vorne. Nochmal klicken beendet die Runde.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  eb:HookScript("OnLeave", function() GameTooltip:Hide() end)
+  eb:Hide()
+  pg.erzBtn = eb
+  function pg.UpdateErzBtn()
+    eb:SetText((ns.ErzKreisAktiv and ns.ErzKreisAktiv()) and TR"Erz Runde beenden" or TR"Erz Runde")
+  end
+  function pg.UpdateGoProf(key)
+    eb:SetShown(key == "mine")
+    if key == "mine" then pg.UpdateErzBtn() end
+    if InCombatLockdown and InCombatLockdown() then return end
+    local sp = ns.ProfWindowSpell and ns.ProfWindowSpell(key)
+    gw:SetAttribute("spell", sp)
+    gw:SetShown(sp ~= nil)
+  end
+  -- 1.4zh2 (P200, S 14:56): Suche aktiv halten (nur Bergbau und Kraeuterkunde, Standard aus)
+  local kt = T.CheckButton(pg.hero.top); kt:SetSize(20, 20)
+  kt:SetPoint("TOPRIGHT", pg.hero.top, "TOPRIGHT", -150, -46)
+  kt.fs = pg.hero.top:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+  -- 1.4zx (M46, S 03:16): Symbol der Suche neben dem Haken, damit man sieht, welche gemeint ist
+  kt.ic = pg.hero.top:CreateTexture(nil, "OVERLAY")
+  kt.ic:SetSize(16, 16)
+  kt.ic:SetPoint("LEFT", kt, "RIGHT", 2, 0)
+  kt.ic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  kt.fs:SetPoint("LEFT", kt.ic, "RIGHT", 3, 0)
+  kt.fs:SetText(TR"Suche aktiv halten")
+  kt:SetScript("OnClick", function(self) if ns.ProfTrackSet then ns.ProfTrackSet(kt.key, self:GetChecked() and true or false) end end)
+  kt:SetScript("OnEnter", function(self)
+    ns.TipOwner(self, "ANCHOR_BOTTOM"); GameTooltip:AddLine(TR"Suche aktiv halten")
+    GameTooltip:AddLine(TR"Hält die Mineraliensuche oder Kräutersuche an: alle 5 Min, nach dem Einloggen, Landen und Wiederbeleben. Es geht nur eine Suche gleichzeitig.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  kt:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  pg.keepTrack = kt
+  function pg.UpdateKeepTrack(key)
+    local on = key == "mine" or key == "herb"
+    kt.key = key
+    kt:SetShown(on); kt.fs:SetShown(on); kt.ic:SetShown(on)
+    if on then
+      local sp = ns.KEEP_TRACK and ns.KEEP_TRACK.SPELL[key]
+      local tex = sp and ((C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sp)) or (GetSpellTexture and GetSpellTexture(sp)))
+      kt.ic:SetTexture(tex or (key == "mine" and "Interface\\Icons\\Spell_Nature_Earthquake" or "Interface\\Icons\\INV_Misc_Flower_02"))
+    end
+    if on then kt:SetChecked(ns.ProfTrackKey and ns.ProfTrackKey() == key) end
+  end
   pg.plan:SetScript("OnClick", function()
     if ns.ProfSelCount() == 0 then ns.Print(TR"Erst links etwas anhaken."); return end
     ShowProfPlan()
@@ -4739,10 +5695,37 @@ local function BuildBerufe(pg)
   pg.sub:SetPoint("RIGHT", rb, "RIGHT", -10, 0); pg.sub:SetJustifyH("LEFT")
   -- Kopfzeile der Tabelle
   pg.cols = {}
-  for i = 1, 5 do
+  -- 1.4u (P170 soll 4 und soll2 1): Klick auf eine Spalte sortiert (nochmal Klick andersrum). Zahlen zuerst gross
+  pg.colBtn = {}
+  pg.sortA, pg.sortR = {}, {}
+  local SORT_DESC = { areas = { [3] = true, [5] = true }, rec = { [4] = true, [5] = true, [6] = true } }
+  -- 1.4zzv (M22): 6 Spalten (Rezepte: Wert dazu)
+  for i = 1, 6 do
     local fs = JText(rb, ns.FontName("GameFontDisableSmall"))
     pg.cols[i] = fs
+    local b = CreateFrame("Button", nil, rb)
+    b:SetHeight(16)
+    local hl = b:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.08)
+    b:SetScript("OnClick", function()
+      local key = (tab == "areas") and "sortA" or "sortR"
+      local st = pg[key]
+      if st.k == i then st.desc = not st.desc else st.k = i; st.desc = SORT_DESC[tab] and SORT_DESC[tab][i] or false end
+      if ns.TestLog then ns.TestLog("BERUFE", ("Sortieren %s Spalte %d %s"):format(tab, i, st.desc and "ab" or "auf")) end
+      pg.FillRight()
+    end)
+    b:SetScript("OnEnter", function(self) ns.TipOwner(self, "ANCHOR_TOP"); GameTooltip:AddLine(TR"Klick: nach dieser Spalte sortieren, nochmal Klick andersrum"); GameTooltip:Show() end)
+    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    pg.colBtn[i] = b
   end
+  -- Sache als Link: Tooltip wie bei jedem Item im Spiel (andere Addons zeigen dort ihre Preise), Shift Klick in den Chat
+  local function ItemTip(owner, id)
+    if not id then return end
+    ns.TipOwner(owner, "ANCHOR_RIGHT")
+    local ok = GameTooltip.SetItemByID and pcall(GameTooltip.SetItemByID, GameTooltip, id)
+    if not ok then pcall(GameTooltip.SetHyperlink, GameTooltip, "item:" .. id) end
+    GameTooltip:Show()
+  end
+  pg.ItemTip = ItemTip
   local rsf = CreateFrame("ScrollFrame", nil, rb, "UIPanelScrollFrameTemplate")
   rsf:SetPoint("TOPLEFT", 6, -96); rsf:SetPoint("BOTTOMRIGHT", -26, 40)
   SkinScroll(rsf)
@@ -4770,8 +5753,17 @@ local function BuildBerufe(pg)
     r = CreateFrame("Frame", nil, rc)
     r:SetHeight(22)
     r.cb = T.CheckButton(r); r.cb:SetSize(20, 20); r.cb:SetPoint("LEFT", 2, 0)
+    r.ic = r:CreateTexture(nil, "ARTWORK"); r.ic:SetSize(18, 18); r.ic:SetPoint("LEFT", 2, 0); r.ic:Hide()
+    r:SetScript("OnEnter", function(self) if self.itemId then pg.ItemTip(self, self.itemId) end end)
+    r:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    r:SetScript("OnMouseUp", function(self)
+      if self.itemId and IsModifiedClick and IsModifiedClick("CHATLINK") and ChatEdit_InsertLink then
+        local _, link = ns.Api.GetItemInfo(self.itemId)
+        if link then ChatEdit_InsertLink(link) end
+      end
+    end)
     r.c = {}
-    for k = 1, 5 do
+    for k = 1, 6 do
       r.c[k] = JText(r, ns.FontName("GameFontHighlightSmall"))
       r.c[k]:SetWordWrap(false); r.c[k]:SetJustifyH("LEFT")
     end
@@ -4780,7 +5772,7 @@ local function BuildBerufe(pg)
     return r
   end
   local function PlaceCols(r, xs, cb)
-    for k = 1, 5 do
+    for k = 1, 6 do
       local x = xs[k]
       r.c[k]:ClearAllPoints()
       if x then
@@ -4881,10 +5873,61 @@ local function BuildBerufe(pg)
         if e.prof == it.prof and (e.perHour or 0) > 0 then profPH = profPH + e.perHour; nPH = nPH + 1 end
       end
       if nPH > 0 then profPH = profPH / nPH end
+      -- 1.4u (P170 soll 4): Gold/Std als Funktion, damit die Spalten sortieren koennen
+      local function GphOf(a)
+        local gph = gold[tostring(curItem) .. ":" .. tostring(a.map)]
+        -- 1.3h (P89): Platzhalter weg
+        -- 1.3zm (K 14:27 Punkt 2): nie dauerhaft "wird gerechnet": nach PROF_GOLD_WAIT_S ohne Ergebnis "keine Preise"
+        local waitOver = pg.goldFirst and GetTime() - pg.goldFirst > ns.PROF_GOLD_WAIT_S
+        local gEst = gold["ca:" .. tostring(curItem) .. ":" .. tostring(a.map)]
+        -- 1.3zza (P129): Angeln ohne Messung: Schaetzung aus der Fang Rate laut Daten und dem Preis
+        local price0 = ns.ItemValue and ns.ItemValue(curItem) or 0
+        -- 1.3zzg (P133 Teil b): gemessen geht vor der Rechnung: eigene Messung voll, geteilte als ca
+        local mph, msrc = nil, nil
+        if ns.ProfMeasured then mph, msrc = ns.ProfMeasured(curItem, a.map) end
+        if mph and mph > 0 and price0 > 0 then gph = mph * price0; gEst = (msrc ~= "eigen") or nil end
+        if not (gph and gph > 0) and fish and a.pct and a.pct > 0 and price0 > 0 then
+          gph = ns.PROF_FISH_CATCH_H * a.pct / 100 * price0
+          gEst = true
+        end
+        local whyNo
+        if not (gph and gph > 0) and not fish and perN > 0 and (a.n or 0) > 0 then
+          gph = math.min(bestG, perN * a.n)
+          gEst = true
+        elseif not (gph and gph > 0) and not fish and perN == 0 and profPH > 0 and price0 > 0 and (a.n or 0) > 0 then
+          gph = profPH * price0
+          gEst = true
+        elseif not (gph and gph > 0) and not fish and (a.n or 0) == 0 then
+          whyNo = TR"keine Stellen"
+        end
+        return gph, gEst, whyNo, price0, waitOver
+      end
+      local sk = pg.sortA or {}
+      if sk.k then
+        local srank = { ok = 1, danger = 2, elite = 3, enemy = 4 }
+        local zl0 = ns.zones or {}
+        local function V(a)
+          if sk.k == 1 then return (ns.ZoneName and ns.ZoneName(a.map) or "") end
+          if sk.k == 2 then local z = zl0[a.map]; return a.lo or (z and z.min) or 999 end
+          if sk.k == 3 then return a.n or 0 end
+          if sk.k == 4 then return srank[a.status] or 9 end
+          local g = GphOf(a); return g or 0
+        end
+        local cache, cp = {}, {}
+        for i0, a in ipairs(list) do cache[a] = V(a); cp[i0] = a end
+        list = cp
+        table.sort(list, function(x, y)
+          local vx, vy = cache[x], cache[y]
+          if vx == vy then return (x.n or 0) > (y.n or 0) end
+          if sk.desc then return vx > vy end
+          return vx < vy
+        end)
+      end
       for i, a in ipairs(list) do
         local r = RRow(i)
         r:ClearAllPoints(); r:SetPoint("TOPLEFT", rc, "TOPLEFT", 0, -(i - 1) * 24); r:SetPoint("RIGHT", rc, "RIGHT", 0, 0)
         PlaceCols(r, xs, true)
+        r.itemId = nil; r.ic:Hide(); r:EnableMouse(false)
         r.cb:SetChecked(zsel[a.map] and true or false)
         r.cb:SetScript("OnClick", function(self)
           -- 20.4b2: nur eine Zone (die andere fliegt raus)
@@ -4915,55 +5958,57 @@ local function BuildBerufe(pg)
         else
           r.c[4]:SetText(STATUS_TXT[a.status] or a.status or "")
         end
-        local gph = gold[tostring(curItem) .. ":" .. tostring(a.map)]
-        -- 1.3h (P89): Platzhalter weg
-        -- 1.3zm (K 14:27 Punkt 2): nie dauerhaft "wird gerechnet": nach PROF_GOLD_WAIT_S ohne Ergebnis "keine Preise"
-        local waitOver = pg.goldFirst and GetTime() - pg.goldFirst > ns.PROF_GOLD_WAIT_S
-        local gEst = gold["ca:" .. tostring(curItem) .. ":" .. tostring(a.map)]
-        -- 1.3zza (P129): Angeln ohne Messung: Schaetzung aus der Fang Rate laut Daten und dem Preis
-        local price0 = ns.ItemValue and ns.ItemValue(curItem) or 0
-        -- 1.3zzg (P133 Teil b): gemessen geht vor der Rechnung: eigene Messung voll, geteilte als ca
-        local mph, msrc = nil, nil
-        if ns.ProfMeasured then mph, msrc = ns.ProfMeasured(curItem, a.map) end
-        if mph and mph > 0 and price0 > 0 then gph = mph * price0; gEst = (msrc ~= "eigen") or nil end
-        if not (gph and gph > 0) and fish and a.pct and a.pct > 0 and price0 > 0 then
-          gph = ns.PROF_FISH_CATCH_H * a.pct / 100 * price0
-          gEst = true
-        end
-        local whyNo
-        if not (gph and gph > 0) and not fish and perN > 0 and (a.n or 0) > 0 then
-          gph = math.min(bestG, perN * a.n)
-          gEst = true
-        elseif not (gph and gph > 0) and not fish and perN == 0 and profPH > 0 and price0 > 0 and (a.n or 0) > 0 then
-          gph = profPH * price0
-          gEst = true
-        elseif not (gph and gph > 0) and not fish and (a.n or 0) == 0 then
-          whyNo = TR"keine Stellen"
-        end
+        local gph, gEst, whyNo, price0, waitOver = GphOf(a)
         r.c[5]:SetText(gph and gph > 0 and ((gEst and "|cff9fdf9f" .. TR"ca " or "|cff40ff40") .. (ns.Money and ns.Money(gph) or tostring(gph)) .. "|r")
           or ((ns.profGold or waitOver) and ("|cff9d9d9d" .. ((ns.profGold and price0 > 0) and (whyNo or TR"unbekannt") or TR"keine Preise") .. "|r") or TR"wird gerechnet"))
         r:Show()
       end
       rc:SetHeight(math.max(10, #list * 24))
     else
-      heads = { TR"Rezept", TR"Beruf", "Skill", TR"Menge", TR"Wer" }
-      xs = { 4, math.floor((rc:GetWidth() > 50 and rc:GetWidth() or 400) * 0.42), math.floor((rc:GetWidth() > 50 and rc:GetWidth() or 400) * 0.62),
-        math.floor((rc:GetWidth() > 50 and rc:GetWidth() or 400) * 0.72), math.floor((rc:GetWidth() > 50 and rc:GetWidth() or 400) * 0.82) }
-      pg.sub:SetText(ns.HasAtlasLoot() and TR"Alle Rezepte, die das brauchen (AtlasLoot)" or TR"Ohne AtlasLoot siehst du nur die Rezepte, die du schon gelernt hast.")
+      heads = { TR"Rezept", TR"Beruf", "Skill", TR"Menge", TR"Wert", TR"Wer" }
+      local rw = rc:GetWidth() > 50 and rc:GetWidth() or 400
+      xs = { 26, math.floor(rw * 0.38), math.floor(rw * 0.54), math.floor(rw * 0.62), math.floor(rw * 0.70), math.floor(rw * 0.84) }
+      -- 1.4zd (P170 M22): mit der Rezepte Datei braucht es kein AtlasLoot mehr
+      local nData = ns.ProfRecipeDataCount and ns.ProfRecipeDataCount() or 0
+      pg.sub:SetText(nData > 0 and TR"Alle Rezepte, die das brauchen (Lehrer und Rezepte)" or ns.HasAtlasLoot() and TR"Alle Rezepte, die das brauchen (AtlasLoot)" or TR"Ohne AtlasLoot siehst du nur die Rezepte, die du schon gelernt hast.")
       ns.ProfRecipeIndex(function() if pg:IsShown() and tab == "rec" and not pg.recFilled then pg.recFilled = true; pg.FillRight() end end)
       local list = {}
       for _, e in ipairs(ns.ProfRecipes(curItem)) do
         if recFilter == "all" or e.known then table.insert(list, e) end
       end
+      local sr = pg.sortR or {}
+      if sr.k then
+        local function V(e)
+          if sr.k == 1 then return e.name or "" elseif sr.k == 2 then return e.prof or "" elseif sr.k == 3 then return e.skill or 0
+          elseif sr.k == 4 then return e.count or 1
+          elseif sr.k == 5 then return (ns.ProfRecipeValue and ns.ProfRecipeValue(e)) or 0 end
+          return #(e.who or {})
+        end
+        table.sort(list, function(x, y)
+          local vx, vy = V(x), V(y)
+          if vx == vy then return (x.name or "") < (y.name or "") end
+          if sr.desc then return vx > vy end
+          return vx < vy
+        end)
+      end
       for i, e in ipairs(list) do
         local r = RRow(i)
         r:ClearAllPoints(); r:SetPoint("TOPLEFT", rc, "TOPLEFT", 0, -(i - 1) * 24); r:SetPoint("RIGHT", rc, "RIGHT", 0, 0)
         PlaceCols(r, xs, false)
-        r.c[1]:SetText(e.name .. (e.learned and " |cff7fd1b9(G)|r" or ""))
+        -- 1.4u (P170 soll2 1): Symbol vom Ergebnis, Maus drauf zeigt den Item Tooltip
+        r.itemId = e.created
+        local icon = e.created and ((ns.Api.GetItemIcon and ns.Api.GetItemIcon(e.created)) or select(10, ns.Api.GetItemInfo(e.created)))
+        r.ic:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark"); r.ic:Show()
+        r:EnableMouse(true)
+        r.c[1]:SetText(e.name .. (e.learned and " |cff7fd1b9(G)|r" or "") .. ((e.src and e.src:sub(1, 1) == "R") and TR" |cff9d9d9d(Rezept)|r" or ""))
         r.c[2]:SetText(e.prof or "?")
         r.c[3]:SetText(tostring(e.skill or 0))
         r.c[4]:SetText(tostring(e.count or 1))
-        r.c[5]:SetText(#e.who > 0 and table.concat(e.who, ", ") or TR"|cff9d9d9dkeiner|r")
+        -- 1.4zzv (M22): Wert vom Ergebnis, gruen wenn mehr wert als die Zutaten, grau wenn weniger, ? wenn kein Preis
+        local val, cost = 0, 0
+        if ns.ProfRecipeValue then val, cost = ns.ProfRecipeValue(e) end
+        r.c[5]:SetText(val > 0 and (((cost > 0 and val < cost) and "|cff9d9d9d" or "|cff40ff40") .. ns.Money(val) .. "|r") or "|cff9d9d9d?|r")
+        r.c[6]:SetText(#e.who > 0 and table.concat(e.who, ", ") or ((e.canLearn and #e.canLearn > 0) and ("|cff9fdf9f" .. table.concat(e.canLearn, ", ") .. TR" (lernbar)|r")) or TR"|cff9d9d9dkeiner|r")
         r:Show()
       end
       rc:SetHeight(math.max(10, #list * 24))
@@ -4972,7 +6017,9 @@ local function BuildBerufe(pg)
       if #list == 0 then
         local al, nIdx = ns.HasAtlasLoot(), 0
         for _ in pairs(ns.ProfRecipeIndexNow and ns.ProfRecipeIndexNow() or {}) do nIdx = nIdx + 1 end
-        if not al then
+        if nData > 0 then
+          note = TR"Für dieses Teil kennt die Rezepte Liste kein Rezept."
+        elseif not al then
           note = TR"Keine Rezepte bekannt. Ohne AtlasLoot kennt Keine Zeit Leveling Guide nur Rezepte, die du gelernt hast: öffne einmal dein Berufsfenster (zb Kochen), dann merkt es sich die Rezepte."
         elseif nIdx == 0 and ns.ALCraftState and ns.ALCraftState() ~= "geladen" then
           -- 1.3zza (P131): ohne AtlasLoot Berufe Modul (Crafting) gibt es keine Rezepte aus AtlasLoot
@@ -4985,22 +6032,33 @@ local function BuildBerufe(pg)
         end
         if ns.TestLog and pg.recLogged ~= curItem then
           pg.recLogged = curItem
-          ns.TestLog("BERUFE", ("Rezepte leer: Teil %s, Beruf %s, AtlasLoot %s, Berufe Modul %s, Rezept Index %d Zutaten, Filter %s"):format(tostring(curItem), tostring(curProf), al and "an" or "aus",
+          ns.TestLog("BERUFE", ("Rezepte leer: Datei %d, Teil %s, Beruf %s, AtlasLoot %s, Berufe Modul %s, Rezept Index %d Zutaten, Filter %s"):format(nData, tostring(curItem), tostring(curProf), al and "an" or "aus",
             tostring(ns.ALCraftState and ns.ALCraftState() or "?"), nIdx, tostring(recFilter)))
         end
       end
       pg.note:SetText(note)
     end
-    for k = 1, 5 do
+    local sk = (tab == "areas") and pg.sortA or pg.sortR
+    for k = 1, 6 do
       local c = pg.cols[k]
+      local b = pg.colBtn[k]
       c:ClearAllPoints()
-      if heads[k] and xs[k] then c:SetPoint("TOPLEFT", rb, "TOPLEFT", 6 + xs[k], -78); c:SetText(heads[k]); c:Show() else c:Hide() end
+      if heads[k] and xs[k] then
+        c:SetPoint("TOPLEFT", rb, "TOPLEFT", 6 + xs[k], -78)
+        c:SetText(heads[k] .. (sk.k == k and (sk.desc and " |TInterface\\Buttons\\Arrow-Down-Up:12:12|t" or " |TInterface\\Buttons\\Arrow-Up-Up:12:12|t") or ""))
+        c:Show()
+        b:ClearAllPoints(); b:SetPoint("TOPLEFT", c, "TOPLEFT", -2, 2); b:SetWidth(math.max(30, (c:GetStringWidth() or 30) + 8)); b:Show()
+      else
+        c:Hide(); b:Hide()
+      end
     end
   end
 
   function pg.Fill()
     local p = ns.PROF[curProf]
     local sel = ns.ProfSel()
+    if pg.UpdateGoProf then pg.UpdateGoProf(curProf) end
+    if pg.UpdateKeepTrack then pg.UpdateKeepTrack(curProf) end
     -- Banner
     if pg.hero.img ~= p.banner then pg.hero.img = p.banner; JImg(pg.hero, p.banner) end
     pg.hero.title:SetText(p.name)
@@ -5111,7 +6169,10 @@ local function BuildBerufe(pg)
       rw.sel:SetShown(curItem == it.id)
       rw:SetScript("OnEnter", function(self)
         ns.TipOwner(self, "ANCHOR_RIGHT")
-        if GameTooltip.SetItemByID then pcall(GameTooltip.SetItemByID, GameTooltip, it.id) else GameTooltip:AddLine(ns.ProfItemName(it)) end
+        -- 1.4u (P170 soll 3): Item Tooltip wie im Spiel, sonst ueber den Link
+        local okT = GameTooltip.SetItemByID and pcall(GameTooltip.SetItemByID, GameTooltip, it.id)
+        if not okT then okT = pcall(GameTooltip.SetHyperlink, GameTooltip, "item:" .. it.id) end
+        if not okT then GameTooltip:AddLine(ns.ProfItemName(it)) end
         if not can then GameTooltip:AddLine(none and (TR"Noch nicht gelernt: " .. p.name) or (TR"Dir fehlen noch " .. miss .. TR" Skillpunkte."), 1, 0.55, 0.2, true) end
         -- 1.3zza (K 03:28): sagen, ab wann man es anhaken und planen kann
         if not can and (it.skill or 0) > 0 then GameTooltip:AddLine((TR"Anhaken und planen geht ab Skill %d."):format(it.skill), 1, 0.82, 0, true) end
@@ -5748,4 +6809,30 @@ function ns.FitText(fs, text, tail)
     text = cut:gsub("[,%s]+$", "")
     fs:SetText(text .. "..." .. tail)
   end
+end
+
+-- 1.4zx (M45, S 03:16: "fenster vollbild wenn in kampf kommt automatisch schliessen und wieder oeffnen nach kampf"): das
+-- grosse Fenster geht bei Kampf Beginn zu und danach mit derselben Seite wieder auf, nur wenn es vorher offen war
+do
+  local cf = CreateFrame("Frame")
+  local reopen
+  if ns.RegEv then ns.RegEv(cf, "PLAYER_REGEN_DISABLED"); ns.RegEv(cf, "PLAYER_REGEN_ENABLED")
+  else cf:RegisterEvent("PLAYER_REGEN_DISABLED"); cf:RegisterEvent("PLAYER_REGEN_ENABLED") end
+  cf:SetScript("OnEvent", function(_, e)
+    local b = _G.TaurenRouteBig
+    if e == "PLAYER_REGEN_DISABLED" then
+      if b and b:IsShown() then
+        reopen = ns.BigView and ns.BigView() or true
+        b:Hide()
+        if ns.TestLog then ns.TestLog("FENSTER", ("Kampf: grosses Fenster zu (Seite %s)"):format(tostring(reopen))) end
+      end
+    elseif reopen then
+      local v = reopen
+      reopen = nil
+      if b and not b:IsShown() and ns.ShowBig then
+        pcall(ns.ShowBig, type(v) == "string" and v or nil)
+        if ns.TestLog then ns.TestLog("FENSTER", ("Kampf vorbei: grosses Fenster wieder auf (Seite %s)"):format(tostring(v))) end
+      end
+    end
+  end)
 end

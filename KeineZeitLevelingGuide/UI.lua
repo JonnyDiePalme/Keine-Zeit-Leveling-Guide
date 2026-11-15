@@ -73,6 +73,19 @@ function ns.FitLine(text, prefix, place)
   fitCache[key] = out
   return out
 end
+-- 1.4a (P150 Punkt 4): naechste Schritte im Mini Fenster kurz: ohne Farben, nur die erste Zeile, ohne "(+5800 XP)",
+-- ohne Abfahrt in Klammern, nur die ersten zwei Teile
+function ns.HudKurz(t)
+  t = tostring(t or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", ""):gsub("\n.*", "")
+  t = t:gsub("%s*%(%+[%d'.,]+ XP%)", ""):gsub("%s*%([^()]*%d+:%d%d[^()]*%)", "")
+  local a, b, rest = t:match("^(.-), (.-), (.+)$")
+  if a then
+    local n = 1
+    for _ in rest:gmatch(", ") do n = n + 1 end
+    t = a .. ", " .. b .. "  +" .. n
+  end
+  return (t:gsub("^%s+", ""):gsub("%s+$", ""))
+end
 -- 18.6: Ziel Zeile mit Herkunft ("Ziel: Item (von Kiste)") hoechstens zwei Zeilen. Zu lang: Ziel auf die erste Zeile,
 -- die Herkunft grau auf die zweite, beide gekuerzt (Sim Teil A: "Halber Anhänger der Wasser-Beweglichkeit (von Merkwürdige
 -- Schließkassette)" ging auf drei Zeilen)
@@ -432,7 +445,12 @@ local MENU = {
   -- 17.5 (Wunsch Sascha): das Navi ist ein eigenes Profil wie die Tour, ausblenden laesst es gemerkt
   { TR"Navi", nil, function() if ns.NaviShow then ns.NaviShow() end end, half = true, prof = "navi",
     tip = TR"Zurück zu deinem Navi Ziel. Ausblenden: Leveling Route. Ganz beenden: Navi beenden.", rel = function() return ns.navi ~= nil end },
-  { TR"Neu rechnen", nil, function() if ns.AutoOpt then ns.AutoOpt("hand") end end, half = true,
+  -- 1.4g (P193): von Hand erst fragen, wo es losgehen soll (GebietWahl.lua), Enter = schnellste Route
+  { TR"Neu rechnen", nil, function()
+      -- 1.4s (P164): in der Gruppen Route heisst Neu rechnen "eigene Route", die Gruppe ueberschreibt sie nicht mehr
+      if ns.mirrorActive and ns.GroupGoOwn then ns.GroupGoOwn() end
+      if ns.NeuRechnenFrage then ns.NeuRechnenFrage() elseif ns.AutoOpt then ns.AutoOpt("hand") end
+    end, half = true,
     tip = TR"Rechnet ab hier neu, zum Beispiel nach einem Umweg. Der Plan bis 60 bleibt." },
   -- 20.3l (S Wunsch, Log 20.3k K3): auf Max Level ein eigener Knopf fuer alle restlichen Quests (Leveling Route neu)
   { TR"Alle übrigen Quests", nil, function() if ns.RestQuestsRoute then ns.RestQuestsRoute() end end,
@@ -451,10 +469,18 @@ local MENU = {
     tip = TR"Der nächste Händler zum Verkaufen und Reparieren kommt als Schritt dazu. Nochmal klicken nimmt ihn raus." },
   { TR"Feierabend", "sleep", function() if ns.EndSession then ns.EndSession() end end, half = true,
     tip = TR"Route zum nächsten Gasthaus, mit Quests am Weg. Dort ausloggen gibt Ruhe XP." },
-  { TR"Einkaufsliste", "shop", function() if ns.ShowShopping then ns.ShowShopping() end end, half = true,
-    tip = TR"Was du für die nächsten Quests kaufen musst und wo." },
+  -- 1.4a (P150 Punkt 6, S 11.11.): Einkaufsliste raus. Ein noetiger Kauf kommt als eigener Schritt (P158)
   { TR"Ziel wählen", nil, function(row) if ns.GoalMenu then ns.GoalMenu(row) end end, half = true, keepOpen = true,
     tip = TR"Ausrüstung, Bücher, Dungeons, Ruf, Berufe, Gold, Touren, Stunden Budget, Lehrer und Pause." },
+  -- 1.4s (P164): nach "eigene Route" wieder der Gruppen Route folgen
+  { TR"Gruppe folgen", nil, function() if ns.GroupFollowAgain then ns.GroupFollowAgain() end end, half = true,
+    rel = function() return ns.groupOwn and ns.GroupHasMirror and ns.GroupHasMirror() end,
+    tip = TR"Du hast deine eigene Route gewählt. Ein Klick: wieder Schritt für Schritt der Gruppen Route vom Leiter folgen." },
+  -- 1.4r (P194): alle Quests der Route im Log der Reihe nach mit der Gruppe teilen
+  -- 1.4zzf (M49, K 13:55): ohne Gruppe grau statt weg, damit man den Knopf findet
+  { TR"Mit Gruppe teilen", nil, function() if ns.ShareRouteQuests then ns.ShareRouteQuests() end end, half = true,
+    grey = function() return not (IsInGroup and IsInGroup()) end,
+    tip = TR"Teilt alle Quests der Route, die du im Log hast, der Reihe nach mit der Gruppe. Die nächste kommt, wenn alle geantwortet haben. Am Ende steht, was bei wem nicht ankam." },
   { head = TR"Fenster" },
   { TR"Grosses Fenster", nil, function() if ns.ToggleBig then ns.ToggleBig() end end, half = true },
   -- 19.32 (Saschas Runde 1 Punkt 5): mehr nächste Schritte im Mini Fenster (5), nochmal klicken wieder 1. Genauer (1, 3, 5,
@@ -645,7 +671,12 @@ local function BuildHud0()
   local xhl = hud.svcX:CreateTexture(nil, "HIGHLIGHT")
   xhl:SetAllPoints()
   xhl:SetColorTexture(1, 0.3, 0.3, 0.3)
-  hud.svcX:SetScript("OnClick", function() if ns.HintDismiss then ns.HintDismiss(hud.curHint) end; hud.Update() end)
+  hud.svcX:SetScript("OnClick", function()
+    if ns.serviceTarget then
+      if ns.serviceTarget.kind == "navi" and ns.NaviHide then ns.NaviHide() else ns.serviceTarget = nil; if ns.Draw then ns.Draw() end end
+    elseif ns.HintDismiss then ns.HintDismiss(hud.curHint) end
+    hud.Update()
+  end)
   hud.svcX:SetScript("OnEnter", function(self)
     ns.TipOwner(self, "ANCHOR_TOP")
     GameTooltip:AddLine(TR"Auslassen")
@@ -660,9 +691,17 @@ local function BuildHud0()
   HudSkin(hud.hint, "sel")
   hud.hint.text = hud.hint:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
   hud.hint.text:SetPoint("LEFT", 6, 0)
-  TwoLines(hud.hint.text, W - 18 - 12)
+  TwoLines(hud.hint.text, W - 18 - 30)
   hud.hint:SetScript("OnClick", function() if ns.TakePendingUnlock then ns.TakePendingUnlock() end; hud.Update() end)
   hud.hint:Hide()
+  -- 1.4e (P150 Punkt 1): auch der Hinweis "Neu" hat ein x (ohne Erklaerung weg)
+  hud.hintX = CreateFrame("Button", nil, hud.hint, BackdropTemplateMixin and "BackdropTemplate" or nil)
+  hud.hintX:SetSize(18, 16)
+  hud.hintX:SetPoint("RIGHT", hud.hint, "RIGHT", -2, 0)
+  HudSkin(hud.hintX)
+  local hxt = hud.hintX:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
+  hxt:SetPoint("CENTER", 0, 0); hxt:SetText("x")
+  hud.hintX:SetScript("OnClick", function() if ns.unlockPending then table.remove(ns.unlockPending, 1) end; hud.Update() end)
 
   -- Gruppe: Fortschritt der anderen bei gemeinsamen Quests
   hud.group = hud:CreateFontString(nil, "OVERLAY", ns.FontName("GameFontHighlightSmall"))
@@ -751,14 +790,23 @@ local function BuildHud0()
   hud.bHint:Hide()
   hud.btnList = { bBack, bNext, bPause, bMenu }
   hud.bMenu = bMenu
-  hud.btns:SetScript("OnSizeChanged", function(self, w)
+  -- 1.4zk (M36, S 16:25 Bild: "Zurueck | Weiter Weitermachen | Menue" gequetscht): nur die sichtbaren Knoepfe verteilen,
+  -- in der Pause nur Weitermachen und Menue (Zurueck und Weiter gehen in der Pause ohnehin nicht)
+  function hud.LayoutBtns(w)
+    local self = hud.btns
+    w = w or self:GetWidth() or 220
+    local show = {}
+    for _, b in ipairs(hud.btnList) do if b:IsShown() then show[#show + 1] = b end end
+    if #show == 0 then return end
     local gap = 4
-    local bw = ((w or 220) - gap * (#hud.btnList - 1)) / #hud.btnList
-    for i, b in ipairs(hud.btnList) do
+    local bw = (w - gap * (#show - 1)) / #show
+    for i, b in ipairs(show) do
       b:ClearAllPoints(); b:SetWidth(bw)
       b:SetPoint("LEFT", self, "LEFT", (i - 1) * (bw + gap), 0)
     end
-  end)
+  end
+  hud.btns:SetScript("OnSizeChanged", function(self, w) hud.LayoutBtns(w) end)
+  hud.bBack, hud.bNext = bBack, bNext
 
   -- Menue: Liste unter dem Mini Fenster
   hud.ext = CreateFrame("Frame", nil, hud, BackdropTemplateMixin and "BackdropTemplate" or nil)
@@ -815,6 +863,7 @@ local function BuildHud0()
           ns.TipOwner(self, "ANCHOR_RIGHT")
           GameTooltip:AddLine(m[1], 1, 0.82, 0)
           GameTooltip:AddLine(m.tip, 1, 1, 1, true)
+          if m.grey and m.grey() then GameTooltip:AddLine(TR"Geht nur in einer Gruppe.", 1, 0.4, 0.4, true) end
           GameTooltip:Show()
         end)
         r:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -867,6 +916,11 @@ local function BuildHud0()
         end
         local show = Ok(m)
         r:SetShown(show)
+        if show and m.grey then
+          local g = m.grey() and true or false
+          if r.SetEnabled then r:SetEnabled(not g) end
+          r:SetAlpha(g and 0.45 or 1)
+        end
         if show then
           if pendingHead then
             if col == 1 then col = 0; y = y + 21 end
@@ -997,11 +1051,15 @@ local function BuildHud0()
     hud.step:SetText(nxt or "")
     hud.step:SetShown(nxt ~= nil)
     local hd = nxt and 11 or 0
-    hud.zbar:ClearAllPoints(); hud.zbar:SetPoint("TOPLEFT", 10, -24 - hd); hud.zbar:SetPoint("TOPRIGHT", -8, -24 - hd)
-    hud.kind:ClearAllPoints(); hud.kind:SetPoint("TOPLEFT", 10, -31 - hd)
-    hud.target:ClearAllPoints(); hud.target:SetPoint("TOPLEFT", 10, -44 - hd)
-    hud.dist:ClearAllPoints(); hud.dist:SetPoint("TOPRIGHT", -8, -31 - hd)
-    hud.headTip:SetHeight(26 + hd)
+    -- 1.4zzp (P217 tickprof, UI.lua:1026 5 %): neu ankern nur, wenn sich die Hoehe aendert (sonst rechnet das Layout jedes Mal)
+    if hud.lastHd ~= hd then
+      hud.lastHd = hd
+      hud.zbar:ClearAllPoints(); hud.zbar:SetPoint("TOPLEFT", 10, -24 - hd); hud.zbar:SetPoint("TOPRIGHT", -8, -24 - hd)
+      hud.kind:ClearAllPoints(); hud.kind:SetPoint("TOPLEFT", 10, -31 - hd)
+      hud.target:ClearAllPoints(); hud.target:SetPoint("TOPLEFT", 10, -44 - hd)
+      hud.dist:ClearAllPoints(); hud.dist:SetPoint("TOPRIGHT", -8, -31 - hd)
+      hud.headTip:SetHeight(26 + hd)
+    end
     if i.zoneTotal and i.zoneTotal > 0 then hud.zbar:SetValue((i.zoneIdx - 1) / i.zoneTotal)
     else hud.zbar:SetValue(i.total and i.total > 0 and (i.done / i.total) or 0) end
     local c = i.col or { 0.6, 0.6, 0.6 }
@@ -1030,8 +1088,9 @@ local function BuildHud0()
     end
     if hintTxt then table.insert(extra, "|cffffd100" .. hintTxt .. "|r") end
     -- 1.3s (P100): Abfahrt von Zeppelin oder Schiff schon vorher zeigen (hoechstens 1 Quest Schritt davor)
-    local dpTxt = (not ns.db.paused) and ns.DepartPreview and ns.DepartPreview()
-    if dpTxt then table.insert(extra, "|cff66ccff" .. dpTxt .. "|r") end
+    -- 1.4a (P150 Punkt 4 und 5, P151): die Abfahrt steht jetzt als Balken (ReiseBalken.lua), hier nur noch
+    -- ausrechnen lassen (Verpasst Erkennung in ns.DepartPreview), nicht mehr als Text
+    if not ns.db.paused and ns.DepartPreview then pcall(ns.DepartPreview) end
     -- wichtige Hinweise zuerst und gut sichtbar
     -- Hinweis Fenster an: Warnungen, Hinweise, Neu und Ueberspringen stehen dort als eigene Karten
     local nw = ns.NoticeOn and ns.NoticeOn()
@@ -1079,25 +1138,26 @@ local function BuildHud0()
           end
         end
         if #parts > 0 then
-          -- ganz zeigen (die Zeile bricht um), bei vielen Teilen nur die ersten zwei und die Anzahl
-          local t = parts[1] .. (parts[2] and (", " .. parts[2]) or "") .. (#parts > 2 and ("  +" .. (#parts - 2)) or "")
-          table.insert(extra, base, TR"|cff9d9d9dDanach: " .. t .. "|r")
+          -- 1.4a (P150 Punkt 4, S 11.11. "sehr kurz halten, nur praegnante Sachen, Bereich klein"): eine Zeile je Schritt,
+          -- ohne XP Zusatz, gekuerzt auf die Breite
+          local t = ns.HudKurz(parts[1]) .. (#parts > 1 and ("  +" .. (#parts - 1)) or "")
+          table.insert(extra, base, ns.FitLine(TR"Danach: " .. t) and ("|cff9d9d9d" .. ns.FitLine(TR"Danach: " .. t) .. "|r") or "")
           -- 19.32 (Saschas Runde 1 Punkt 5): mehr Schritte zeigen (Einstellung 1, 3, 5 oder 8), je eine kurze Zeile
           local nShow = ns.HudSteps()
           local pos = base + 1
           for k = 2, math.min(nShow, 8) do
             local st2 = o.steps[(o.idx or 1) + k]
             if not st2 then break end
-            local t2 = ns.OptStepText(st2):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("\n.*", "")
-            if #t2 > 70 then t2 = t2:sub(1, 68):gsub("[\192-\255][\128-\191]*$", "") .. ".." end
-            table.insert(extra, pos, ("|cff7f7f7f%d. %s|r"):format(k, t2))
+            local t2 = ns.HudKurz(ns.OptStepText(st2))
+            table.insert(extra, pos, "|cff7f7f7f" .. ns.FitLine(("%d. %s"):format(k, t2)) .. "|r")
             pos = pos + 1
           end
         end
       end
     end
     -- 1.3zw (P123 Zusatz, S 23:41): eigener Block "Abfahrten" unten
-    if not small and not ns.db.paused and ns.AbfahrtLines then
+    -- 1.4a (P150 Punkt 4 und 5, S 11.11. "schlanker"): ersetzt durch den Reise Balken, Block nur noch ohne Balken Datei
+    if not small and not ns.db.paused and ns.AbfahrtLines and not ns.ReiseBalkenOn then
       local okA, al = pcall(ns.AbfahrtLines)
       if okA and al and #al > 0 then
         table.insert(extra, "|cff66ccff" .. TR"Abfahrten" .. "|r")
@@ -1124,8 +1184,15 @@ local function BuildHud0()
     if small then while #extra > 3 do table.remove(extra) end end
     hud.extra:SetText(table.concat(extra, "\n"))
     if hud.bPause then
-      local tx = (ns.db and ns.db.paused) and TR"Weitermachen" or TR"Pause"
-      if hud.bPause.lbl ~= tx then hud.bPause.lbl = tx; hud.bPause:SetText(tx) end
+      local paused = ns.db and ns.db.paused
+      local tx = paused and TR"Weitermachen" or TR"Pause"
+      if hud.bPause.lbl ~= tx then
+        hud.bPause.lbl = tx; hud.bPause:SetText(tx)
+        -- 1.4zk (M36): in der Pause nur Weitermachen und Menue
+        if hud.bBack then hud.bBack:SetShown(not paused) end
+        if hud.bNext then hud.bNext:SetShown(not paused) end
+        if hud.LayoutBtns then hud.LayoutBtns() end
+      end
     end
     local extraH = (#extra > 0) and (hud.extra:GetStringHeight() + 3) or 0
     local function Place(f, y)
@@ -1177,14 +1244,17 @@ local function BuildHud0()
       else
         hud.svc.text:SetText("|cff4dccff>|r " .. sh.text)
       end
-      hud.svcX:SetShown(not ns.serviceTarget and not small)
+      -- 1.4e (P150 Punkt 1, Pr fenster Mini 1x rot auf 1.4c): jede Info hat ein x, auch "Pfeil zeigt zu" (x = zurueck zur Route)
+      hud.svcX:Show()
       hud.svc:Show()
       used = used + Fit(hud.svc)
     else
       hud.svc:Hide()
     end
     -- Gruppe
-    local gl = (not small) and ns.GroupLines and ns.GroupLines(i.qids, 4) or {}
+    -- 1.4r (P164): nur noch "Spieler noch 2/8" fuer den aktuellen Schritt, in beiden Groessen (die Liste aller
+    -- Gruppen Quests faellt weg, die zeigt Questie)
+    local gl = ns.GroupStepLines and ns.GroupStepLines(i.qids, 4) or {}
     if #gl > 0 or (not small and ns.groupWait and #ns.groupWait > 0) then
       if ns.groupWait and #ns.groupWait > 0 then
         table.insert(gl, 1, TR"|cffff9030Warte auf:|r " .. table.concat(ns.groupWait, ", ") .. TR" |cff9d9d9d(Gruppe bleibt zusammen)|r")
@@ -1207,8 +1277,10 @@ local function BuildHud0()
     end
     -- unten: Knoepfe Zurueck, Weiter, Menue immer; XP und Tempo nur im normalen Mini Fenster
     hud.xbar:SetShown(not small); hud.foot:SetShown(not small); hud.foot2:SetShown(not small); hud.btns:Show()
+    -- 1.4a (P151): Reise Balken im Mini Fenster (wenn der Pfeil aus ist), ueber dem Level Balken
+    local rbH = ns.ReiseBalkenHudH and ns.ReiseBalkenHudH() or 0
     if small then
-      hud:SetHeight(58 + hd + tExtra + used + 30)
+      hud:SetHeight(58 + hd + tExtra + used + 30 + rbH)
       return
     end
     hud.xbar:ClearAllPoints()
@@ -1260,7 +1332,7 @@ local function BuildHud0()
         hud.foot:SetText(s.xph and s.xph > 0 and (s.num(s.xph) .. TR" XP/Std") or TR"XP/Std: misst")
       end
     end
-    hud:SetHeight(58 + hd + tExtra + used + 66)
+    hud:SetHeight(58 + hd + tExtra + used + 66 + rbH)
   end
   hud.Update = Update
   -- erste Erklaerung, sobald die Einrichtung fertig ist und das Mini Fenster da ist
@@ -1431,6 +1503,7 @@ BINDING_HEADER_FOREVERWEGWEISER = TR"Keine Zeit Leveling Guide"
 _G["BINDING_NAME_CLICK ForeverWegweiserTarget:LeftButton"] = TR"Ziel der Route anvisieren"
 
 local tb
+ns.TB_GLOW = { SIZE = 52, R = 1, G = 0.85, B = 0.45, A = 0.35 }
 -- Der Knopf liegt unsichtbar ueber dem kleinen Symbol links vom Pfeil (zeigt die Art vom Ziel):
 -- Klick auf das Symbol visiert den Mob oder NPC an.
 local BuildTargetButton
@@ -1456,6 +1529,15 @@ BuildTargetButton = function()
   local hl = tb:CreateTexture(nil, "HIGHLIGHT")
   hl:SetPoint("TOPLEFT", 3, -3); hl:SetPoint("BOTTOMRIGHT", -3, 3)
   hl:SetColorTexture(1, 1, 1, 0.25)
+  -- 1.4a (P151 Pfeil Punkt 1, S 11.11. "Rahmen leicht leuchtend, nur dezent, auf keinen Fall stoerend"): ruhiger heller
+  -- Rahmen um das Symbol, ohne Blinken
+  tb.glow = tb:CreateTexture(nil, "BACKGROUND")   -- 1.4e: Rahmen sitzt jetzt am Symbol im Pfeil (Arrow.lua kindGlow)
+  tb.glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+  tb.glow:SetBlendMode("ADD")
+  tb.glow:SetPoint("CENTER", tb, "CENTER", 0, 0)
+  tb.glow:SetSize(ns.TB_GLOW.SIZE, ns.TB_GLOW.SIZE)
+  tb.glow:SetVertexColor(ns.TB_GLOW.R, ns.TB_GLOW.G, ns.TB_GLOW.B, ns.TB_GLOW.A)
+  tb.glow:Hide()
   tb:SetScript("OnEnter", function(self)
     ns.TipOwner(self, "ANCHOR_LEFT")
     GameTooltip:AddLine(TR"Ziel anvisieren")
@@ -1809,6 +1891,14 @@ do
   local function BuildMenu()
     if menu then return end
     if ns.TestLogAvailable and ns.TestLogAvailable() and ns.TestLogCmd then ITEMS[#ITEMS + 1] = LOG_ITEM end
+    -- 1.4h (P188): mit dem Zusatz Addon _Test ein Eintrag "Test starten" (TestLauf.lua)
+    if ns.TestAvailable and ns.TestAvailable() and ns.TestStart then
+      ITEMS[#ITEMS + 1] = { sep = not (ns.TestLogAvailable and ns.TestLogAvailable()), label = function() return "|cffffd100" .. TR"Test starten" .. "|r" end, run = ns.TestStart }
+      -- 1.4zy (P203): eigener Karten Test (TestLauf.lua)
+      if ns.KartenTestStart then ITEMS[#ITEMS + 1] = { label = function() return "|cffffd100" .. TR"Karten Test" .. "|r" end, run = function() ns.KartenTestStart() end } end
+      -- 1.4zzh (P212 Punkt 2): Karten Test nur hier, vom Standort in den Umkreis
+      if ns.KartenTestHier then ITEMS[#ITEMS + 1] = { label = function() return "|cffffd100" .. TR"Hier prüfen" .. "|r" end, run = ns.KartenTestHier } end
+    end
     local sepN = 0
     for _, it in ipairs(ITEMS) do if it.sep then sepN = sepN + 1 end end
     menu = CreateFrame("Frame", "KeineZeitLevelingGuideMinimapMenu", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)

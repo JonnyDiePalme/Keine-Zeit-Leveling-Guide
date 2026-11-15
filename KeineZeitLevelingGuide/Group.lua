@@ -225,6 +225,42 @@ function ns.GroupLines(qids, max)
   return out
 end
 
+-- 1.4r (P164, Konzept 1.4 Punkt 10): im Mini Fenster nur noch, wer beim aktuellen Schritt noch nicht fertig ist,
+-- zb "Spieler 2 noch 2/8". Die Liste aller Gruppen Quests faellt weg (zeigt Questie). Mit mehreren Quests im Schritt
+-- steht der kurze Quest Name dabei
+function ns.GroupStepLines(qids, max)
+  if not Enabled() then return {} end
+  local log = ns.logProgress or {}
+  local n = #(qids or {})
+  local rows = {}
+  for who, g in pairs(ns.GroupAll()) do
+    for _, qid in ipairs(qids or {}) do
+      local q = g.quests and g.quests[qid]
+      if q and not q.done then
+        local nums = {}
+        for _, o in ipairs(q.objs or {}) do
+          local a, b = tostring(o):match("(%d+)/(%d+)$")
+          if a and tonumber(a) < tonumber(b) then nums[#nums + 1] = a .. "/" .. b end
+        end
+        if #nums > 0 then
+          local title = ""
+          if n > 1 then
+            title = (log[qid] and log[qid].title) or (TR"Quest " .. qid)
+            if #title > 18 then title = ns.U8Sub(title, 17) .. "." end
+            title = " |cff9d9d9d" .. title .. "|r"
+          end
+          rows[#rows + 1] = (TR"|cff66ccff%s|r noch %s%s"):format(who, table.concat(nums, " "), title)
+        end
+      end
+    end
+  end
+  table.sort(rows)
+  local out = {}
+  for i = 1, math.min(#rows, max or 4) do out[i] = rows[i] end
+  if #rows > (max or 4) then out[#out + 1] = (TR"|cff9d9d9d... und %d mehr|r"):format(#rows - (max or 4)) end
+  return out
+end
+
 -- 1.3zd (P111, S 07:04 und 07:08): Quest Stand von Mitspielern OHNE unser Addon ueber Questie lesen. Questie tauscht in
 -- der Gruppe die Questlogs aus (QuestieComms.remoteQuestLogs[qid][Name] = Ziele mit fulfilled/required). Nur lesen,
 -- nur wer jetzt in der Gruppe ist und sich nicht selbst ueber unser Addon meldet. Namen der Ziele aus unserer Questie
@@ -429,7 +465,7 @@ f:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
   end
 end)
 
--- eigene Position alle 10 Sekunden (fuer das Aufteilen von Dungeon Quests)
+-- eigene Position alle 10 Sekunden (fuer das Aufteilen von Dungeon Quests). 1.4zzg (M51): auch in der Pause
 local lastPos
 ns.Ticker(10, function()
   if not (Enabled() and Channel()) then return end
@@ -439,4 +475,4 @@ ns.Ticker(10, function()
   local x, y = pos:GetXY()
   local key = ("%d|%.3f|%.3f"):format(map, x, y)
   if key ~= lastPos then lastPos = key; Send("P|" .. key) end
-end)
+end, nil, true)

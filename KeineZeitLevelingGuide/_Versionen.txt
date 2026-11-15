@@ -1,7 +1,39 @@
-Keine Zeit Leveling Guide 1.3 (WoW Forever)
+Keine Zeit Leveling Guide 1.4 (WoW Forever)
 Autor: jonnydiepalme. Lizenz: GNU General Public License Version 3 oder später (GPLv3), Volltext in LICENSE.txt.
 Copyright (C) 2026 jonnydiepalme. Dieses Programm ist freie Software: du kannst es unter den Bedingungen der GPLv3
 weitergeben und verändern. Es wird OHNE JEDE GEWÄHRLEISTUNG bereitgestellt, Einzelheiten in LICENSE.txt.
+
+Neu in Version 1.4
+- Reise Balken für Flug, Zeppelin und Schiff mit Abfahrt
+- Neu rechnen fragt, wo es losgehen soll
+- Dungeons: Kette, im Log, Ort des Gebers auf der Karte, mehr Forever Dungeons
+- Statistik: Sitzung und Level, aufklappbare Level, Gold in Spalten
+- Mein Weg: Figur zieht sich an jeder Karte um
+- Ausrüstung: Filter nach Werten mit Zahl je Wert, Wertung je Klasse, Ruf und Vorquests
+- Berufe: Erz Runde im Kreis, Rezepte mit Wert
+- Gruppe: Mit Gruppe teilen, eigene Route statt Gruppen Route möglich
+- Flugzeiten im Flugmenü, Lehrer zeigt nur neue Zauber
+- Preise immer aus der neuesten Quelle (TSM oder Auctionator)
+- Flugzeiten bleiben mit dem Vielflieger Talent richtig
+- Lange Routen rechnen in kleineren Teilen, kein endloses Rechnen mehr
+- Weniger Rechenzeit und Speicher im Hintergrund
+- Weniger Chat, viele Fehler behoben
+
+New in version 1.4
+- Travel bars for flights, zeppelins and ships with departure
+- Recalculate asks where you want to start
+- Dungeons: quest chain, in log, giver on the map, more Forever dungeons
+- Statistics: session and level, expandable levels, gold in columns
+- My path: the figure changes gear at every map
+- Gear: filter by stats with a count per stat, rating per class, reputation and prequests
+- Professions: ore loop, recipes with value
+- Group: share with group, own route instead of group route
+- Flight times in the flight menu, trainer shows only new spells
+- Prices always from the newest source (TSM or Auctionator)
+- Flight times stay correct with the faster flight talent
+- Long routes are calculated in smaller parts, no more endless calculating
+- Less background CPU time and memory
+- Less chat, many bugs fixed
 
 Neu in Version 1.3
 - Dungeon Touren mit Zielen drinnen und Abgabe

@@ -101,11 +101,12 @@ local taxiT, taxiRev, taxiSrc
 local function TaxiTable()
   local T = ns.TAXI
   if not (T and T.kanten and T.knoten) then return nil end
-  local rev = (ns.db and ns.db.knownFPRev) or 0
+  -- 1.4zzd (P206 fp): ueber ns.KnownFP / ns.KnownFPRev (Szenario Test kann eine eigene Liste setzen)
+  local rev = ns.KnownFPRev and ns.KnownFPRev() or ((ns.db and ns.db.knownFPRev) or 0)
   if taxiT and taxiRev == rev and taxiSrc == T then return taxiT end
   taxiRev, taxiSrc = rev, T
   local ids, on = {}, {}
-  for npc, v in pairs((ns.db and ns.db.knownFP) or {}) do
+  for npc, v in pairs(ns.KnownFP and ns.KnownFP() or ((ns.db and ns.db.knownFP) or {})) do
     if v then
       local id = TaxiIdOf(npc)
       if id and not on[id] then on[id] = true; ids[#ids + 1] = id end
@@ -159,9 +160,34 @@ local function Plausible(a, b, sec)
 end
 ns.FlightPlausible = Plausible
 
+-- 1.4zzq (M58, S Ja 13:39): Forever Talent Vielflieger (Vermaechtnis Baum, Spell 1225490, Flug 20 Prozent schneller).
+-- Wer es hat, misst zu kurze Zeiten: dann nichts merken und nichts teilen, nur Log (Pr misst den Faktor, Umrechnen kommt 1.5)
+ns.VIELFLIEGER_SPELL = 1225490
+local vfT, vfV = -999, false
+function ns.Vielflieger()
+  local now = GetTime and GetTime() or 0
+  if now - vfT < 30 then return vfV end
+  vfT = now
+  local id, has = ns.VIELFLIEGER_SPELL, false
+  if IsPlayerSpell then local ok, r = pcall(IsPlayerSpell, id); has = ok and r and true or false end
+  if not has and IsSpellKnown then local ok, r = pcall(IsSpellKnown, id); has = ok and r and true or false end
+  if not has and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
+    local ok, r = pcall(C_UnitAuras.GetPlayerAuraBySpellID, id); has = ok and r ~= nil
+  end
+  vfV = has
+  return has
+end
+
 local function Record(a, b, sec)
   local db = ns.db
   if not (db and a and b and a ~= b) then return end
+  if ns.Vielflieger() then
+    local norm = ns.FlightTime and ns.FlightTime(a, b)
+    local fa, fb = ns.FlightMasterById(a), ns.FlightMasterById(b)
+    if ns.TestLog then ns.TestLog("FLUG", ("%s nach %s: %.0f s gemessen, vielflieger=1, nicht gemerkt und nicht geteilt (bekannt %s s)")
+      :format(fa and fa.name or tostring(a), fb and fb.name or tostring(b), sec or -1, norm and ("%.0f"):format(norm) or "-")) end
+    return
+  end
   if not Plausible(a, b, sec) then
     if ns.TestLog then ns.TestLog("FLUG", ("Flug %s nach %s, %.0f s: passt nicht zur Strecke, nicht gemerkt"):format(tostring(a), tostring(b), sec or -1)) end
     return
@@ -359,8 +385,9 @@ ns.FlightsShare = Share
 local tf = CreateFrame("Frame")
 ns.RegEv(tf, "PLAYER_LOGIN")
 tf:SetScript("OnEvent", function()
-  ns.Ticker(0.5, function() pcall(Tick) end, true)
-  ns.Ticker(120, function() pcall(Share) end)
+  -- 1.4zzg (M51, S 17:16): sammeln und teilen auch in der Pause
+  ns.Ticker(0.5, function() pcall(Tick) end, true, true)
+  ns.Ticker(120, function() pcall(Share) end, nil, true)
 end)
 
 -- /klg fluege
@@ -370,4 +397,88 @@ function ns.FlightsStatus()
   for _ in pairs(type(db.flights) == "table" and db.flights or {}) do own = own + 1 end
   for _ in pairs(type(db.flightsShared) == "table" and db.flightsShared or {}) do shared = shared + 1 end
   ns.Print((TR"Flüge: %d selbst gemessen, %d von anderen bekommen"):format(own, shared))
+end
+
+------------------------------------------------------------
+-- 1.4b (P153, S 11.11. Flugkarte soll2): Maus auf einen Flugpunkt der Flugkarte zeigt die Flugzeit, sobald sie bekannt ist:
+-- gesamt (gemessen von hier bis dort) und bei Fluegen ueber mehrere Punkte jede Strecke. Quelle wie ns.FlightTime
+-- (eigen, geteilt, gelernt). Die Zeiten werden schon geteilt (Teilen/Sync, flightsShared). Log FLUGKARTE einmal je Ziel.
+------------------------------------------------------------
+local function SlotNodes()
+  local t = {}
+  local cm = GetTaxiMapID and GetTaxiMapID()
+  local ok, list = pcall(function() return C_TaxiMap and C_TaxiMap.GetAllTaxiNodes and cm and C_TaxiMap.GetAllTaxiNodes(cm) end)
+  for _, n in ipairs(ok and list or {}) do
+    if type(n) == "table" and n.slotIndex and n.nodeID then
+      local k = ns.TAXI and ns.TAXI.knoten and ns.TAXI.knoten[n.nodeID]
+      t[n.slotIndex] = { npc = type(k) == "table" and k[11] or nil, name = n.name }
+    end
+  end
+  return t
+end
+local function SrcLabel(src) return src == "eigen" and "" or (src == "geteilt" and TR" (geteilt)" or (src and TR" (gelernt)" or "")) end
+local tipLogged = {}
+function ns.FlightTipLines(slot)
+  local out = {}
+  if not (GetNumRoutes and TaxiGetNodeSlot) then return out end
+  local okN, hops = pcall(GetNumRoutes, slot)
+  if not okN or not hops or hops < 1 then return out end
+  local nodes = SlotNodes()
+  local first, last
+  local legs, sum, allKnown = {}, 0, true
+  for h = 1, hops do
+    local okA, a = pcall(TaxiGetNodeSlot, slot, h, true)
+    local okB, b = pcall(TaxiGetNodeSlot, slot, h, false)
+    local na, nb = okA and nodes[a], okB and nodes[b]
+    if h == 1 then first = na end
+    last = nb
+    local t, src
+    if na and nb and na.npc and nb.npc then t, src = ns.FlightTime(na.npc, nb.npc) end
+    if t then sum = sum + t else allKnown = false end
+    legs[#legs + 1] = { from = na and na.name, to = nb and nb.name, t = t, src = src }
+  end
+  local total, tsrc
+  if first and last and first.npc and last.npc then total, tsrc = ns.FlightTime(first.npc, last.npc) end
+  if total then
+    out[#out + 1] = (TR"Flugzeit %s%s"):format(ns.Clock(total), SrcLabel(tsrc))
+  elseif allKnown and hops > 1 then
+    out[#out + 1] = (TR"Flugzeit ca %s (Summe der Strecken)"):format(ns.Clock(sum))
+  elseif hops == 1 then
+    out[#out + 1] = TR"Flugzeit noch unbekannt"
+  end
+  if hops > 1 then
+    for _, l in ipairs(legs) do
+      out[#out + 1] = ("  %s > %s  %s"):format(tostring(l.from or "?"):gsub(",.*", ""), tostring(l.to or "?"):gsub(",.*", ""),
+        l.t and (ns.Clock(l.t) .. SrcLabel(l.src)) or TR"unbekannt")
+    end
+  end
+  local key = tostring(last and last.name) .. hops
+  if ns.TestLog and not tipLogged[key] then
+    tipLogged[key] = true
+    ns.TestLog("FLUGKARTE", ("Tooltip %s: %d Strecken, %s"):format(tostring(last and last.name), hops, table.concat(out, " | ")))
+  end
+  return out
+end
+local hooked = {}
+local function HookButtons()
+  for i = 1, (NumTaxiNodes and NumTaxiNodes() or 0) do
+    local b = _G["TaxiButton" .. i]
+    if b and not hooked[b] and b.HookScript then
+      hooked[b] = true
+      b:HookScript("OnEnter", function(self)
+        local slot = self.GetID and self:GetID() or i
+        local ok, lines = pcall(ns.FlightTipLines, slot)
+        if not (ok and lines and #lines > 0 and GameTooltip:IsShown()) then return end
+        for k, l in ipairs(lines) do
+          if k == 1 then GameTooltip:AddLine(l, 0.4, 0.8, 1) else GameTooltip:AddLine(l, 0.85, 0.85, 0.85) end
+        end
+        GameTooltip:Show()
+      end)
+    end
+  end
+end
+do
+  local tf = CreateFrame("Frame")
+  ns.RegEv(tf, "TAXIMAP_OPENED")
+  tf:SetScript("OnEvent", function() C_Timer.After(0.1, function() pcall(HookButtons) end) end)
 end

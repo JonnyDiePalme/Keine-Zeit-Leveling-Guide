@@ -40,6 +40,9 @@ end
 local function D(a, b) return math.sqrt((a.wx - b.wx) ^ 2 + (a.wy - b.wy) ^ 2) end
 
 local function Here()
+  -- 1.4zy (P203 Karten Test): Start Punkt fuer das reine Rechnen, nur waehrend eines Test Schritts gesetzt (TestLauf.lua)
+  local tf = ns.naviFromTest
+  if tf then return Node(tf[1], tf[2], tf[3], TR"Start") end
   local pm = ns.PlayerMap and ns.PlayerMap()
   local pos = pm and C_Map.GetPlayerMapPosition(pm, "player")
   if not pos then return nil end
@@ -363,11 +366,16 @@ function ns.NaviPlan(dmap, dx, dy, dname)
     for _, f in ipairs(ns.TravelFlightPoints and ns.TravelFlightPoints() or {}) do
       nodes[#nodes + 1] = { map = f.map, x = f.x, y = f.y, cont = f.cont, wx = f.wx, wy = f.wy, name = f.name, id = f.id, fp = true }
     end
+    -- 1.4zp (M39): unbekannter Flugpunkt nah bei dir (hinlaufen, lernen, fliegen), NaviFlug.lua
+    if ns.NaviLearnFP then
+      local okL, ln = pcall(ns.NaviLearnFP, S)
+      for _, n in ipairs(okL and ln or {}) do nodes[#nodes + 1] = n end
+    end
   end
   local rides = {}
   for _, l in ipairs(ns.travelLinks or {}) do
     if not ns.TravelUsable or ns.TravelUsable(l) then
-      local ea, eb = ns.TravelEndpoint(l.a), ns.TravelEndpoint(l.b)
+      local ea, eb = ns.TravelEndpoint(l.a, l.b[1]), ns.TravelEndpoint(l.b, l.a[1])
       if ea and eb then
         local na = { map = ea.map, x = ea.x, y = ea.y, cont = ea.cont, wx = ea.wx, wy = ea.wy, name = ea.name, dock = true }
         local nb = { map = eb.map, x = eb.x, y = eb.y, cont = eb.cont, wx = eb.wx, wy = eb.wy, name = eb.name, dock = true }
@@ -431,8 +439,14 @@ function ns.NaviPlan(dmap, dx, dy, dname)
           local air = ns.FlightTime and ns.FlightTime(a.id, b.id)
           -- 19.21: ohne Messung die Zeit aus den Spieldaten (Strecke ueber deine Flugpunkte); false = keine Strecke
           local tx = (not air) and ns.TaxiTime and ns.TaxiTime(a.id, b.id)
+          -- 1.4zp (M39): vom Lern Punkt nur seine Strecken, zu ihm hin gar nicht (den kennst du ja noch nicht)
+          local talk = 0
+          if a.learn or b.learn then
+            air, tx = nil, a.learn and a.hyp and a.hyp[b.id] or false
+            talk = ns.NAVI_LEARN and ns.NAVI_LEARN.TALK_S or 10
+          end
           if air or tx ~= false then
-            Relax(v, bu + (air or tx or D(a, b) * 1.15 / TV.FLY_SPEED) + TV.FLY_OVER, { kind = "fly", from = u, t0 = bu, measured = air ~= nil, game = tx and true or nil })
+            Relax(v, bu + (air or tx or D(a, b) * 1.15 / TV.FLY_SPEED) + TV.FLY_OVER + talk, { kind = "fly", from = u, t0 = bu, measured = air ~= nil, game = tx and true or nil })
           end
         end
       end
@@ -525,6 +539,11 @@ function ns.NaviPlan(dmap, dx, dy, dname)
       if nx and nx.kind == "fly" then
         local place = ns.ZoneName and ns.ZoneName(b.map)
         leg.text = (TR"Zum Flugmeister %s"):format((place and place ~= b.name) and (b.name .. ", " .. place) or (b.name or "?"))
+        if b.learn then
+          leg.text = (TR"Zum Flugmeister %s (Flugpunkt lernen)"):format((place and place ~= b.name) and (b.name .. ", " .. place) or (b.name or "?"))
+          leg.learn = true
+          if ns.TestLog then ns.TestLog("NAVI", ("Unbekannter Flugpunkt %s (%d yd) im Weg: hinlaufen, lernen, fliegen"):format(tostring(b.name), b.learnD or 0)) end
+        end
         -- 20.3h (Na, test_203g Punkt 9): Ziel des Flugs gleich im Text (bei mehreren Fluegen hintereinander das letzte)
         local k, last = i + 1, nil
         while edges[k] and edges[k].kind == "fly" do last = edges[k]; k = k + 1 end
@@ -815,6 +834,10 @@ local function Start(nv, quiet, hidden, user)
     ns.Print((TR"Navi: Wo dein Ruhestein gebunden ist (%s), weiss das Addon noch nicht, darum plant das Navi ihn nicht ein. Einmal benutzen oder beim Gastwirt dort vorbeigehen, dann ist er bekannt."):format(nb.home or "?"))
   end
   if nv.fpTip and not quiet and ns.NaviFlugTippText and (not ns.NaviFlugTippNeu or ns.NaviFlugTippNeu(nv.dest)) then
+    ns.Print(ns.NaviFlugTippText(nv.fpTip))
+  -- 1.4zzz3 (M64, S 14:53): auch wenn die Route das Navi still startet, den Flug Tipp einmal je Kontinent und Sitzung im Chat
+  -- (vorher nur im Mini Fenster). Sonst merkt man nicht, dass das Addon Flugpunkte nicht kennt, die der Char hat
+  elseif nv.fpTip and quiet and ns.NaviFlugTippText and nv.dest and ns.NaviFlugTippNeu and ns.NaviFlugTippNeu({ map = "kont" .. tostring(nv.dest.cont), x = 0, y = 0 }) then
     ns.Print(ns.NaviFlugTippText(nv.fpTip))
   end
   if nv.post and not quiet then
@@ -1419,7 +1442,10 @@ end
 -- Zeile "danach Zeppelin nach X, fährt in m:ss, du brauchst ca m:ss, Puffer m:ss". Alle Verbindungen aus den Daten
 -- (Travel.lua LINKS). Ergebnis kurz gemerkt (DP.CACHE_S), damit das Mini Fenster nicht jede Sekunde sucht
 ------------------------------------------------------------
-local DP = { MAX_QUEST = 1, LOOK_STEPS = 8, CACHE_S = 2, RAW_LOG_S = 30 }
+-- 1.4a (P150 Punkt 4, P151): S "nie wenn er weiter als 15min entfernt ist oder mehr als 3 Schritte". Die Abfahrt kommt
+-- jetzt als Balken (ReiseBalken.lua, ns.DepartBar), hoechstens DP.LOOK_STEPS Schritte voraus und nur, wenn du in
+-- hoechstens DP.MAX_NEED_S dort bist
+local DP = { MAX_QUEST = 3, LOOK_STEPS = 3, CACHE_S = 2, RAW_LOG_S = 30, MAX_NEED_S = 900 }
 local dpCache = { at = -99, txt = nil }
 local dpLogKey
 function LiveDepart(l, side, fallbackAt)
@@ -1429,6 +1455,13 @@ function LiveDepart(l, side, fallbackAt)
 end
 local function DpText(name, leave, need)
   local C = ns.Clock or function(s) return tostring(math.floor(s)) .. "s" end
+  if need > DP.MAX_NEED_S then return nil end
+  dpCache.bar = { name = name, leave = leave, need = need, at = GetTime() }
+  -- 1.4z (Pr FRA 04:00 M9): eine Log Zeile je Fahrt, wenn die Abfahrt Meldung kommt (mit Weg Zeit zum Hafen)
+  if ns.TestLog and dpCache.logged ~= name then
+    dpCache.logged = name
+    ns.TestLog("REISE", ("Abfahrt Meldung M9 %s: faehrt in %d s, Weg zum Hafen ca %d s, Puffer %d s"):format(tostring(name), math.floor(leave), math.floor(need), math.floor(leave - need)))
+  end
   local buf = leave - need
   if buf >= 0 then
     return (TR"danach %s, fährt in %s, du brauchst ca %s, Puffer %s"):format(name, C(leave), C(need), C(buf))
@@ -1495,6 +1528,7 @@ function ns.DepartPreview()
   MissPendTick() -- 1.3zo (P117)
   if now - dpCache.at < DP.CACHE_S then return dpCache.txt end
   dpCache.at = now
+  dpCache.bar = nil
   local P = Here()
   local nv = ns.navi
   local ok, txt, key
@@ -1507,6 +1541,16 @@ function ns.DepartPreview()
   if not curRide and cur then for _, a in ipairs(cur.acts or {}) do if a.k == "R" then curRide = true end end end
   if curRide then
     dpCache.txt = nil; dpLogKey = nil
+    -- 1.4a (P151): Balken auch fuer die Fahrt des jetzigen Schritts (wie lange noch bis zur Abfahrt)
+    for _, a in ipairs(cur.acts or {}) do
+      if a.k == "R" and a.link and a.link ~= "fly" and ns.TravelDeparts then
+        local w = ns.TravelDeparts(a.link, a.side, a.li)
+        if w and w > 0 then
+          dpCache.bar = { name = ("%s %s"):format(tostring(a.kind or TR"Reise"), (TR"nach %s"):format(tostring(a.dest or "?"))), leave = w, at = now, cur = true }
+        end
+        break
+      end
+    end
     -- 1.3v (P105 Punkt 4): Route Reise Schritt ohne Navi und verpasst: melden, dann Navi ans Ziel der Fahrt, das den
     -- schnellsten Weg ab jetzt nimmt (naechste Abfahrt, Flug, Ruhestein, anderer Hafen)
     -- 1.3zg (Pr 08:15: Zeppelin Grom'gol verpasst, nicht erkannt): auch wenn ein Navi laeuft (zb nach einem frueheren
@@ -1584,6 +1628,18 @@ function ns.DepartPreview()
   end
   dpLogKey = key
   return txt
+end
+
+-- 1.4a (P151): Abfahrt fuer den Reise Balken: { name, leave (Sekunden bis Abfahrt), need (Sekunden bis du dort bist, oder nil
+-- beim jetzigen Schritt), cur }. nil, wenn keine Fahrt in den naechsten DP.LOOK_STEPS Schritten oder zu weit weg
+function ns.DepartBar()
+  if ns.DepartPreview then pcall(ns.DepartPreview) end
+  local b = dpCache.bar
+  if not b then return nil end
+  local el = GetTime() - (b.at or GetTime())
+  local left = b.leave - el
+  if left <= 0 then return nil end
+  return { name = b.name, leave = left, need = b.need and math.max(0, b.need - el) or nil, cur = b.cur }
 end
 
 function ns.NaviHudInfo()

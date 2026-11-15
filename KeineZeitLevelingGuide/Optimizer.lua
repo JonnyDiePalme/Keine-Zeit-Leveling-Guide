@@ -416,9 +416,15 @@ V11.LONG_STEP_MS = 60
 V11.LONG_STEP_LOG_MAX = 20
 V11.stage = { gen = nil, pct = 0, at = 0 }
 V11.longSteps = 0
+-- 1.4zzs (M59, S 16:20 Tempel Rechnung endet nicht): im Spiel gibt es kein debug.getinfo, darum war die Phase leer.
+-- Jetzt merkt sich Stage die Phase (Prozent Bereich, Stueck k von n) und wann es zuletzt weiter ging (fuer Wachhund und Log)
+V11.STALL_S = 240
 function V11.Stage(gen, p0, p1, k, n)
   local st = V11.stage
-  if st.gen ~= gen then st.gen = gen; st.pct = 0 end
+  if st.gen ~= gen then st.gen = gen; st.pct = 0; st.key = nil end
+  local key = p0 * 100000 + (k or 0)
+  if key ~= st.key then st.key = key; st.progT = GetTime and GetTime() or 0 end
+  st.p0, st.p1, st.k, st.n = p0, p1, k, n
   local p = p0 + (p1 - p0) * math.min(1, (k or 0) / math.max(1, n or 1))
   if p > st.pct then st.pct = p end
   ns.optPct = math.floor(st.pct)
@@ -685,6 +691,8 @@ local function PickDroppers(list, allowed, ql, max)
 end
 -- 19.33 (Pruefer 04:50 Punkt 4, Fall 418): dieselbe Wahl auch fuer die Kartenpunkte (QuestieBridge.lua ObjectivePoints)
 ns.PickDroppers = PickDroppers
+-- 1.4s: Questie Level fuer "??" Gegner (Bosse, Ereignisse)
+ns.LVL_UNKNOWN = 9999
 -- 20.3r: ab so vielen verschiedenen Droppern gilt ein Sammel Item als Zufall Drop (Alles: erst auf Max Level)
 local RANDOM_DROP_N = 12
 local function BuildQuest(qid, allowed, cont, inLog, prog)
@@ -736,7 +744,10 @@ local function BuildQuest(qid, allowed, cont, inLog, prog)
   end
 
   -- Laufweg eines herumlaufenden Mobs: ein paar Punkte davon zaehlen wie Fundorte (zusammen etwa zwei)
-  local function AddPatrol(npc, out)
+  -- 1.4y (P182 M26, S Notiz L14.5: "Patrouillen nicht als Ziel"): Wegpunkte einer Patrouille nur, wenn der Mob hier
+  -- keinen festen Fundort hat (nStatic = Fundorte aus spawns). Sonst zeigte der Pfeil auf einen Weg, wo der Mob gerade nicht ist
+  local function AddPatrol(npc, out, nStatic)
+    if (nStatic or 0) > 0 then return end
     local wp = N(npc, "waypoints")
     if type(wp) ~= "table" then return end
     local flat = {}
@@ -837,12 +848,15 @@ local function BuildQuest(qid, allowed, cont, inLog, prog)
       -- ist kein Gegner, sein Level zaehlt nicht fuer die Grenze plus 2. Vorher wartete so eine Quest bis fast auf sein Level
       -- 19.31: neutrale Tiere (zu beiden freundlich, ohne Dienste) sind doch Gegner, siehe IsFoe
       if not IsFoe(c[1]) then mx = nil end
+      -- 1.4s (Pr 21:15, Realitaet rot: Amokarok Level ?? als Kill Ziel auf 60): Gegner mit Level ?? (Questie 9999 oder
+      -- negativ) nie allein als Kill Ziel, auch nach 60. Zaehlt wie Elite ueber der Grenze (in der Gruppe wie bisher)
+      if mx and (mx >= ns.LVL_UNKNOWN or mx < 0) then q.mobUnknown = true; EliteMob(ns.LVL_UNKNOWN); mx = nil end
       if mx and mx > (q.mobMax or 0) then q.mobMax = mx end
       if mx and IsElite(c[1]) then EliteMob(mx) end
       local ks = (ml and ml > 0 and ns.KillSeconds) and ns.KillSeconds(ml - (ns.simLevel or UnitLevel("player"))) or killSec
       local list = Spawns(N(c[1], "spawns"), allowed, nil, 60)
       local nSpawn = #list
-      AddPatrol(c[1], list)
+      AddPatrol(c[1], list, nSpawn)
       -- 19.31 (Saschas Runde: Spitzhauer geschaetzt 1222 s, echt 205 s): ohne Zahl im Text galten 8 Stueck. Ein Mob mit
       -- nur 1 bis 2 Fundorten ist ein benannter Einzelner, dann ist es 1
       if guess[nm or "?"] and nSpawn > 0 and nSpawn <= 2 then cnt = 1 end
@@ -877,7 +891,7 @@ local function BuildQuest(qid, allowed, cont, inLog, prog)
           local n0 = #pts
           Spawns(N(npc, "spawns"), allowed, pts, 40)
           nSpawn = nSpawn + (#pts - n0)
-          AddPatrol(npc, pts)
+          AddPatrol(npc, pts, #pts - n0)
           -- Level des Mobs an jedem Fundort merken (fuer die Sicherheit unten), nur bei Gegnern (19.31)
           local ml = N(npc, "maxLevel") or N(npc, "minLevel")
           local foe = not noFight and IsFoe(npc)
@@ -988,7 +1002,31 @@ local function BuildQuest(qid, allowed, cont, inLog, prog)
         -- Gespraech, nur im Auktionshaus), weiss die Route nicht, wo das Ziel ist: Quest nicht einplanen
         -- (sonst steht da nur Annehmen und Abgeben, und dazwischen fehlt das Ziel). Im Log bleibt sie drin.
         local vend = I(c[1], "vendors")
-        if not (type(vend) == "table" and #vend > 0) then q.noWhere = (q.noWhere or 0) + 1 end
+        if not (type(vend) == "table" and #vend > 0) then
+          -- 1.4c (P158, S M8 "Donnerbuechse AH Kauf Schritt fehlt"): droppt nirgends und kein Haendler: im Auktionshaus
+          -- kaufen, beim naechsten Auktionator zum Questgeber (Services.lua, Questie npcFlags). Ohne Auktionator wie bisher
+          local ahMade = false
+          local have0 = (not SIMLATE and ns.Api.GetItemCount and ns.Api.GetItemCount(c[1])) or 0
+          local ref = q.A or q.nodes[1]
+          if ref and ref.map and ns.NearestSvc and (prog == nil or not prog.complete) and have0 < cnt then
+            local okA, ah = pcall(ns.NearestSvc, "auction", ref.map, ref.x, ref.y, true)
+            if okA and ah and ah.map then
+              local n = Node("O", ah.map, ah.x, ah.y, 30, { obj = nm, count = cnt, item = c[1], buyAt = (TR"%s (Auktionshaus)"):format(tostring(ah.name or "?")), npc = ah.id, ah = true })
+              if n then
+                if not inLog then n.pre = true end
+                table.insert(q.nodes, n)
+                ahMade = true
+                -- 1.4z (Pr FRA 04:00 M8): eine Log Zeile je Quest, wenn ein Kauf Schritt im Auktionshaus entsteht
+                ns.buyLogged = ns.buyLogged or {}
+                if ns.TestLog and not SIMLATE and not ns.buyLogged[qid] then
+                  ns.buyLogged[qid] = true
+                  ns.TestLog("PLAN", ("Kauf Schritt M8: %s x%d im Auktionshaus %s fuer Quest %d"):format(tostring(nm), cnt or 1, tostring(ah.name or "?"), qid))
+                end
+              end
+            end
+          end
+          if not ahMade then q.noWhere = (q.noWhere or 0) + 1 end
+        end
         q.buy = q.buy or {}
         table.insert(q.buy, { item = c[1], name = nm, count = cnt, vendors = vend })
         -- Haendler mit Ort: ein eigener Halt "kaufen", sonst wird abgegeben, bevor du das Item hast.
@@ -1276,7 +1314,7 @@ local function GroupLoose()
   return V11.DUO_LOOSEN
 end
 ns.OptGroupLoose = GroupLoose
-ns.FLOW = ns.FLOW or { zpen = 2, cpen = 12, contF = 2.0, minBlock = 0, gmax = 1200, gsep = 6, gmin = 300, contLock = false, contKeep = 1.15, lockGrind = 0.25, maxSwitch = 99, qlUp = 2, ports = 2 }
+ns.FLOW = ns.FLOW or { flyPen = 0, siteMergeN = 8, siteGap = 4, zpen = 2, cpen = 12, contF = 2.0, minBlock = 0, gmax = 1200, gsep = 6, gmin = 300, contLock = false, contKeep = 1.15, lockGrind = 0.25, maxSwitch = 99, qlUp = 2, ports = 2 }
 local function Region(n)
   if SAREA and n.cont == SAREA.cont and n.wx and ((n.wx - SAREA.wx) ^ 2 + (n.wy - SAREA.wy) ^ 2) <= SAREA.r2 then return "S" end
   local m = n.map
@@ -1294,10 +1332,16 @@ end
 
 -- Strecke in Yards; anderer Kontinent: Weg zum Hafen, Warten, Fahrt, Weg vom Hafen (als Yards gerechnet)
 -- DRaw ist die echte Strecke (fuer angezeigte Zeiten), D rechnet die Zonenstrafe dazu (fuer Entscheidungen)
+-- 1.4zzf (M38/M11 Pendeln, Pr BER 13:10 und 13:35): V11.dfly sagt, ob DRaw eine Reise (Flug, Schiff) genommen hat. D rechnet
+-- dann fuer die Planung einen festen Zuschlag je Reise dazu (V11.flyPenY, aus ns.FLOW.flyPen in Sekunden): mit vielen
+-- Flugpunkten waren weite Wege so billig, dass die Einfuege Regel Annehmen, Ziele und Abgeben weit auseinander legte und
+-- hin und her flog. Die angezeigten Zeiten (DRaw) bleiben echt
 local function DRaw(a, b)
+  V11.dfly = false
   if b.hearth then return 0 end -- Ruhestein: Zeit steckt in der Dauer
   if a.cont and b.cont and a.cont ~= b.cont then
     local y = ns.TravelYards and ns.TravelYards(a, b, SPEED)
+    V11.dfly = y ~= nil
     return y or 1e7
   end
   local d = math.sqrt((a.wx - b.wx) ^ 2 + (a.wy - b.wy) ^ 2) * PATH
@@ -1312,13 +1356,14 @@ local function DRaw(a, b)
   end
   if d > LONG and a.cont and ns.TravelYards then
     local y = ns.TravelYards(a, b, SPEED)
-    if y and y < d then d = y end
+    if y and y < d then d = y; V11.dfly = true end
   end
   return d
 end
 local function D(a, b)
   if b.hearth then return 0 end
-  return DRaw(a, b) + Pen(a, b)
+  local d = DRaw(a, b)
+  return d + Pen(a, b) + (V11.dfly and (V11.flyPenY or 0) or 0)
 end
 
 -- Zeit der ganzen Route (Laufen plus Arbeit), raw: ohne Zonenstrafe
@@ -1362,7 +1407,12 @@ local lastStepAt, slowSteps, fastSteps, throttleSaid = nil, 0, 0, false
 local calc = { t0 = 0, cpu = 0, frames = 0, max = 0 }
 -- 19.31 (Hardcore Hänger, Prüfer V1 b): Wachhund. Zeit und Phase des letzten Rechen Stücks
 local coLastT, coPhase = 0, nil
-local function CoRun(fn, onErr)
+function V11.StageText()
+  local st = V11.stage
+  if not st.p0 then return "Stand -" end
+  return ("Stand %d bis %d Prozent, Stueck %s von %s"):format(st.p0 or 0, st.p1 or 0, tostring(st.k or "-"), tostring(st.n or "-"))
+end
+local function CoRun(fn, onErr, gen)
   local co = coroutine.create(fn)
   coLastT = GetTime and GetTime() or 0
   do local inf = debug and debug.getinfo and debug.getinfo(fn, "S"); coPhase = inf and inf.linedefined or coPhase end
@@ -1370,6 +1420,8 @@ local function CoRun(fn, onErr)
   local site = ns.coPerf and debug and debug.getinfo and debug.getinfo(fn, "S")
   site = site and site.linedefined
   local function Step()
+    -- 1.4zzs (M59): abgebrochene oder ersetzte Rechnung (neue Generation): das alte Stueck nicht weiter rechnen
+    if gen and busyAt ~= gen then return end
     coFrame = debugprofilestop and debugprofilestop() or 0
     coLastT = GetTime and GetTime() or 0
     -- wie lange dauert ein Bild, waehrend gerechnet wird? (Abstand zum letzten Rechen Stueck)
@@ -1419,7 +1471,7 @@ local function CoRun(fn, onErr)
       local d = debugprofilestop() - coFrame
       if d > V11.LONG_STEP_MS then
         V11.longSteps = V11.longSteps + 1
-        ns.TestLog("RECHNEN", ("Langes Rechen Stueck %d ms, Phase Zeile %s"):format(math.floor(d + 0.5), tostring(coPhase)))
+        ns.TestLog("RECHNEN", ("Langes Rechen Stueck %d ms, Phase Zeile %s, %s"):format(math.floor(d + 0.5), tostring(coPhase), V11.StageText()))
       end
     end
     if not ok then onErr(err); return end
@@ -1592,10 +1644,31 @@ local function VorquestOrder(steps, from, Has0, skipQ, Chain, upto, logOnly)
 end
 ns.OptVorquestOrder = VorquestOrder
 
+-- 1.4zzl (P217 Punkt 4, S Ja 03:19): nach jeder fertigen Rechnung den Muell in kleinen Stuecken aufraeumen (GC_SPREAD.N Stuecke
+-- zu KB alle EVERY Sekunden, Standard 30 x 300 KB ueber 15 s), kaum merkbar. Eine neue Rechnung waehrenddessen setzt nur neu an
+ns.GC_SPREAD = { KB = 300, EVERY = 0.5, N = 30 }
+function ns.GcSpread()
+  local G = ns.GC_SPREAD
+  if not (C_Timer and G and (G.N or 0) > 0) then return end
+  G.left = G.N
+  if G.on then return end
+  G.on = true
+  local function Step()
+    if (G.left or 0) <= 0 then G.on = false; return end
+    collectgarbage("step", G.KB or 300)
+    G.left = G.left - 1
+    if G.left > 0 then C_Timer.After(G.EVERY or 0.5, Step) else G.on = false end
+  end
+  C_Timer.After(G.EVERY or 0.5, Step)
+end
 function ns.Optimize(targetLevel, done, opts)
   opts = opts or {}
   -- Sicherheit: haengt eine Rechnung laenger als 5 Minuten, gilt sie als tot
-  if busy and GetTime and (GetTime() - (busyAt or 0)) > 300 then busy = false end
+  -- 1.4zzt (M59, S Tempel Rechnung endet nicht): vorher galt jede Rechnung nach 5 Minuten als tot, auch wenn sie noch
+  -- rechnete. Ein grosser Abschnitt (S: L50 bis 58, 119 Quests) braucht auf manchem PC laenger, der naechste Anlass hat sie
+  -- abgebrochen und neu gestartet, die wurde wieder nicht fertig (Kreis). Jetzt nur tot, wenn 90 s kein Rechen Stueck mehr lief
+  -- (den echten Stillstand faengt der Wachhund ab)
+  if busy and GetTime and (GetTime() - (busyAt or 0)) > 300 and (GetTime() - (coLastT or 0)) > 90 then busy = false end
   -- 20.3o (Log 20.3m 22:58:19, Ausruestung "rechnet schon"): eine Zusatz Route vom Knopf (Ausruestung, Ruf, Gold,
   -- Questlog) bricht eine laufende Leveling Rechnung ab, statt zu warten. Die alte Rechnung endet beim naechsten
   -- Stueck (busyAt ist dann neu, Later laeuft nicht weiter). Die Leveling Route rechnet danach von selbst wieder
@@ -1655,6 +1728,8 @@ function ns.Optimize(targetLevel, done, opts)
     local F = ns.FLOW or {}
     ZPEN = sec * sp * (F.zpen or 1)
     CPEN = ZPEN * (L0 < 12 and 3 or 2) * (F.cpen or 1)
+    -- 1.4zzf (M38/M11): Zuschlag je Reise in der Planung (Sekunden). 1.4zzg (Pr BER 17:35: 45 und 90 helfen nicht): Standard 0
+    V11.flyPenY = (tonumber(F.flyPen) or 0) * sp
   end
   targetLevel = math.min(60, math.max(L0 + 1, math.floor(targetLevel or (L0 + 3))))
   if targetLevel > L0 + 10 and not (opts and opts.full) then targetLevel = L0 + 10 end
@@ -1751,11 +1826,25 @@ function ns.Optimize(targetLevel, done, opts)
   local function Wachhund()
     if not busy or busyAt ~= myBusy then return end
     local now = GetTime and GetTime() or 0
+    -- 1.4zzs (M59): rechnet weiter (Stuecke laufen), kommt aber seit STALL_S nicht vom Fleck (gleiche Phase, gleiches Stueck):
+    -- abbrechen statt ewig rechnen. Die alte Route bleibt, Hinweis im Chat
+    local st = V11.stage
+    if st.gen == myBusy and st.progT and now - st.progT > V11.STALL_S and now - coLastT <= 60 then
+      busy = false
+      busyAt = (busyAt or 0) + 0.001
+      local info = ("Wachhund: Rechnung kommt seit %d s nicht weiter (%s), abgebrochen, Bilder %d, Level %d bis %d"):format(
+        math.floor(now - st.progT), V11.StageText(), calc.frames, L0 or 0, targetLevel or 0)
+      Report(info)
+      if ns.TestLog then ns.TestLog("FEHLER", info) end
+      if not sim and ns.Print then ns.Print(TR"Die Route Berechnung kam nicht mehr weiter und wurde abgebrochen. Die bisherige Route bleibt. Bitte schick das Log, damit wir es beheben.") end
+      if sim and done then pcall(done, nil) end
+      return
+    end
     if now - coLastT > 60 then
       busy = false
       local KA = ns.Karte
-      local info = ("Wachhund: Rechnung %d s ohne Fortschritt, Phase Zeile %s, Bilder %d, Karte %s, wartet auf %s, Level %d bis %d"):format(
-        math.floor(now - myBusy), tostring(coPhase or "?"), calc.frames, (KA and KA.Preparing and KA.Preparing()) and "bereitet vor" or "fertig",
+      local info = ("Wachhund: Rechnung %d s ohne Fortschritt, Phase Zeile %s, %s, Bilder %d, Karte %s, wartet auf %s, Level %d bis %d"):format(
+        math.floor(now - myBusy), tostring(coPhase or "?"), V11.StageText(), calc.frames, (KA and KA.Preparing and KA.Preparing()) and "bereitet vor" or "fertig",
         tostring(ns.planPending or "-"), L0 or 0, targetLevel or 0)
       Report(info)
       if ns.TestLog then ns.TestLog("FEHLER", info) end
@@ -1788,7 +1877,7 @@ function ns.Optimize(targetLevel, done, opts)
   local myGen = busyAt
   local function Later(fn)
     if busyAt ~= myGen then return end
-    CoRun(fn, Fail)
+    CoRun(fn, Fail, myGen)
   end
   if opts.logOnly then
     Report((TR"rechnet die Route für deine Quests im Log%s ..."):format(opts.zone and (" (" .. opts.zone .. ")") or ""))
@@ -1845,7 +1934,8 @@ function ns.Optimize(targetLevel, done, opts)
     local real = complete
     complete = setmetatable({}, { __index = function(_, k) return sim.done[k] or real[k] end, __pairs = function() return next, sim.done, nil end })
     inLog = sim.log or {}
-    logProg = {}
+    -- 1.4zzd (P206, Pr WUNSCH 1): fertige Quests im Szenario Log (abgabebereit), { [qid] = { complete = true, objs = {} } }
+    logProg = sim.prog or {}
   end
   local _, _, classID = UnitClass("player")
   local _, _, raceID = UnitRace("player")
@@ -3498,14 +3588,14 @@ function ns.Optimize(targetLevel, done, opts)
     return out
   end
   -- einen Besuch verschieben (der beste, der Zeit spart und nichts verletzt); true wenn etwas verschoben wurde
-  local function MergeOnce(keyOf)
+  local function MergeOnce(keyOf, maxGap)
     local vs = Visits(route, keyOf)
     if #vs < 3 then return false end
     local base = TotalTime(route, start, speed)
     local baseBad = Viol(route)
     local best, bestT
     for a = 1, #vs do
-      for b = a + 1, #vs do
+      for b = a + 1, maxGap and math.min(#vs, a + maxGap) or #vs do
         Tick()
         if vs[a].k ~= nil and vs[a].k == vs[b].k then
           -- Besuch a nach hinten (direkt vor b) oder Besuch b nach vorne (direkt hinter a)
@@ -3585,14 +3675,54 @@ function ns.Optimize(targetLevel, done, opts)
     V11.Stage(myGen, 90, 90, 1, 1)
     -- erst Kontinente, dann Zonen (Staedte zaehlen zu ihrer Zone); ein Versuch pro Frame
     local keyOf = (zmPass == 1) and function(nd) return nd.cont end or function(nd) return Region(nd) end
-    local maxI = (zmPass == 1) and (ns.FLOW.contMergeN or 6) or 25
+    -- 1.4zm (P154 M3): Zonen Versuche als Stellschraube (ns.FLOW.zoneMergeN), der Sim kann damit Pingpong gegen Rechenzeit messen.
+    -- 1.4zzk (Pr BER 01:50, dreimal gemessen): Standard 60 statt 25, weniger hin und her, kein Lauf unter 60, Zeit gleich
+    local maxI = (zmPass == 1) and (ns.FLOW.contMergeN or 6) or (ns.FLOW.zoneMergeN or 60)
+    local maxGap
+    -- 1.4zzg (M38/M11 Teil 3, Pr BER 17:35): dritter Durchgang je Gebiet um einen Flugmeister. Mit vielen Flugpunkten flog die
+    -- Route in einer Zone hin und her (Schlingendorntal Thysta, Gringer, Thysta, Gringer), die Zonen Regel sieht das nicht.
+    -- Schluessel = naechster bekannter Flugmeister (gleicher Kontinent, bis SITE_YD), Besuche gleichen Gebiets zusammen,
+    -- wenn es Zeit spart und nichts verletzt (gleiche Pruefung wie Zonen). Nur nahe Besuche (ns.FLOW.siteGap)
+    if zmPass == 3 then
+      maxI, maxGap = ns.FLOW.siteMergeN or 8, ns.FLOW.siteGap or 4
+      local fps = {}
+      for _, f in ipairs((ns.KnownFlightMasters and ns.KnownFlightMasters()) or {}) do
+        local c, wx, wy = World(f.map, f.x, f.y)
+        if c then fps[#fps + 1] = { c = c, wx = wx, wy = wy, id = f.id or (#fps + 1) } end
+      end
+      local memo = {}
+      local SITE_YD2 = 2000 * 2000
+      keyOf = function(nd)
+        local k = memo[nd]
+        if k ~= nil then return k or nil end
+        k = false
+        if nd.wx and nd.cont and nd.kind ~= "G" and not nd.hearth then
+          local bd
+          for _, f in ipairs(fps) do
+            if f.c == nd.cont then
+              local d = (f.wx - nd.wx) ^ 2 + (f.wy - nd.wy) ^ 2
+              if d <= SITE_YD2 and (not bd or d < bd) then bd, k = d, f.id end
+            end
+          end
+        end
+        memo[nd] = k
+        return k or nil
+      end
+      if #fps < 2 or opts.gold or opts.farm then maxI = 0 end
+    end
     local moved = false
     if #route >= 6 and zmIter < maxI then
       -- direkt (nicht in pcall): MergeOnce gibt zwischendurch das Bild frei, Fehler faengt Later ab
-      moved = MergeOnce(keyOf) and true or false
+      moved = MergeOnce(keyOf, maxGap) and true or false
     end
-    if moved then zmIter = zmIter + 1; zmMoves = zmMoves + 1; Later(ZoneMergeStep); return end
+    if moved then
+      zmIter = zmIter + 1; zmMoves = zmMoves + 1
+      if zmPass == 3 then V11.siteMoves = (V11.siteMoves or 0) + 1 end
+      Later(ZoneMergeStep); return
+    end
     if zmPass == 1 then zmPass, zmIter = 2, 0; Later(ZoneMergeStep); return end
+    if zmPass == 2 then zmPass, zmIter = 3, 0; V11.siteMoves = 0; Later(ZoneMergeStep); return end
+    if ns.TestLog and (V11.siteMoves or 0) > 0 then ns.TestLog("RECHNEN", ("Gebiete zusammengelegt (Flugmeister): %d Besuche verschoben"):format(V11.siteMoves)) end
     if zmMoves > 0 then Report((TR"Zonen zusammengelegt: %d Besuche verschoben"):format(zmMoves)) end
     if ns.dbgOrder then ns.dbgOrder("zonemerge", route) end
     pcall(StartFirst)
@@ -4485,7 +4615,12 @@ function ns.Optimize(targetLevel, done, opts)
             if prev.cont == t.cont then
               -- echte Laufzeit: neue Zauber sind wichtig, die Zonenstrafe gilt hier nicht
               local cost = (DRaw(prev, t) + (nxt and (DRaw(t, nxt) - DRaw(prev, nxt)) or 0)) / speed
-              if not best or cost < best.cost then best = { p = p, cost = cost, t = t } end
+              -- 1.4c (P155, M6): Lehrer mit Ruf Rabatt (ab wohlwollend, beim letzten Besuch live gelesen) bevorzugt,
+              -- wenn der Umweg hoechstens ns.TRAINER_REP.BONUS_S mehr kostet
+              local rp = ns.db and ns.db.trainerRep and t.id and ns.db.trainerRep[t.id]
+              local TRp = ns.TRAINER_REP
+              local eff = (rp and TRp and rp >= TRp.MIN_REACTION) and (cost - TRp.BONUS_S) or cost
+              if not best or eff < best.eff then best = { p = p, cost = cost, eff = eff, t = t } end
             end
           end
         end
@@ -5013,6 +5148,7 @@ function ns.Optimize(targetLevel, done, opts)
       busy = false
       opt.end_ = { map = (steps[#steps] or {}).map or mapID, x = (steps[#steps] or {}).x or px, y = (steps[#steps] or {}).y or py, xp = total }
       opt.opts = { all = opts.all, speed = opts.speed, step = opts.step, thrF = opts.thrF, capF = opts.capF, fillGap = opts.fillGap, allCluster = opts.allCluster, rest = opts.rest }
+      pcall(ns.GcSpread)
       if done then done(opt) end
       return
     end
@@ -5119,6 +5255,7 @@ function ns.Optimize(targetLevel, done, opts)
         C_Timer.After(0, function() if ns.RefreshUI then ns.RefreshUI() end end)
       end)
     end
+    pcall(ns.GcSpread)
     if done then done(opt) end
   end
 
@@ -5704,6 +5841,8 @@ end
 
 -- Level fehlt im Schritt: hoechstens alle 10 Min neu rechnen
 local lvlBlockAt = -999
+-- 1.4zf (P198): Mindest Level knapp, Ersatz Schritt suchen (so viele Schritte voraus, so weit weg, so oft je Schritt)
+local KNAPP = { LOOK = 8, YD = 500, MAX = 6 }
 local foeBlockAt = -999 -- 19.13: Gegner am Ziel noch zu hoch, gleiche Regel
 local function Sync()
   local opt = ns.db and ns.db.opt
@@ -5808,11 +5947,17 @@ local function Sync()
     if st and not st.lvlWait and not opt.mirror and not busy and not ns.planBuilding then
       local L = (ns.UnitLevel and ns.UnitLevel("player")) or UnitLevel("player") or 1
       local blocked, need, other = {}, 0, false
+      -- 1.4zf (P198): Abgeben oder Ziel einer Quest, die du hier erst annehmen musst (Annehmen und Abgeben im gleichen
+      -- Schritt, Pr 09:25 Quest 8768), zaehlt mit zur gesperrten Quest und nicht als anderer offener Teil
+      local blockedQ = {}
       for _, a in ipairs(st.acts or {}) do
         if not ActDone(a) then
           local rl = a.k == "A" and a.qid and tonumber((Q(a.qid, "requiredLevel")))
-          if rl and rl > L then blocked[#blocked + 1] = a.qid; need = math.max(need, rl) else other = true; break end
+          if rl and rl > L then blocked[#blocked + 1] = a.qid; blockedQ[a.qid] = true; need = math.max(need, rl) end
         end
+      end
+      for _, a in ipairs(st.acts or {}) do
+        if not ActDone(a) and not (a.qid and blockedQ[a.qid]) then other = true; break end
       end
       -- erst wenn du beim Questgeber bist: unterwegs kommen oft noch genug XP dazu (Sim 17.2: sonst unnoetig neu gerechnet)
       local near = false
@@ -5823,6 +5968,47 @@ local function Sync()
           local px, py = pp:GetXY()
           local d = ns.WorldDist({ pm, px, py }, { st.map, st.x or 0.5, st.y or 0.5 })
           near = d ~= nil and d < 60
+        end
+      end
+      -- 1.4zf (P198, S 12:48 Ja, weiche Variante): fehlt weniger als 1 Level, zuerst einen machbaren Schritt in der Naehe
+      -- vorziehen und nach dem Level Aufstieg zurueck (die Planung bleibt, kein Warten). Nur ohne Ersatz geht es weiter wie bisher
+      if #blocked > 0 and not other and near and need == L + 1 and (st.knappN or 0) < KNAPP.MAX then
+        local pm = ns.PlayerMap and ns.PlayerMap()
+        local pp = pm and C_Map.GetPlayerMapPosition(pm, "player")
+        local px, py = 0, 0
+        if pp then px, py = pp:GetXY() end
+        local pick
+        for j = i + 1, math.min(#opt.steps, i + KNAPP.LOOK) do
+          local sj = opt.steps[j]
+          if sj and sj.map and not sj.travel and not sj.lvlWait then
+            local open, bad = false, false
+            for _, a in ipairs(sj.acts or {}) do
+              if not ActDone(a) then
+                open = true
+                local rl = a.k == "A" and a.qid and tonumber((Q(a.qid, "requiredLevel")))
+                if (rl and rl > L) or (a.qid and blockedQ[a.qid]) then bad = true; break end
+              end
+            end
+            local d = pp and ns.WorldDist({ pm, px, py }, { sj.map, sj.x or 0.5, sj.y or 0.5 })
+            if open and not bad and d and d <= KNAPP.YD then pick = j; break end
+          end
+        end
+        local xpMiss = math.max(0, ((ns.Plain and ns.Plain(UnitXPMax("player"))) or UnitXPMax("player") or 0) - ((ns.Plain and ns.Plain(UnitXP("player"))) or UnitXP("player") or 0))
+        if pick then
+          local sj = opt.steps[pick]
+          st.knappN = (st.knappN or 0) + 1
+          table.remove(opt.steps, pick)
+          sj.lvl, sj.t = st.lvl or sj.lvl, st.t or sj.t
+          table.insert(opt.steps, i, sj)
+          if ns.TestLog then ns.TestLog("ROUTE", ("Mindest Level knapp: Quest %d, fehlt %d XP, vorgezogen Schritt %d"):format(blocked[1], xpMiss, pick)) end
+          if ns.Draw then ns.Draw() end
+          if ns.RefreshHud then ns.RefreshHud() end
+          return
+        end
+        if not st.knappHint then
+          st.knappHint = true
+          ns.Print((TR"Noch %d XP bis Level %d für die Quest hier."):format(xpMiss, need))
+          if ns.TestLog then ns.TestLog("ROUTE", ("Mindest Level knapp: Quest %d, fehlt %d XP, kein Ersatz Schritt in der Naehe"):format(blocked[1], xpMiss)) end
         end
       end
       if #blocked > 0 and not other and near then
@@ -5953,7 +6139,7 @@ local function Sync()
     end
     local s = opt.steps[i]
     if s then
-      ns.Print((TR"Schritt %d von %d: %s"):format(i, #opt.steps, ns.OptStepText(s)))
+      ns.PrintStep((TR"Schritt %d von %d: %s"):format(i, #opt.steps, ns.OptStepText(s)))
       -- neuer Schritt: bist du ein ganzes Level voraus oder hinten? (dann neu rechnen)
       if ns.PlanLevelCheck then C_Timer.After(1, function() ns.PlanLevelCheck("schritt") end) end
     elseif (opt.group or opt.split) and ns.db.optParked then
@@ -5962,11 +6148,11 @@ local function Sync()
     elseif opt.farm and ns.FarmLoopAgain and ns.FarmLoopAgain(opt) then
       -- 20.2: Gold Farm Runde wieder ab der ersten Stelle
       local s1 = opt.steps[1]
-      if s1 then ns.Print((TR"Schritt %d von %d: %s"):format(1, #opt.steps, ns.OptStepText(s1))) end
+      if s1 then ns.PrintStep((TR"Schritt %d von %d: %s"):format(1, #opt.steps, ns.OptStepText(s1))) end
     elseif opt.prof and ns.ProfLoopAgain and ns.ProfLoopAgain(opt) then
       -- Endlos Runde: wieder ab Schritt 1
       local s1 = opt.steps[1]
-      if s1 then ns.Print((TR"Schritt %d von %d: %s"):format(1, #opt.steps, ns.OptStepText(s1))) end
+      if s1 then ns.PrintStep((TR"Schritt %d von %d: %s"):format(1, #opt.steps, ns.OptStepText(s1))) end
     elseif opt.prof then
       if ns.ProfFinish then ns.ProfFinish() end
       AfterFinished(3, opt)
@@ -6237,7 +6423,9 @@ function ns.OptTarget()
   local db = ns.db
   local opt = db and db.opt
   local now = GetTime and GetTime() or 0
-  if otCache.t == now and otCache.opt == opt and otCache.idx == (opt and opt.idx) and otCache.n == ns.optDoneRev then
+  -- 1.4zzo (Pr tickprof 09:30: in der Pause 11 % hier, das Log fragt weiter): in der Pause 5 s gemerkt statt je Bild
+  local fresh = otCache.t == now or (db and db.paused and otCache.t and now - otCache.t < 5)
+  if fresh and otCache.opt == opt and otCache.idx == (opt and opt.idx) and otCache.n == ns.optDoneRev then
     return otCache[1], otCache[2], otCache[3]
   end
   local a, b, c = OptTargetRaw()
@@ -7693,7 +7881,16 @@ end)
 local PLAN_STEP = 5      -- Level pro Abschnitt
 -- 18.4: wieder immer 5 Level. Sim Teil S (18.2, 3 Level mit schwachem PC): Zeit bis 60 +4%, Spitzen beim Rechnen
 -- nicht kleiner, 14% mehr Neurechnen. Schwacher PC heisst jetzt nur: weniger Arbeit pro Bild (5 statt 12 ms)
-local function PlanStep() return PLAN_STEP end
+-- 1.4zzu (Block 1, S 19:15 "Rechnen in Teilen" fix in 1.4): Abschnitt Groesse deckeln. Hohe Level brauchen je Level viel
+-- laenger (S L50 bis 58: 119 Quests, 18 Std in einem Block, rechnet auf manchem PC ueber 5 Min). Darum ab Level 30 und 45
+-- kleinere Abschnitte, und "zu wenig Quests, nochmal bis +3" dort nur +2. Der erste Abschnitt bleibt klein (3 Level)
+ns.PLAN_CAP = { STEPS = { { 0, 5 }, { 30, 4 }, { 45, 3 } }, EXT = 3, EXT_HIGH = 2, HIGH_L = 45 }
+local function PlanStep(L)
+  local st = PLAN_STEP
+  if L then for _, e in ipairs(ns.PLAN_CAP.STEPS) do if L >= e[1] then st = e[2] end end end
+  return st
+end
+local function PlanExt(L) return (L and L >= ns.PLAN_CAP.HIGH_L) and ns.PLAN_CAP.EXT_HIGH or ns.PLAN_CAP.EXT end
 local PLAN_MAX_SECS = 30 -- Sicherheit
 
 function ns.PlanActive()
@@ -8057,7 +8254,8 @@ function ns.PlanBuild(reason, onDone)
   -- stundenlang, und der naechste hat danach alle diese Quests)
   local function Next(retryAll, ext)
     if finished then return end
-    if busy and (GetTime() - (busyAt or 0)) < 300 then C_Timer.After(1, Next); return end
+    -- 1.4zzu (M59): solange eine Rechnung laeuft, warten (vorher nach 5 Min trotzdem weiter, das traf die laufende Rechnung)
+    if busy then lastMove = GetTime and GetTime() or 0; C_Timer.After(1, Next); return end
     lastMove = GetTime and GetTime() or 0
     local rest = false
     if #secs >= PLAN_MAX_SECS or sim.L >= maxL - 0.01 then
@@ -8077,7 +8275,7 @@ function ns.PlanBuild(reason, onDone)
     -- 20.3k (S Test 20.3g Punkt 15, Log L6 bis 59 s): der erste Abschnitt ist klein (3 Level) und wird ohne Nachrechnen
     -- genommen, damit der Pfeil schnell startet. Die weiteren Abschnitte rechnen danach im Hintergrund wie bisher
     local quick = #secs == 0 and not rest and not retryAll and not ext
-    local target = math.min(maxL, fromL + (quick and 3 or PlanStep()) + (ext and 3 or 0))
+    local target = math.min(maxL, fromL + (quick and 3 or PlanStep(fromL)) + (ext and PlanExt(fromL) or 0))
     local mode = ModeFor(fromL)
     if rest then mode.rest = true end
     -- ohne Grinden: reichen die Quests nicht, nochmal mit allen Quests (auch schwaechere), bevor ein Hinweis kommt
@@ -8101,14 +8299,16 @@ function ns.PlanBuild(reason, onDone)
     ns.simLevel = fromL
     Progress((TR"Route wird berechnet: Level %d bis %d ..."):format(fromL, target))
     -- 20.3j (S Test 20.3g Punkt 2): zwei Zwischenstaende im Chat (ca ein Drittel, zwei Drittel), "Route fertig" kommt am Ende
+    -- 1.4h (M13, Pr CHAT_DOPPELT rot: gleiche Zeile mit anderen Zahlen oft hintereinander): Zwischenstaende nur noch ins
+    -- Test Log, im Mini Fenster steht der Stand in Prozent schon (Sanduhr Zeile)
     if not rest and maxL > L then
       local pct = (fromL - L) / (maxL - L)
       if pct >= 0.66 and not said66 then
         said66, said33 = true, true
-        ns.Print((TR"Route wird berechnet: %d %%, jetzt bei Level %d"):format(66, fromL))
+        ns.PrintStep((TR"Route wird berechnet: %d %%, jetzt bei Level %d"):format(66, fromL))
       elseif pct >= 0.33 and not said33 then
         said33 = true
-        ns.Print((TR"Route wird berechnet: %d %%, jetzt bei Level %d"):format(33, fromL))
+        ns.PrintStep((TR"Route wird berechnet: %d %%, jetzt bei Level %d"):format(33, fromL))
       end
     end
     local Use
@@ -8180,7 +8380,7 @@ function ns.PlanBuild(reason, onDone)
         opt.hintGap, short = nil, false
       end
       if (opt.hintGap or short) and not ext and not rest and target < maxL then
-        if ns.TestLog then ns.TestLog("RECHNEN", ("Abschnitt %d (Level %.1f): zu wenig Quests bis %d, nochmal bis %d"):format(#secs + 1, sim.L, target, math.min(maxL, target + 3))) end
+        if ns.TestLog then ns.TestLog("RECHNEN", ("Abschnitt %d (Level %.1f): zu wenig Quests bis %d, nochmal bis %d"):format(#secs + 1, sim.L, target, math.min(maxL, target + PlanExt(fromL)))) end
         Restore(snapN); C_Timer.After(0.05, function() Next(retryAll, true) end); return
       end
       if (opt.hintGap or short) and not mode.all and not retryAll then Restore(snapN); C_Timer.After(0.05, function() Next(1, ext) end); return end
@@ -8446,6 +8646,16 @@ function ns.PlanSectionLive(why)
     end
   end
   local target = sec and math.max(L + 1, math.floor((sec.to or (L + PlanStep())) + 0.5)) or (L + PlanStep())
+  -- 1.4zzv (Pr BER 20:35, S Log zzt: Tour Ende rechnete live bis 58, 134 Quests 26 Std, ueber 3 Min): ein Fahrplan aus der
+  -- Zeit vor dem Deckel hat noch grosse Abschnitte. Live hoechstens so weit wie ein neuer Abschnitt (Groesse plus Nachrechnen).
+  -- Der Rest vom Abschnitt kommt beim naechsten Mal (Level Pruefung nimmt dann wieder diesen Abschnitt)
+  local capL = math.floor(L + PlanStep(L) + PlanExt(L) + 0.5)
+  if target > capL then
+    -- 1.4zzy (Pr BER 04:45: Zeile 4 mal in 17 s): nur wenn sich der Deckel aendert
+    local dk = capL * 1000 + target
+    if ns.TestLog and V11.lastDeckel ~= dk then V11.lastDeckel = dk; ns.TestLog("RECHNEN", ("Abschnitt live bis %d statt %d (Deckel)"):format(capL, target)) end
+    target = capL
+  end
   -- von selbst neu gerechnet (Taschen voll, Upgrade, Abschnitt passt nicht): bist du mitten in einem Questziel,
   -- bleibt es vorne. Sonst springt die Route ohne dein Zutun zu einer anderen Quest (Tester: Skorpide 1/10, dann Medaillon)
   local mode = ModeFor(L)
@@ -8473,7 +8683,9 @@ function ns.PlanSectionLive(why)
       local waited = 0
       local function Poll()
         waited = waited + V11.LIVE_WAIT_POLL_S
-        if ns.OptBusy() and waited < V11.LIVE_WAIT_MAX_S then C_Timer.After(V11.LIVE_WAIT_POLL_S, Poll) return end
+        -- 1.4zzt (M59): rechnet die Route noch, weiter warten statt nach 3 Minuten neu anstossen (das brach sie ab).
+        -- Nach LIVE_WAIT_MAX_S nur noch alle 10 s nachsehen
+        if ns.OptBusy() then C_Timer.After(waited < V11.LIVE_WAIT_MAX_S and V11.LIVE_WAIT_POLL_S or 10, Poll) return end
         ns.planLiveWait = nil
         if ns.PlanActive() and db.plan60 == pl then ns.PlanSectionLive("auto") end
       end
@@ -9268,14 +9480,56 @@ function ns.ProfileSwitch(k)
     elseif ns.AutoOpt then ns.AutoOpt(true) end
   end
 end
+-- 1.4zk (M31, S 16:42 Ja): passt der aktuelle Schritt der zurueckgeholten Route noch? Nicht schon erledigt, kein Annehmen
+-- ueber deinem Level, gleicher Kontinent wie du. Rueckgabe true oder false und der Grund
+local TOUR_BACK = { CHECK_S = 300 }
+local function BackStepFits(o)
+  local st = o and o.steps and o.steps[o.idx or 1]
+  if not (st and type(st.acts) == "table" and st.acts[1]) then return false, "kein Schritt" end
+  local open = false
+  local L = UnitLevel("player") or 1
+  for _, a in ipairs(st.acts) do
+    if not ActDone(a) then
+      open = true
+      local rl = a.k == "A" and a.qid and tonumber((Q(a.qid, "requiredLevel")))
+      if rl and rl > L then return false, ("Level %d noetig"):format(rl) end
+    end
+  end
+  if not open then return false, "schon erledigt" end
+  local pm = ns.PlayerMap and ns.PlayerMap()
+  local pp = pm and C_Map.GetPlayerMapPosition(pm, "player")
+  if pp and st.map and ns.MapWorld then
+    local px, py = pp:GetXY()
+    local c1 = ns.MapWorld(pm, px, py)
+    local c2 = ns.MapWorld(st.map, st.x or 0.5, st.y or 0.5)
+    if c1 and c2 and c1 ~= c2 then return false, "anderer Kontinent" end
+  end
+  return true, "passt"
+end
 -- eine Tour oder Farm Route ist fertig oder gestoppt: zusaetzliches Profil weg, zurueck zur Leveling Route.
--- Ende einer Tour ist eine Regel fuer Neu rechnen: der Abschnitt wird ab hier neu gerechnet (du bist woanders).
+-- 1.4zk (M31, S 16:42): die zurueckgeholte Route bleibt, wenn ihr Schritt noch passt (vorher immer gleich neu gerechnet,
+-- S Log 13:33: 130 s). Nach TOUR_BACK.CHECK_S sanft nachpruefen, passt der Schritt dann nicht mehr: Abschnitt neu.
 function ns.ProfileBackToLevel(finished)
   local db = ns.db
   if db and db.profiles then db.profiles.extra = nil end
   if ns.TestLog then ns.TestLog("PROFIL", (finished and "fertig: " or "beendet: ") .. tostring(db and db.opt and db.opt.title)) end
   local ok = ns.ProfileResume and ns.ProfileResume("level")
   if ok and ns.PlanActive and ns.PlanActive() and ns.PlanSectionLive and not (ns.groupFollow and db.opt and db.opt.group) then
+    local fits, why = BackStepFits(db.opt)
+    if fits then
+      if ns.TestLog then ns.TestLog("PLAN", ("Tour Ende: Leveling Route bleibt, Schritt %d passt"):format(db.opt.idx or 1)) end
+      local o0 = db.opt
+      C_Timer.After(TOUR_BACK.CHECK_S, function()
+        local d = ns.db
+        if not (d and d.opt == o0 and ns.ProfileOf(o0) == "level") then return end
+        if (ns.OptBusy and ns.OptBusy()) or ns.planBuilding then return end
+        local f2, w2 = BackStepFits(o0)
+        if ns.TestLog then ns.TestLog("PLAN", ("Tour Ende Nachpruefung: Schritt %d %s%s"):format(o0.idx or 1, w2, f2 and "" or ", Abschnitt neu")) end
+        if not f2 and ns.PlanSectionLive then ns.PlanSectionLive() end
+      end)
+      return
+    end
+    if ns.TestLog then ns.TestLog("PLAN", ("Tour Ende: Schritt %d passt nicht (%s), Abschnitt neu"):format(db.opt.idx or 1, tostring(why))) end
     if ns.TestLog then ns.TestLog("RECHNEN", "Neu rechnen automatisch: Ende Tour") end
     -- 1.2q (P79, K 20:05: nach "Tour beenden" kam 17 s lang der alte Schritt 4/189 "Intaktes Raptorhorn" im Brachland)
     ns.optStale = { opt = db.opt, t = GetTime and GetTime() or 0 }
@@ -9332,6 +9586,13 @@ end
 -- 1.1 (K Stufe B 14): Dungeon Route nachfuehren. Nach jedem Schritt und sonst alle DUNG_EVERY_S Sekunden aus den Daten
 -- neu bauen, was noch fehlt; nur laden, wenn sich etwas geaendert hat (andere Quests oder Reihenfolge)
 V11.DUNG_EVERY_S = 20
+function V11.DungLogSig()
+  local n, c = 0, 0
+  for q, p in pairs(ns.logProgress or {}) do
+    if type(q) == "number" then n = n + q; if type(p) == "table" and p.complete then c = c + q end end
+  end
+  return n .. ":" .. c
+end
 function V11.DungSig(steps, from)
   local t = {}
   for i = from or 1, #(steps or {}) do
@@ -9351,12 +9612,19 @@ function V11.DungTick()
   if ns.InInstance and ns.InInstance() then return end
   local now = GetTime()
   local idx = o.idx or 1
-  if V11.dungIdx == idx and now - V11.dungAt < V11.DUNG_EVERY_S then return end
-  V11.dungIdx, V11.dungAt = idx, now
+  -- 1.4zp (M41): aendert sich das Questlog (angenommen, Ziel fertig, abgegeben), gleich neu pruefen, sonst alle DUNG_EVERY_S
+  local ls = V11.DungLogSig()
+  local why = (V11.dungLogS ~= nil and ls ~= V11.dungLogS) and "Questlog" or (V11.dungIdx ~= idx and "Schritt" or "Zeit")
+  if V11.dungIdx == idx and now - V11.dungAt < V11.DUNG_EVERY_S and ls == V11.dungLogS then return end
+  V11.dungIdx, V11.dungAt, V11.dungLogS = idx, now, ls
   if idx > #o.steps then return end
   for _, d in ipairs(ns.dungeons or {}) do
     if d.name == o.dungeonName then
       local ok, steps, info = pcall(ns.DungeonRoute, d)
+      if not ok and V11.dungErr ~= tostring(steps) then
+        V11.dungErr = tostring(steps)
+        if ns.TestLog then ns.TestLog("RECHNEN", "Dungeon Route Fehler: " .. tostring(steps)) end
+      end
       -- 1.3zo (P116): nicht nochmal laden, wenn genau diese Liste schon geladen wurde (vorher verglich es die neue Liste ab 1
       -- mit der alten ab idx, das passte nach dem Laden nie, darum jede Sekunde neu laden, Navi weg, Chat Meldung)
       local sig = ok and steps and V11.DungSig(steps, 1)
@@ -9367,7 +9635,7 @@ function V11.DungTick()
         ns.OptLoad(steps, info)
         ns.db.opt.dungeonRoute, ns.db.opt.dungeonName = true, d.name
         V11.dungIdx, V11.dungAt = ns.db.opt.idx or 1, GetTime()
-        if ns.TestLog then ns.TestLog("RECHNEN", ("Dungeon Route nachgefuehrt: %s, %d Schritte"):format(d.name, #steps)) end
+        if ns.TestLog then ns.TestLog("RECHNEN", ("Dungeon Route nachgefuehrt: %s, %d Schritte, Grund %s"):format(d.name, #steps, why)) end
       end
       return
     end
@@ -9402,12 +9670,16 @@ function ns.ProfileMigrate(db)
   local pr = db and db.profiles
   if not pr then return end
   local best
+  local gone = {}
   for _, k in ipairs({ "prof", "gold", "rep" }) do
     local p = pr[k]
+    if p then gone[#gone + 1] = k end
     if p and RouteOpen(p.opt) and (not best or (p.at or 0) > (best.at or 0)) then best = p end
     pr[k] = nil
   end
   if best and not pr.extra then pr.extra = best end
+  -- 1.4zzd (P210, K 11:00): fuer die MIGRATION Zeile (DebugLog), was beim Laden umgestellt wurde
+  if #gone > 0 then ns.migNote = (ns.migNote and (ns.migNote .. "; ") or "") .. ("alte Profile %s weg%s"):format(table.concat(gone, ","), (best and pr.extra == best) and ", eins davon ist jetzt extra" or "") end
 end
 
 ------------------------------------------------------------

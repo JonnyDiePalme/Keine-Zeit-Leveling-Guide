@@ -47,6 +47,18 @@ ns.PROFS = {
   { key = "cook", skillId = 185, name = TR"Kochkunst", short = TR"Kochen", skills = { "Kochkunst", "Cooking" }, icon = ICON .. "INV_Misc_Food_15", banner = "fw_beruf_kochen", kind = "mob", free = true },
   { key = "fish", skillId = 356, name = TR"Angeln", short = TR"Angeln", skills = { "Angeln", "Fishing" }, icon = ICON .. "Trade_Fishing", banner = "fw_beruf_angeln", kind = "fish" },
 }
+-- 1.4x (P170 Rest "Gehe zu Beruf"): Zauber, die das Berufsfenster oeffnen (alle Raenge, der gelernte zaehlt). Sammel
+-- Berufe ohne eigenes Fenster haben keinen Eintrag
+ns.PROF_WINDOW = { mine = { 2656 }, cloth = { 3908, 3909, 3910, 12180 }, cook = { 2550, 3102, 3413, 18260 } }
+function ns.ProfWindowSpell(key)
+  for _, id in ipairs(ns.PROF_WINDOW[key] or {}) do
+    local known = (IsPlayerSpell and IsPlayerSpell(id)) or (IsSpellKnown and IsSpellKnown(id))
+    if known then
+      local name = ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(id) or (GetSpellInfo and GetSpellInfo(id))
+      if name then return name end
+    end
+  end
+end
 local PROF = {}
 for _, p in ipairs(ns.PROFS) do PROF[p.key] = p end
 ns.PROF = PROF
@@ -228,10 +240,151 @@ function ns.ProfLogAll()
   table.sort(parts)
   ns.TestLog("BERUF", #parts > 0 and ("erkannt: " .. table.concat(parts, ", ")) or "keine Berufe erkannt")
 end
+-- 1.4u (P170 soll2, S: "bei Wer sollte ein Name drin stehen, einer meiner Chars sollte sowas koennen"): alle Berufe mit
+-- Skill je Charakter merken (accountweit wie die Rezepte), damit "Wer" auch sagt, wer ein Rezept lernen koennte
+function B.SnapSkills()
+  local db = DB()
+  if not (db and GetNumSkillLines and GetSkillLineInfo and B.CharKey) then return end
+  local out = {}
+  for i = 1, (Plain(PAll(pcall(GetNumSkillLines))) or 0) do
+    local name, header, _, rank = PAll(pcall(GetSkillLineInfo, i))
+    name, rank = Plain(name), Plain(rank)
+    if name and not Plain(header) and rank then out[name] = rank end
+  end
+  if next(out) then
+    db.skills = db.skills or {}
+    db.skills[B.CharKey()] = out
+  end
+end
 if C_Timer then
   local f = CreateFrame("Frame")
   ns.RegEv(f, "PLAYER_LOGIN")
-  f:SetScript("OnEvent", function() C_Timer.After(8, function() pcall(ns.ProfLogAll) end) end)
+  ns.RegEv(f, "SKILL_LINES_CHANGED")
+  f:SetScript("OnEvent", function(_, e)
+    if e == "PLAYER_LOGIN" then C_Timer.After(8, function() pcall(ns.ProfLogAll); pcall(B.SnapSkills) end)
+    else C_Timer.After(1, function() pcall(B.SnapSkills) end) end
+  end)
+end
+
+-- 1.4zh2 (P200, S 14:56 und 15:05): Suche aktiv halten (Mineraliensuche, Kraeutersuche). Nur eine geht gleichzeitig, darum
+-- hoechstens ein Beruf (ns.db.keepTrack = "mine" oder "herb"). Gesetzt wird ueber die Minimap Suche (C_Minimap.SetTracking,
+-- wie andere Suche Addons), nie ausser Kampf Regeln umgehen: im Kampf nichts. Kein Ersatz Knopf (S 15:05). Geht es nicht
+-- (API fehlt, nach dem Setzen nicht aktiv), steht das im Log BERUFE "Suche aktiv halten: ..." fuer den Befund an K
+ns.KEEP_TRACK = { SPELL = { mine = 2580, herb = 2383 }, EVERY_S = 300, CHECK_S = 1.5 }
+local function TrackApi()
+  local CM = C_Minimap
+  local num = (CM and CM.GetNumTrackingTypes) or GetNumTrackingTypes
+  local info = (CM and CM.GetTrackingInfo) or GetTrackingInfo
+  local set = (CM and CM.SetTracking) or SetTracking
+  return num, info, set
+end
+local function TrackFind(spell)
+  local num, info = TrackApi()
+  if not (num and info) then return nil end
+  local want = ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(spell)
+  for i = 1, (Plain(PAll(pcall(num))) or 0) do
+    local ok, a, b, c, d, e, f = pcall(info, i)
+    if ok then
+      local name, active, sid
+      if type(a) == "table" then name, active, sid = a.name, a.active, a.spellID
+      else name, active, sid = a, c, f end
+      if (sid and sid == spell) or (want and name == want) then return i, active and true or false end
+    end
+  end
+end
+function ns.ProfTrackKey() return ns.db and ns.db.keepTrack or nil end
+-- 1.4zs (P200 Test, K 00:55): eine Suche im Spiel direkt an oder aus (nur fuer den Test, danach stellt er zurueck).
+-- Rueckgabe: vorher an (true/false) oder nil, wenn die Suche fehlt
+-- 1.4zx (K 03:36: der Test liess die Mineraliensuche aus): on = nil liest nur, setzt nichts
+function ns.ProfTrackRaw(key, on)
+  local spell = ns.KEEP_TRACK.SPELL[key]
+  if not spell then return nil end
+  -- 1.4zz (K 04:56, S Test: "keine Suche in der Minimap Liste", obwohl an): "spell and TrackFind(spell)" gab nur den ersten
+  -- Wert weiter, active war immer nil. Jetzt beide Werte
+  local i, active = TrackFind(spell)
+  if not i then return nil end
+  if on == nil then return active and true or false end
+  local _, _, set = TrackApi()
+  if set and active ~= (on and true or false) then pcall(set, i, on and true or false) end
+  return active
+end
+-- 1.4zz (K 04:56): alle Eintraege der Minimap Suche fuers Test Log (Index, Name, Textur, Art, aktiv, Spell)
+function ns.ProfTrackDump()
+  local num, info = TrackApi()
+  local out = {}
+  if not (num and info) then return out end
+  local want = {}
+  for k, sp in pairs(ns.KEEP_TRACK.SPELL) do want[k] = ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(sp) end
+  for i = 1, (Plain(PAll(pcall(num))) or 0) do
+    local ok, a, b, c, d, e, f = pcall(info, i)
+    if ok then
+      local name, tex, active, kind, sid
+      if type(a) == "table" then name, tex, active, kind, sid = a.name, a.texture, a.active, a.type, a.spellID
+      else name, tex, active, kind, sid = a, b, c, d, f end
+      out[#out + 1] = ("%d %s | Textur %s | Art %s | aktiv %s | Spell %s"):format(i, tostring(Plain(name)), tostring(Plain(tex)), tostring(Plain(kind)), tostring(Plain(active)), tostring(Plain(sid)))
+    end
+  end
+  out[#out + 1] = ("gesucht: mine '%s' (%d), herb '%s' (%d)"):format(tostring(want.mine), ns.KEEP_TRACK.SPELL.mine, tostring(want.herb), ns.KEEP_TRACK.SPELL.herb)
+  return out
+end
+-- 1.4zp (P201 Test): Zustand der Suchen fuer das Test Log (Haken, und je Suche in der Minimap Liste an oder aus)
+function ns.ProfTrackState()
+  local t = { "Haken " .. tostring(ns.db and ns.db.keepTrack or "aus") }
+  for k, spell in pairs(ns.KEEP_TRACK.SPELL) do
+    local i, active = TrackFind(spell)
+    t[#t + 1] = ("%s %s"):format(k, i and (active and "an" or "aus") or "fehlt")
+  end
+  table.sort(t)
+  return table.concat(t, ", ")
+end
+function ns.ProfTrackSet(key, on)
+  if not ns.db then return end
+  local old = ns.db.keepTrack
+  if on then
+    if old and old ~= key then ns.Print(TR"Es geht nur eine Suche gleichzeitig. Die andere hält Keine Zeit Leveling Guide jetzt nicht mehr aktiv.") end
+    ns.db.keepTrack = key
+    if ns.ProfTrackCheck then ns.ProfTrackCheck("Haken") end
+  elseif old == key then
+    ns.db.keepTrack = nil
+  end
+  if ns.TestLog then ns.TestLog("BERUFE", ("Suche aktiv halten: %s"):format(tostring(ns.db.keepTrack or "aus"))) end
+end
+function ns.ProfTrackCheck(why)
+  local key = ns.db and ns.db.keepTrack
+  local spell = key and ns.KEEP_TRACK.SPELL[key]
+  if not spell then return end
+  if InCombatLockdown and InCombatLockdown() then return end
+  if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return end
+  -- 1.4zx (K 03:36, S Test 1.4zu: "keine Suche gelernt", obwohl die Mineraliensuche an war): IsPlayerSpell kennt die Suche
+  -- auf diesem Client nicht sicher. Gelernt ist sie, wenn sie in der Minimap Liste steht (TrackFind), sonst Zeile "fehlt"
+  local i, active = TrackFind(spell)
+  if not i then
+    if ns.TestLog and B.trackLog ~= "fehlt" then B.trackLog = "fehlt"; ns.TestLog("BERUFE", ("Suche aktiv halten: Suche %d nicht in der Minimap Liste (%s)"):format(spell, tostring(why))) end
+    return
+  end
+  if active then return end
+  local _, _, set = TrackApi()
+  local ok, err = pcall(set, i, true)
+  C_Timer.After(ns.KEEP_TRACK.CHECK_S, function()
+    local _, now = TrackFind(spell)
+    if ns.TestLog then
+      ns.TestLog("BERUFE", ("Suche aktiv halten: %s wieder an (%s): %s"):format(key, tostring(why),
+        (ok and now) and "ok" or ("geht nicht, " .. (ok and "nach dem Setzen nicht aktiv" or tostring(err)))))
+    end
+    -- 1.4zze (Pr BER 13:10): Zauber Suchen gehen per SetTracking nur aus, an braucht den Zauber. Dann ein Hinweis im Chat
+    -- (hoechstens alle 10 Min), damit du sie mit einem Klick wieder anmachst
+    if not now and (not B.trackHintAt or GetTime() - B.trackHintAt > 600) then
+      B.trackHintAt = GetTime()
+      local nm = ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(spell) or (key == "mine" and TR"Mineraliensuche" or TR"Kräutersuche")
+      ns.Print((TR"%s ist aus. Das Addon kann sie nicht selbst anmachen, bitte an der Minimap oder im Zauberbuch wieder anklicken."):format(tostring(nm)))
+    end
+  end)
+end
+if C_Timer then
+  local tf = CreateFrame("Frame")
+  for _, ev in ipairs({ "PLAYER_ENTERING_WORLD", "PLAYER_ALIVE", "PLAYER_UNGHOST", "PLAYER_CONTROL_GAINED", "PLAYER_REGEN_ENABLED" }) do ns.RegEv(tf, ev) end
+  tf:SetScript("OnEvent", function(_, e) C_Timer.After(e == "PLAYER_ENTERING_WORLD" and 6 or 2, function() pcall(ns.ProfTrackCheck, e) end) end)
+  C_Timer.After(10, function() if ns.Ticker then ns.Ticker(ns.KEEP_TRACK.EVERY_S, function() pcall(ns.ProfTrackCheck, "5 Min") end, true, true) end end)
 end
 
 -- kann man das mit dem Skill farmen? (Stoff und Fleisch immer), plus wie viel fehlt
@@ -890,12 +1043,45 @@ local function LoadAL()
     end
   end
 end
+-- 1.4zd (P170 M22): Rezepte zuerst aus der eigenen Daten Datei Daten\FWW_Rezepte.lua (cMaNGOS classic-db, Pr P196),
+-- Format FWW_REZEPTE[Zauber] = { Skill Linie, Skill, Item, Menge, { Reagenz, Anzahl, ... }, Quelle }.
+-- AtlasLoot ist danach nur noch Zusatz fuer Rezepte, die die Datei nicht kennt.
+local SKILL_LINE_PROF = { [129] = 1, [164] = 2, [165] = 3, [171] = 4, [182] = 5, [185] = 6, [186] = 7, [197] = 8,
+  [202] = 9, [333] = 10, [356] = 11, [393] = 12, [40] = 13 }
+local function DataRecipes(idx, seen)
+  local D = Tbl(_G.FWW_REZEPTE) or Tbl(ns.FWW_REZEPTE)
+  if not D then return 0 end
+  local n = 0
+  for spell, e in pairs(D) do
+    if type(spell) == "number" and type(e) == "table" and not seen[spell] then
+      seen[spell] = true
+      n = n + 1
+      if n % 200 == 0 then Tick() end
+      local line = e[1]
+      local prof = (type(line) == "number" and PROF_NAMES[SKILL_LINE_PROF[line] or 0]) or (type(line) == "string" and TR(line)) or "?"
+      local reag = Tbl(e[5]) or {}
+      for i = 1, #reag - 1, 2 do
+        local rid, cnt = reag[i], reag[i + 1]
+        if type(rid) == "number" and BYID[rid] then
+          idx[rid] = idx[rid] or {}
+          table.insert(idx[rid], { spell = spell, created = type(e[3]) == "number" and e[3] or nil, prof = prof,
+            skill = tonumber(e[2]) or 0, count = tonumber(cnt) or 1, src = type(e[6]) == "string" and e[6] or nil,
+            made = tonumber(e[4]) or 1, reag = reag })
+        end
+      end
+    end
+  end
+  return n
+end
+function ns.ProfRecipeDataCount() local D = Tbl(_G.FWW_REZEPTE) or Tbl(ns.FWW_REZEPTE); local n = 0; for _ in pairs(D or {}) do n = n + 1 end; return n end
 local function BuildRecipes()
-  local AL, P = ALProf()
-  if not (P and type(P.GetProfessionData) == "function") then return {} end
-  LoadAL()
   local idx = {}
   local seen = {}
+  local nData = DataRecipes(idx, seen)
+  if ns.TestLog then ns.TestLog("BERUFE", "Rezepte Datei M22: " .. nData .. " Rezepte") end
+  local AL, P = ALProf()
+  if not (P and type(P.GetProfessionData) == "function") then return idx end
+  LoadAL()
   for _, m in ipairs(ALMODS) do
     local ST = ALStorage()
     local st = ST and ST[m]
@@ -946,6 +1132,22 @@ end
 
 -- 19.31: fuer Hinweise und das Test Log, ohne neu zu rechnen
 function ns.ProfRecipeIndexNow() return recipeIdx end
+-- 1.4zzv (M22, S: kein geschaetzter Wert bei den Rezepten): Wert vom Ergebnis (Menge mal Item Wert wie bei Farm,
+-- Haendler oder Auktionshaus) und Kosten der Zutaten. Gibt wert, kosten (Kupfer, 0 wenn unbekannt)
+function ns.ProfRecipeValue(e)
+  if type(e) ~= "table" or not ns.ItemValue then return 0, 0 end
+  local v = e.created and (ns.ItemValue(e.created) or 0) * (e.made or 1) or 0
+  local c = 0
+  if type(e.reag) == "table" then
+    for i = 1, #e.reag - 1, 2 do
+      local rid, cnt = e.reag[i], e.reag[i + 1]
+      if type(rid) == "number" then c = c + (ns.ItemValue(rid) or 0) * (tonumber(cnt) or 1) end
+    end
+  elseif type(e.rmap) == "table" then
+    for rid, cnt in pairs(e.rmap) do c = c + (ns.ItemValue(rid) or 0) * (tonumber(cnt) or 1) end
+  end
+  return v, c
+end
 -- Rezepte fuer eine Sache: { { name, prof, skill, count, who = { "du", "Name" }, known } }
 function ns.ProfRecipes(id)
   local out, byKey = {}, {}
@@ -966,7 +1168,23 @@ function ns.ProfRecipes(id)
   for _, r in ipairs(recipeIdx and recipeIdx[id] or {}) do
     local name = (ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(r.spell)) or (r.created and ns.Api.GetItemInfo(r.created)) or (TR"Rezept " .. r.spell)
     local who, mine = Who(r.created, name)
-    local e = { name = name, prof = r.prof, skill = r.skill, count = r.count, who = who, known = mine, created = r.created }
+    -- 1.4zzv (M56): Rezept auch ohne geoeffnetes Berufsfenster als bekannt erkennen (Zauber des Rezepts gelernt)
+    if not mine and r.spell and IsPlayerSpell then
+      local okK, kn = pcall(IsPlayerSpell, r.spell)
+      if okK and kn then mine = true; table.insert(who, 1, TR"du") end
+    end
+    local e = { name = name, prof = r.prof, skill = r.skill, count = r.count, who = who, known = mine, created = r.created, src = r.src,
+      made = r.made, reag = r.reag }
+    -- 1.4u: wer koennte es lernen (Beruf mit genug Skill, Rezept noch nicht bekannt)
+    if #who == 0 and db and db.skills and r.prof then
+      for ck, sk in pairs(db.skills) do
+        local v = sk[r.prof]
+        if v and v >= (r.skill or 0) then
+          e.canLearn = e.canLearn or {}
+          table.insert(e.canLearn, ck == me and TR"du" or (ck:match("^([^%-]+)") or ck))
+        end
+      end
+    end
     byKey[r.created or name] = e
     table.insert(out, e)
   end
@@ -977,7 +1195,7 @@ function ns.ProfRecipes(id)
         local e = byKey[r.c or rn]
         if not e then
           local who, mine = Who(r.c, rn)
-          e = { name = rn, prof = r.p or "?", skill = r.s or 0, count = r.r[id], who = who, known = mine, created = r.c, learned = true }
+          e = { name = rn, prof = r.p or "?", skill = r.s or 0, count = r.r[id], who = who, known = mine, created = r.c, learned = true, rmap = r.r }
           byKey[r.c or rn] = e
           table.insert(out, e)
         end
@@ -1230,7 +1448,8 @@ local function ZonePoints(map, sel, opt, idx)
   local cells = ZoneCells(map)
   local merge = {}
   for _, it in ipairs(sel.node) do
-    local skill = opt.ignoreSkill and 999 or (ns.ProfSkill(it.prof) or 0)
+    -- 1.4zzx (Pr BER 01:25): Erz Runde gibt ihren Skill mit (opt.skillFor), sonst der echte Skill
+    local skill = opt.ignoreSkill and 999 or (opt.skillFor and opt.skillFor[it.prof]) or (ns.ProfSkill(it.prof) or 0)
     for node, need in pairs(it.nodes) do
       if skill >= need then
         for _, c in ipairs(cells[node] or {}) do
@@ -2055,6 +2274,44 @@ end
 ns.PROF_GOLD_WAIT_S = 20
 -- 1.3zza (P129): Angeln, Faenge pro Stunde fuer die Gold Schaetzung (Wurf und Einholen ca 20 s), mal Anteil des Fischs im Gebiet
 ns.PROF_FISH_CATCH_H = 180
+-- 1.4x (P172, S notizen berufe soll 1: "Optimale Route ... was am meisten Gold bringt, 5 Vorschlaege"): je Zone die
+-- Sachen der gewaehlten Berufe (mit genug Skill) aus der Gold Rechnung (ns.profGold, passt sich mit Messungen an).
+-- Die beste Sache voll, weitere mit PROF_BEST.MIX (sie liegen auf derselben Runde, kosten aber Zeit). Ergebnis die
+-- besten PROF_BEST.N Zonen { map, gph, items = { {id, g, prof} }, ah = mehr Wert ueber AH }
+ns.PROF_BEST = { N = 5, MIX = 0.6, ITEMS = 5 }
+function ns.ProfBestRoutes(keys)
+  local list = ns.profGold
+  if not list then return nil end
+  local byZone = {}
+  for _, e in ipairs(list) do
+    if keys[e.prof] and e.can then
+      for map, g in pairs(e.zones or {}) do
+        if type(g) == "number" and g > 0 then
+          byZone[map] = byZone[map] or {}
+          table.insert(byZone[map], { id = e.id, g = g, prof = e.prof })
+        end
+      end
+    end
+  end
+  local out = {}
+  for map, items in pairs(byZone) do
+    table.sort(items, function(a, b) return a.g > b.g end)
+    local tot, ah, use = 0, 0, {}
+    for i, it in ipairs(items) do
+      if i > ns.PROF_BEST.ITEMS then break end
+      local f = (i == 1) and 1 or ns.PROF_BEST.MIX
+      tot = tot + it.g * f
+      local _, src = ns.ItemValue(it.id)
+      if type(src) == "string" and src:find("^AH") then ah = ah + it.g * f end
+      use[#use + 1] = it
+    end
+    out[#out + 1] = { map = map, gph = tot, items = use, ah = ah > tot / 2 }
+  end
+  table.sort(out, function(a, b) return a.gph > b.gph end)
+  while #out > ns.PROF_BEST.N do table.remove(out) end
+  return out
+end
+
 function ns.ProfGoldList(cb)
   local function Calc(idx)
     local out = {}
@@ -2154,6 +2411,83 @@ function ns.ProfGoldRoute(row)
   end)
   s.items, s.zones = oldI, oldZ
   if not ok then ns.Print(TR"Für diese Stelle gibt es gerade keine Route.") end
+end
+
+-- 1.4zzw (P221 M60, S 23:19): Erz Kreis Route. Alle Erze bis zu deinem Bergbau Skill in einer Zone (Standard: wo du bist),
+-- als Runde im Kreis (Modus loop der Farm Route: kurze Reihenfolge der Stellen, am Ende wieder von vorne, ProfLoopAgain).
+-- Abbruch jederzeit mit ns.ErzKreisStop (gleich wie Farm Route beenden: zurueck zur Leveling Route).
+-- Deine Haken bei Sachen und Gebieten bleiben, die Auswahl gilt nur fuer diese Rechnung.
+-- Gibt die Liste der Erze zurueck (fuer Tests): { { id, skill, name } }
+function ns.ErzKreisErze(skill)
+  local out = {}
+  for _, it in ipairs(ITEMS.mine or {}) do
+    if (it.skill or 0) <= (skill or 0) then out[#out + 1] = { id = it.id, skill = it.skill or 0, name = ns.ProfItemName(it) } end
+  end
+  return out
+end
+function ns.ErzKreis(zone, skill, cb)
+  local function Log(t) if ns.TestLog then ns.TestLog("ERZKREIS", t) end end
+  zone = zone or (ns.CurZone and ns.CurZone()) or (ns.PlayerMap and ns.PlayerMap())
+  skill = skill or ns.ProfSkill("mine")
+  if not skill then
+    Log("kein Bergbau gelernt")
+    ns.Print(TR"Für die Erz Runde brauchst du Bergbau.")
+    if cb then cb(nil, "kein Bergbau") end
+    return
+  end
+  if not zone then Log("keine Zone"); if cb then cb(nil, "keine Zone") end return end
+  local erze = ns.ErzKreisErze(skill)
+  if #erze == 0 then
+    Log(("Skill %d: kein Erz passt"):format(skill))
+    ns.Print(TR"Für deinen Bergbau Skill passt noch kein Erz.")
+    if cb then cb(nil, "kein Erz") end
+    return
+  end
+  local names = {}
+  for _, e in ipairs(erze) do names[#names + 1] = e.name .. " (" .. e.skill .. ")" end
+  Log(("Start Zone %s (%s), Skill %d, Erze %d: %s"):format(tostring(zone), ns.ZoneName and ns.ZoneName(zone) or "?", skill, #erze, table.concat(names, ", ")))
+  local s = ns.ProfSel()
+  local oldI, oldZ = s.items, s.zones
+  local items = {}
+  for _, e in ipairs(erze) do items[e.id] = true end
+  s.items = items; s.zones = { [zone] = true }
+  local zones = s.zones
+  local ok, err = pcall(ns.ProfPlan, { mode = "loop", avoidElite = true, avoidDanger = false, zones = zones, skillFor = { mine = skill } }, function(res)
+    local n = res and res.steps and #res.steps or 0
+    if n < 2 then
+      Log(("keine Runde: %d Stellen%s"):format(n, res and res.missing and res.missing[1] and (", " .. res.missing[1]) or ""))
+      ns.Print(TR"In dieser Zone kennt Keine Zeit Leveling Guide nicht genug Erz Stellen für eine Runde.")
+      if cb then cb(res, "keine Runde") end
+      return
+    end
+    -- Laenge der Runde (Yards) und Abstand letzte zu erster Stelle (schliesst den Kreis)
+    local len, back = 0, nil
+    local st = res.steps
+    for i = 2, #st do
+      local d = ns.WorldDist and ns.WorldDist({ st[i - 1].map, st[i - 1].x, st[i - 1].y }, { st[i].map, st[i].x, st[i].y })
+      if d then len = len + d end
+    end
+    back = ns.WorldDist and ns.WorldDist({ st[#st].map, st[#st].x, st[#st].y }, { st[1].map, st[1].x, st[1].y })
+    Log(("Runde %d Stellen, %d yd, zurueck zur ersten %d yd, ca %d Min je Runde"):format(n, math.floor(len + 0.5), math.floor((back or 0) + 0.5), math.floor((res.min or 0) + 0.5)))
+    res.title = TR"Erz Runde" .. ": " .. (ns.ZoneName and ns.ZoneName(zone) or "?")
+    res.erzKreis = { zone = zone, skill = skill, n = n, len = len, back = back }
+    ns.ProfStart(res)
+    if ns.db and ns.db.profSess then ns.db.profSess.erz = true end
+    ns.Print((TR"Erz Runde gestartet: %d Stellen, ca %d Min je Runde. Sie läuft im Kreis, bis du sie beendest."):format(n, math.floor((res.min or 0) + 0.5)))
+    if cb then cb(res) end
+  end)
+  s.items, s.zones = oldI, oldZ
+  if not ok then Log("Fehler " .. tostring(err)); if cb then cb(nil, "Fehler") end end
+end
+function ns.ErzKreisAktiv()
+  local s = ns.ProfSession and ns.ProfSession()
+  return s and s.erz and true or false
+end
+function ns.ErzKreisStop()
+  local an = ns.ErzKreisAktiv()
+  if ns.TestLog then ns.TestLog("ERZKREIS", an and "beendet" or "beenden, lief nicht") end
+  if an and ns.ExtraStop then ns.ExtraStop() end
+  return an
 end
 
 -- fuer Tests
@@ -2297,6 +2631,6 @@ if C_Timer then
       if not (ns.ShareWaysOn and ns.ShareWaysOn() and ns.SyncQueue) then return end
       local ok, list = pcall(ns.ProfRatesPackets)
       if ok then for _, t in ipairs(list) do ns.SyncQueue(t, "rates") end end
-    end)
+    end, nil, true) -- 1.4zzg (M51, S 17:16): sammeln und teilen auch in der Pause
   end)
 end

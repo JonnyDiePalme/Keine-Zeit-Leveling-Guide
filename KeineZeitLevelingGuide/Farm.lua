@@ -42,7 +42,15 @@ local SOURCES = {
       return m or r or P("DBMinBuyout")
     end },
   { name = "Auctionator", ok = function() return Auctionator and Auctionator.API and Auctionator.API.v1 and Auctionator.API.v1.GetAuctionPriceByItemID end,
-    get = function(id) return Auctionator.API.v1.GetAuctionPriceByItemID(CALLER, id) end },
+    get = function(id) return Auctionator.API.v1.GetAuctionPriceByItemID(CALLER, id) end,
+    -- 1.4zzy (K 04:32 S Frage): Alter vom Preis in Tagen (eigener Scan im AH ueber Auctionator)
+    age = function(id)
+      local f = Auctionator.API.v1.GetAuctionAgeByItemID
+      if not f then return nil end
+      local ok, d = pcall(f, CALLER, id)
+      d = ok and tonumber(d)
+      return d and d * 86400 or nil
+    end },
   { name = "Auctioneer", ok = function() return AucAdvanced and AucAdvanced.API and AucAdvanced.API.GetMarketValue end,
     get = function(id, link) return link and AucAdvanced.API.GetMarketValue(link) end },
   { name = "Aux", ok = function() return aux and aux.history and aux.history.value end,
@@ -59,19 +67,32 @@ function ns.AHSources()
 end
 function ns.HasAuctionator() return #ns.AHSources() > 0 end
 
--- AH Preis in Kupfer: Mittelwert aller Addons, die einen Preis kennen
+ns.FARM_AH = { MAX_F = 100, ILVL_C = 1500, UNKNOWN_AGE_S = 86400 }   -- 1.4w: Grenzen gegen AH Ausreisser
+-- 1.4zzy (K 04:32, S: immer der NEUESTE vorhandene Wert): AH Preis in Kupfer von der Quelle mit dem juengsten Preis.
+-- Alter kennt nur Auctionator je Item (GetAuctionAgeByItemID, Tage seit dem Scan). TSM, Auctioneer, Aux und
+-- OribosExchange geben kein Alter je Item heraus, die zaehlen als UNKNOWN_AGE_S alt (TSM App laedt etwa taeglich).
+-- Gleich alt: der kleinere Preis. Gibt Preis, Quelle, Preis (dritter Wert wie frueher der kleinste) und Alter in s
+local priceLogged = {}
 function ns.AHPrice(id, link)
-  local sum, n, names = 0, 0, {}
+  local best, bestAge, bestName
   for _, s in ipairs(SOURCES) do
     local okA, avail = pcall(s.ok)
     if okA and avail then
       local ok, v = pcall(s.get, id, link)
       v = ok and tonumber(v)
-      if v and v > 0 then sum = sum + v; n = n + 1; table.insert(names, s.name) end
+      if v and v > 0 then
+        local age = s.age and s.age(id) or ns.FARM_AH.UNKNOWN_AGE_S
+        if not best or age < bestAge or (age == bestAge and v < best) then best, bestAge, bestName = v, age, s.name end
+      end
     end
   end
-  if n == 0 then return nil end
-  return math.floor(sum / n), table.concat(names, "+")
+  if not best then return nil end
+  if ns.TestLog and not priceLogged[bestName] then
+    priceLogged[bestName] = true
+    ns.TestLog("PREIS", ("Quelle %s (Alter %s) fuer Item %s, Quellen da: %s"):format(bestName,
+      bestAge == ns.FARM_AH.UNKNOWN_AGE_S and "unbekannt" or (math.floor(bestAge / 3600 + 0.5) .. " Std"), tostring(id), table.concat(ns.AHSources(), ", ")))
+  end
+  return math.floor(best), bestName, best, bestAge
 end
 
 -- Wert in Kupfer und woher ("AH" oder "Händler")
@@ -79,7 +100,7 @@ function ns.ItemValue(id)
   if not id then return 0 end
   local c = valCache[id]
   if c and GetTime() - c.t < 120 then return c.v, c.src end
-  local _, link, quality, _, _, _, _, _, _, _, sell = ns.Api.GetItemInfo(id)
+  local _, link, quality, ilvl, _, _, _, _, _, _, sell = ns.Api.GetItemInfo(id)
   if quality == nil then
     -- noch nicht im Cache: beim Spiel anfragen, kommt beim naechsten Mal
     if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id) end
@@ -90,9 +111,20 @@ function ns.ItemValue(id)
   local v, src = sell, TR"Händler"
   local db = ns.db
   if quality >= 1 and not (db and db.farmAH == false) then
-    local ah, who = ns.AHPrice(id, link)
+    local ah, who, low = ns.AHPrice(id, link)
+    -- 1.4w (P171 Punkt 3, S: "Grizzly Fleisch fuer 100g, das niemand kauft"): Ausreisser raus. Der kleinste Preis der
+    -- Quellen statt Mittel, und hoechstens FARM_AH.MAX_F mal Haendler Preis bzw FARM_AH.ILVL_C Kupfer je Item Level
+    local capped = false
+    if ah then
+      ah = math.min(ah, low or ah)
+      local cap
+      if sell > 0 then cap = sell * ns.FARM_AH.MAX_F end
+      local il = Plain(ilvl)
+      if type(il) == "number" and il > 0 then cap = math.min(cap or math.huge, il * ns.FARM_AH.ILVL_C) end
+      if cap and ah > cap then ah = cap; capped = true end
+    end
     -- 5 Prozent Gebuehr beim Verkauf im AH
-    if ah and ah * 0.95 > v then v, src = math.floor(ah * 0.95), TR"AH " .. (who or "") end
+    if ah and ah * 0.95 > v then v, src = math.floor(ah * 0.95), TR"AH " .. (who or "") .. (capped and TR" (gekappt)" or "") end
   end
   valCache[id] = { v = v, src = src, t = GetTime() }
   return v, src
@@ -130,6 +162,21 @@ local function CMParse()
         t[npc] = tonumber(n) / 1000
         cmQOf[npc] = cmQOf[npc] or {}
         table.insert(cmQOf[npc], item)
+      end
+      cmQ[item] = t
+    end
+  end
+  -- 1.4zw (M38, Pr 03:05: 7666 fehlt in den Drop Daten): Zusatz Liste aus Daten\FWW_Quest_Drops.lua (Pr), Format
+  -- FWW_QDROP_ZUSATZ = { [Item] = { [NPC] = Stueck pro Kill in Promille } }. Ergaenzt nur, was fehlt
+  for item, list in pairs(type(_G.FWW_QDROP_ZUSATZ) == "table" and _G.FWW_QDROP_ZUSATZ or {}) do
+    if type(item) == "number" and type(list) == "table" then
+      local t = cmQ[item] or {}
+      for npc, n in pairs(list) do
+        if type(npc) == "number" and type(n) == "number" and not t[npc] then
+          t[npc] = n / 1000
+          cmQOf[npc] = cmQOf[npc] or {}
+          table.insert(cmQOf[npc], item)
+        end
       end
       cmQ[item] = t
     end
@@ -306,6 +353,8 @@ local function Commit()
     end
   end
   if sess then sess.copper = sess.copper + delta end
+  ns.collectN = ns.collectN or { k = 0, l = 0 }
+  ns.collectN.l = ns.collectN.l + 1
   lastCommit = { t = now, recs = recs, money = Plain(GetMoney()) or 0 }
   -- alte Eintraege wegwerfen
   for g, t in pairs(looted) do if now - t > 900 then looted[g] = nil end end
@@ -339,6 +388,9 @@ local function CountTargetKill()
     r.kc = r.kc + 1
     if ns.farmSess then ns.farmSess.kills = ns.farmSess.kills + 1 end
   end
+  -- 1.4zzg (M51, S 17:16): sammeln und teilen auch in der Pause (Zaehler fuer die PAUSE Zeile im Log)
+  ns.collectN = ns.collectN or { k = 0, l = 0 }
+  ns.collectN.k = ns.collectN.k + 1
   local now = GetTime()
   for k, t in pairs(counted) do if now - t > 900 then counted[k] = nil end end
 end
@@ -496,12 +548,13 @@ function ns.NpcValue(id, m, skin)
   local db = DB()
   local r = db and db.loot[id]
   local est, how = Estimate(m)
+  local dropV = 0
   -- Startwert aus cMaNGOS: Geld plus Beute beim Haendler (plus Leder beim Kuerschnern), genauer als die Formel
   local cm = ns.CMNpc(id)
   if cm then
     est, how = cm.m + cm.v, "cMaNGOS"
     if skin then for item, n in pairs(cm.s) do est = est + n * (ns.ItemValue(item) or 0) end end
-  elseif how == TR"Formel" then est = est + (ns.DropValue(id)) end
+  elseif how == TR"Formel" then dropV = ns.DropValue(id) or 0; est = est + dropV; if dropV > 0 then how = "Drops" end end
   -- 1.3zzd (P133): ohne eigene Beute ein geteilter Wert anderer Spieler (Median), als Schaetzung (Gewicht 0)
   -- 1.3zzf (K 04:44): dazwischen die Startdaten gelernt: geteilt ab 2 Absendern, sonst gelernt, sonst geteilt von 1
   if not (r and math.max(r.k or 0, r.kc or 0) > 0) then
@@ -511,6 +564,7 @@ function ns.NpcValue(id, m, skin)
     local pick = (sv and (sn or 0) >= ns.GELERNT.MIN_SENDERS) and sv or gv or sv
     if pick then
       est = pick
+      how = "geteilt"
       if skin and cm then for item, n in pairs(cm.s) do est = est + n * (ns.ItemValue(item) or 0) end end
     end
   end
@@ -519,10 +573,38 @@ function ns.NpcValue(id, m, skin)
     if v then
       -- deine Beute auf Forever zaehlt mit jedem Kill mehr (ab 10 Kills nur noch sie)
       local w = math.min(1, k / (cm and 10 or 6))
-      return w * v + (1 - w) * est, w, k
+      return w * v + (1 - w) * est, w, k, "eigen"
     end
   end
-  return est, 0, 0
+  return est, 0, 0, how
+end
+
+-- 1.4w (P171 Punkt 1 und 2): Wert je Kill aufgeteilt in Auktionshaus und Haendler (Geld und Haendler Ware zaehlen zum
+-- Haendler). Aus der eigenen Beute, sonst aus der Drop Tabelle. Liste der Items { id, v, src, ah, q } je Kill
+function ns.NpcValueSplit(id)
+  local db = DB()
+  local r = db and db.loot and db.loot[id]
+  local ah, h, items = 0, 0, {}
+  local kills = r and math.max(r.k or 0, r.kc or 0) or 0
+  local function Add(item, perKill)
+    local val, src = ns.ItemValue(item)
+    local e = (val or 0) * perKill
+    local isAH = type(src) == "string" and src:find("^AH") ~= nil
+    if isAH then ah = ah + e else h = h + e end
+    local q = select(3, ns.Api.GetItemInfo(item))
+    items[#items + 1] = { id = item, v = e, src = src, ah = isAH, q = Plain(q), rate = perKill }
+  end
+  if kills > 0 then
+    h = h + (r.c or 0) / kills
+    for item, q in pairs(r.it or {}) do Add(item, q / kills) end
+  else
+    local t = DropTable()
+    for _, d in ipairs(t and t[id] or {}) do Add(d[1], d[2] / 100) end
+    local cm = ns.CMNpc(id)
+    if cm then h = h + (cm.m or 0) end
+  end
+  table.sort(items, function(a, b) return a.v > b.v end)
+  return ah, h, items, kills
 end
 
 ------------------------------------------------------------
@@ -549,10 +631,13 @@ local function KnownMob(id)
   CMParse()
   if not next(cmNpc) then return true end
   if cmNpc[id] then return true end
-  local dt = DropTable()
-  if dt and dt[id] then return true end
   local db = DB()
   if db and db.loot and db.loot[id] then return true end
+  -- 1.4zb (P171 M18, S: "Nightmare Grizzly, SoD Daten vermischt"): die Questie Drop Tabelle (Wowhead) kennt auch Mobs aus
+  -- Season of Discovery und spaeteren Erweiterungen. Darum zaehlt sie nicht mehr allein: nur mit Forever Daten (cMaNGOS
+  -- Classic, eigene Beute, geteilte Werte anderer Forever Spieler oder gelernte Startwerte)
+  if ns.GelerntMob and ns.GelerntMob(id) then return true end
+  if ns.SharedValue then local sv = ns.SharedValue("k", id); if sv then return true end end
   return false
 end
 ns.FarmKnownMob = KnownMob
@@ -626,12 +711,17 @@ function ns.FarmSpots(done)
       end
       if cnt >= 6 and cl.n >= 2 then
         local kt, val, wsum, mlo, mhi, xp = 0, 0, 0, 99, 0, 0
+        local hasData, vAH, vH = false, 0, 0
         for id, n in pairs(per) do
           local inf = npcInfo[id]
           local diff = inf.m - L
           kt = kt + n * (ns.KillSeconds and ns.KillSeconds(diff) or 25)
-          local v, w = ns.NpcValue(id, inf.m, skin)
+          local v, w, _, how = ns.NpcValue(id, inf.m, skin)
           inf.v, inf.w = v, w
+          -- 1.4w (P171 Punkt 3): nur Spots mit Daten (eigene oder geteilte Beute, cMaNGOS, Drop Tabelle), nicht nur Formel
+          if how ~= TR"Formel" and how ~= TR"ähnliche Mobs" then hasData = true end
+          local a, h = ns.NpcValueSplit(id)
+          vAH, vH = vAH + n * a, vH + n * h
           val = val + n * v
           wsum = wsum + n * w
           mlo = math.min(mlo, inf.lo); mhi = math.max(mhi, inf.hi)
@@ -646,7 +736,8 @@ function ns.FarmSpots(done)
         for id, n in pairs(per) do table.insert(names, { id = id, n = n, name = npcInfo[id].name }) end
         table.sort(names, function(a, b) return a.n > b.n end)
         table.insert(spots, { map = ui, x = sx / cnt, y = sy / cnt, n = cnt, lo = mlo, hi = mhi, kph = kph, capped = cap < own,
-          gph = kph * val, val = val, learned = wsum / cnt, mobs = names, kt = kt })
+          gph = kph * val, val = val, learned = wsum / cnt, mobs = names, kt = kt, hasData = hasData,
+          kind = (vAH > vH) and "AH" or "H", vAH = vAH / cnt, vH = vH / cnt })
       end
     end
   end
@@ -659,9 +750,12 @@ function ns.FarmSpots(done)
       local out = {}
       -- 20.2 (P2, Sascha: Praeriewolf Mulgore 3x): Stellen in derselben Zone mit derselben Haupt Mob Art sind EINE
       -- Farm Runde (mehrere Punkte, im Kreis). Gewinn pro Stunde = Mittel der Stellen nach Spawn Zahl. Allgemein, keine Mob Liste.
+      local hidden = 0
       for _, s in ipairs(spots) do
         local main = s.mobs and s.mobs[1] and s.mobs[1].id
         local hit
+        if not s.hasData then hidden = hidden + 1; s = nil end
+        if s then
         for _, o in ipairs(out) do
           if o.map == s.map and (math.sqrt((o.x - s.x) ^ 2 + (o.y - s.y) ^ 2) < 0.09 or (main and o.main == main)) then hit = o; break end
         end
@@ -678,7 +772,10 @@ function ns.FarmSpots(done)
           s.pts = { { x = s.x, y = s.y, n = s.n } }
           table.insert(out, s)
         end
+        end
       end
+      ns.farmHidden = hidden
+      if ns.TestLog then ns.TestLog("GOLD", ("Spots %d, ohne Daten weg %d"):format(#out, hidden)) end
       table.sort(out, function(a, b) return a.gph > b.gph end)
       -- Anreise
       local pm = ns.PlayerMap and ns.PlayerMap()
@@ -867,29 +964,40 @@ function ns.FarmSpotLines(s)
   end
   local how = s.learned >= 0.7 and TR"|cff40ff40aus deiner Beute gelernt|r" or (s.learned >= 0.2 and TR"|cffffd100teils gelernt, teils geschätzt|r" or TR"|cffff9030geschätzt (noch keine Beute von diesen Mobs)|r")
   table.insert(out, TR"Wert: " .. how)
+  -- 1.4w (P171 Punkt 2): was gefarmt wird, je Mob die Items mit Symbol (Maus drauf: Item Tooltip), AH oder Haendler,
+  -- der Rest (Geld, graue und weisse Haendler Ware) zusammen. Dazu, was du selbst schon gefarmt hast
   table.insert(out, "")
-  table.insert(out, TR"|cffffd100Mobs|r")
-  local db = ns.db
+  table.insert(out, (TR"|cffffd100Was du farmst|r  |cff9d9d9dpro Kill: Auktionshaus %s, Händler %s|r"):format(ns.Money(s.vAH or 0), ns.Money(s.vH or 0)))
+  local items = {}
   local skin = HasSkinning()
+  local MAX_IT = ns.FARM_LINES and ns.FARM_LINES.ITEMS or 4
   for i, m in ipairs(s.mobs) do
     if i > 6 then break end
-    local r = db and db.loot and db.loot[m.id]
     local v, w, k = ns.NpcValue(m.id, (s.lo + s.hi) / 2, skin)
-    table.insert(out, (TR"   %s  %d Spawns, %s pro Kill%s"):format(m.name, m.n, ns.Money(v), k > 0 and (" |cff9d9d9d(" .. k .. TR" Kills gelernt)|r") or ""))
-    if r and k > 0 then
-      local items = {}
-      for id, q in pairs(r.it or {}) do
-        local val, src = ns.ItemValue(id)
-        table.insert(items, { id = id, rate = q / k, v = q * val / k, src = src })
-      end
-      table.sort(items, function(a, b) return a.v > b.v end)
-      for j, it in ipairs(items) do
-        if j > 3 or it.v <= 0 then break end
-        local name = ns.Api.GetItemInfo(it.id) or (TR"Item " .. it.id)
-        table.insert(out, (TR"      |cff9d9d9d%s %s, %s pro Kill (%s)|r"):format(name, Pct(math.min(it.rate, 9.99)), ns.Money(it.v), it.src or "?"))
+    local ah, h, list, kills = ns.NpcValueSplit(m.id)
+    table.insert(out, (TR"   |cffffffff%s|r  %d Spawns, %s pro Kill"):format(m.name, m.n, ns.Money(v)))
+    if kills > 0 then
+      table.insert(out, (TR"      |cff7fd1b9von dir: %d Kills, %s pro Kill gemessen|r"):format(kills, ns.Money(ah + h)))
+    end
+    local junk, shown = 0, 0
+    for _, it in ipairs(list) do
+      if it.v > 0 then
+        if not it.ah and (it.q or 0) <= 1 then
+          junk = junk + it.v
+        elseif shown < MAX_IT then
+          shown = shown + 1
+          local name, _, _, _, _, _, _, _, _, icon = ns.Api.GetItemInfo(it.id)
+          table.insert(out, ("      |T%s:14:14|t %s  %s, %s pro Kill  |cff9d9d9d%s|r"):format(icon or "Interface\\Icons\\INV_Misc_QuestionMark",
+            name or (TR"Item " .. it.id), Pct(math.min(it.rate or 0, 9.99)), ns.Money(it.v), it.ah and TR"AH" or TR"Händler"))
+          items[#out] = it.id
+        else
+          junk = junk + (it.ah and 0 or it.v)
+        end
       end
     end
+    if junk > 0 then table.insert(out, (TR"      |cff9d9d9dHändlerware (grau, weiss) und Rest: %s pro Kill|r"):format(ns.Money(junk))) end
   end
+  ns.farmLineItems = items
   table.insert(out, "")
   local src = ns.AHSources()
   if #src > 0 then

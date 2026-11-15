@@ -78,7 +78,7 @@ ns.Ticker(60, function()
   if s and s.xph and s.xph > (db.best.hour or 0) and (GetTime() - (sess.at or GetTime())) > 1800 then db.best.hour = s.xph end
   local run = GetTime() - (sess.deathAt or GetTime())
   if run > (db.best.noDeath or 0) then db.best.noDeath = run end
-end)
+end, nil, true) -- 1.4zzg (M51): auch in der Pause
 
 -- Bestwerte als eine Zeile
 function ns.BestLine()
@@ -171,10 +171,59 @@ function ns.GoldStatData()
       local si, so = 0, 0
       for _, v in pairs(lv[L].moneyIn or {}) do si = si + v end
       for _, v in pairs(lv[L].moneyOut or {}) do so = so + v end
-      if si > 0 or so > 0 then d.levels[#d.levels + 1] = { name = (TR"Level %d"):format(L), vin = si, vout = so, text = ("|cff40ff40+%s|r  |cffff6050-%s|r"):format(M(si), M(so)) } end
+      if si > 0 or so > 0 then
+        -- 1.4l (P161 soll4): zwei Spalten und Saldo kurz
+        local net = si - so
+        d.levels[#d.levels + 1] = { L = L, name = (TR"Level %d"):format(L), vin = si, vout = so,
+          tin = "|cff40ff40+" .. M(si) .. "|r", tout = "|cffff6050-" .. M(so) .. "|r",
+          net = (net >= 0 and "|cff40ff40+" or "|cffff6050-") .. ns.MoneyShort(math.abs(net)) .. "|r" }
+      end
     end
   end
   return d
+end
+-- 1.4l (P161 soll4): Geld kurz, "2.5g", "45s", "12c"
+function ns.MoneyShort(c)
+  c = math.floor(c or 0)
+  if c >= 10000 then
+    local g = c / 10000
+    return (g >= 100 and ("%dg"):format(math.floor(g + 0.5)) or ("%.1fg"):format(g)):gsub("%.0g$", "g")
+  elseif c >= 100 then return ("%ds"):format(math.floor(c / 100 + 0.5)) end
+  return ("%dc"):format(c)
+end
+-- 1.4l (P161 soll4, S: "klickbar, um rechts die Einnahmen und Ausgaben von Level 1 bis zu dem Level zu sehen")
+function ns.GoldLinesTo(L)
+  local out = {}
+  local p = ns.PerfData and ns.PerfData()
+  local lv = p and p.lvl
+  local M = ns.Money or tostring
+  if not lv then return { TR"|cff9d9d9dnoch keine Daten|r" } end
+  local function Sum(fromL, toL)
+    local si, so, sum_i, sum_o = {}, {}, 0, 0
+    for l, e in pairs(lv) do
+      if type(l) == "number" and l >= fromL and l <= toL then
+        for k, v in pairs(e.moneyIn or {}) do si[k] = (si[k] or 0) + v; sum_i = sum_i + v end
+        for k, v in pairs(e.moneyOut or {}) do so[k] = (so[k] or 0) + v; sum_o = sum_o + v end
+      end
+    end
+    return si, so, sum_i, sum_o
+  end
+  local function Block(title, fromL, toL)
+    local si, so, ti, to = Sum(fromL, toL)
+    out[#out + 1] = ("|cffffd100%s|r  %s"):format(title, ((ti - to) >= 0 and "|cff40ff40+" or "|cffff6050-") .. M(math.abs(ti - to)) .. "|r")
+    out[#out + 1] = (TR"   Einnahmen %s"):format(M(ti))
+    for _, k in ipairs(GOLD_IN_ORDER) do
+      if (si[k] or 0) > 0 then out[#out + 1] = ("      |cff40ff40+ %s|r  %s"):format(M(si[k]), ns.MONEY_NAMES[k] or k) end
+    end
+    out[#out + 1] = (TR"   Ausgaben %s"):format(M(to))
+    for _, k in ipairs(GOLD_OUT_ORDER) do
+      if (so[k] or 0) > 0 then out[#out + 1] = ("      |cffff8060- %s|r  %s"):format(M(so[k]), ns.MONEY_NAMES[k] or k) end
+    end
+  end
+  Block((TR"Level %d"):format(L), L, L)
+  out[#out + 1] = ""
+  Block((TR"Level 1 bis %d"):format(L), 1, L)
+  return out
 end
 function ns.GoldRepLines()
   local out = {}
@@ -275,7 +324,13 @@ ns.ACT_SPLIT = {
   COL = { route = { 64, 200, 255 }, beruf = { 255, 209, 0 }, dungeon = { 190, 90, 255 }, farm = { 80, 220, 100 },
     stadt = { 210, 160, 110 }, afk = { 110, 110, 110 }, frei = { 225, 225, 225 } },
 }
-local function Pl(x) return ns.Api and ns.Api.Plain and ns.Api.Plain(x) or x end
+-- 1.4zzi (K 20:36, S Log 20:02: StatsExtra 355 "boolean test on a secret boolean" 318x): "Plain(x) or x" gab bei einem
+-- geheimen Wert (Plain = nil) wieder den geheimen Wert zurueck. Jetzt nil, wie Plain sagt
+local function Pl(x)
+  if ns.Api and ns.Api.Plain then return ns.Api.Plain(x) end
+  if issecretvalue and issecretvalue(x) then return nil end
+  return x
+end
 -- 1.3zzj (Pr 05:34/05:48: 3 Min stehen zaehlte nicht als AFK): Stillstand auch ueber die Position (Tempo allein reichte nicht),
 -- ns.stillFor = Sekunden ohne Ortswechsel und ohne Kampf. Ab AFK_S zaehlt die ganze Steh Zeit als AFK (ns.actMove schiebt
 -- die schon gezaehlten Sekunden um, Core PerfTick)
@@ -389,8 +444,9 @@ function ns.ActLogText(lv)
   return table.concat(out, " ")
 end
 -- Zeilen fuer die Statistik Seite: Summe oben, darunter je Level ein Balken
-function ns.ActLines()
-  local A, out = ns.ACT_SPLIT, {}
+-- 1.4n (P161 soll1 Punkt 3): sel = aufgeklapptes Level. Zweite Rueckgabe map[Zeile] = Level fuer die Klick Knoepfe
+function ns.ActLines(sel)
+  local A, out, map = ns.ACT_SPLIT, {}, {}
   local p = ns.PerfData and ns.PerfData() or {}
   local tot = p.act or {}
   local sum = Sum(tot)
@@ -405,7 +461,42 @@ function ns.ActLines()
     local s = e and Sum(e) or 0
     if s >= A.MIN_S then
       out[#out + 1] = (TR"   Level %d  %s  %s, Route %d%%"):format(lv, Bar(e, s), fmt(s), math.floor((e.route or 0) / s * 100 + 0.5))
+      map[#out] = lv
+      if sel == lv and ns.LvlDetailLines then
+        for _, l in ipairs(ns.LvlDetailLines(lv)) do out[#out + 1] = l end
+      end
     end
+  end
+  if next(map) then out[1] = out[1] .. TR"  |cff9d9d9dKlick auf ein Level zeigt mehr|r" end
+  return out, map
+end
+
+-- Aufgeklapptes Level: Zeit nach Art, XP und Woher, Zaehler, Zonen dieses Levels
+function ns.LvlDetailLines(lv)
+  local p = ns.PerfData and ns.PerfData() or {}
+  local e = p.lvl and p.lvl[lv]
+  local out = {}
+  local fmt = ns.Clock or tostring
+  local G = "      |cffb0b0b0"
+  local a = p.lvlAct and p.lvlAct[lv]
+  if a and Sum(a) > 0 then out[#out + 1] = G .. TR"Art:|r " .. Parts(a, Sum(a)) end
+  if not e then out[#out + 1] = G .. TR"noch keine Daten|r"; return out end
+  local t = e.t or 0
+  local function num(n) local s = tostring(math.floor(n or 0)):reverse():gsub("(%d%d%d)", "%1'"):reverse(); return (s:gsub("^'", "")) end
+  out[#out + 1] = (G .. TR"XP:|r %s, %s pro Std"):format(num(e.xp or 0), t > 60 and num(math.floor((e.xp or 0) / t * 3600)) or "?")
+  local src = e.src or {}
+  local sum = (src.quest or 0) + (src.kill or 0) + (src.explore or 0)
+  if sum > 0 then
+    out[#out + 1] = (G .. TR"Woher:|r Quests %d%%, Kills %d%%, Entdecken %d%%"):format(math.floor((src.quest or 0) / sum * 100 + 0.5),
+      math.floor((src.kill or 0) / sum * 100 + 0.5), math.floor((src.explore or 0) / sum * 100 + 0.5))
+  end
+  local c = e.cnt or {}
+  out[#out + 1] = (G .. TR"Zähler:|r Kills %d, Quests %d, Tode %d"):format(c.kill or 0, c.quest or 0, c.death or 0)
+  local zl = ns.ZoneLevelList and ns.ZoneLevelList(lv) or {}
+  if #zl > 0 then
+    local zs = {}
+    for i, z in ipairs(zl) do if i <= 6 then zs[#zs + 1] = z.name .. " " .. fmt(z.t) end end
+    out[#out + 1] = G .. TR"Zonen:|r " .. table.concat(zs, ", ")
   end
   return out
 end

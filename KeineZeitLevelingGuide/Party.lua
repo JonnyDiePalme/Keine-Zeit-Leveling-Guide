@@ -88,6 +88,7 @@ local function Tick()
   local db = ns.db
   if not db or db.autoShare == false or not (IsInGroup and IsInGroup()) then return end
   if InCombatLockdown and InCombatLockdown() then return end
+  if ns.ShareState and ns.ShareState() then return end   -- 1.4r: "Mit Gruppe teilen" laeuft
   if not (QuestLogPushQuest and SelectQuestLogEntry) then return end
   if lastPush and GetTime() - lastPush.at < 4 then return end
   local log = ns.logProgress or {}
@@ -152,7 +153,183 @@ local function BuildPatterns()
   Add("ERR_QUEST_PUSH_DECLINED_S", false)
 end
 
+------------------------------------------------------------
+-- 1.4r (P194, K 16:32 und 16:35): Knopf "Mit Gruppe teilen". Teilt der Reihe nach alle teilbaren Quests der Route, die im
+-- Log sind. Die naechste erst, wenn alle Mitspieler geantwortet haben (Systemzeilen ERR_QUEST_PUSH_* des Clients, keine
+-- festen Texte), spaetestens nach SHARE.WAIT_S. Am Ende eine Zeile "n Quests geteilt" und je Spieler, was nicht ankam.
+-- Blockt der Client das Teilen ohne Klick, geht es je Klick weiter ("Teilen 3/7")
+------------------------------------------------------------
+ns.SHARE = { WAIT_S = 5, PAUSE_S = 0.6 }
+local share
+local sharePat
+local function SharePatterns()
+  sharePat = {}
+  local function Add(g, why)
+    local s = _G[g]
+    if type(s) ~= "string" then return end
+    local t = s:gsub("%%%d*%$?s", "\001")
+    t = t:gsub("([%%%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
+    t = t:gsub("\001", "(.+)")
+    local pat = "^" .. t .. "$"
+    if pcall(string.match, "", pat) then sharePat[#sharePat + 1] = { pat = pat, why = why } end
+  end
+  Add("ERR_QUEST_PUSH_ACCEPTED_S", false)
+  Add("ERR_QUEST_PUSH_DECLINED_S", TR"abgelehnt")
+  Add("ERR_QUEST_PUSH_ALREADY_DONE_S", TR"schon erledigt")
+  Add("ERR_QUEST_PUSH_ONQUEST_S", TR"hat sie schon")
+  Add("ERR_QUEST_PUSH_BUSY_S", TR"beschäftigt")
+  Add("ERR_QUEST_PUSH_INVALID_S", TR"nicht berechtigt")
+  Add("ERR_QUEST_PUSH_NOT_ALLOWED_S", TR"nicht berechtigt")
+  Add("ERR_QUEST_PUSH_LOG_FULL_S", TR"Log voll")
+  Add("ERR_QUEST_PUSH_TOO_FAR_S", TR"zu weit weg")
+end
+local function RouteQuestsInLog()
+  local opt = ns.db and ns.db.opt
+  local log = ns.logProgress or {}
+  local out, seen = {}, {}
+  for k = (opt and opt.idx or 1), #(opt and opt.steps or {}) do
+    for _, a in ipairs(opt.steps[k].acts or {}) do
+      local q = a.qid
+      if q and q > 0 and log[q] and not seen[q] then seen[q] = true; out[#out + 1] = q end
+    end
+  end
+  return out
+end
+local ShareNext
+local function ShareFinish()
+  local sh = share
+  share = nil
+  if not sh then return end
+  ns.Print((TR"%d Quests geteilt."):format(sh.n))
+  for who, l in pairs(sh.miss) do
+    ns.Print((TR"  %s: nicht angekommen: %s"):format(who, table.concat(l, ", ")))
+  end
+  if ns.TestLog then ns.TestLog("TEILEN", ("fertig %d von %d, Spieler mit Luecken %d"):format(sh.n, #sh.list, (function() local c = 0; for _ in pairs(sh.miss) do c = c + 1 end; return c end)())) end
+end
+local function ShareDone(qid)
+  if not share or share.cur ~= qid then return end
+  local title = (ns.logProgress and ns.logProgress[qid] and ns.logProgress[qid].title) or (TR"Quest " .. qid)
+  for who in pairs(share.wait or {}) do
+    share.miss[who] = share.miss[who] or {}
+    table.insert(share.miss[who], title .. TR" (keine Antwort)")
+  end
+  share.cur, share.wait = nil, nil
+  if share.manual then
+    ns.Print((TR"Teilen %d/%d: nochmal klicken für die nächste Quest."):format(share.i, #share.list))
+    if share.i >= #share.list then ShareFinish() end
+    return
+  end
+  C_Timer.After(ns.SHARE.PAUSE_S, function() if share then ShareNext() end end)
+end
+ShareNext = function()
+  local sh = share
+  if not sh then return end
+  while sh.i < #sh.list do
+    sh.i = sh.i + 1
+    local qid = sh.list[sh.i]
+    local idx = LogIndex(qid)
+    if idx and not (InCombatLockdown and InCombatLockdown()) then
+      SelectQuestLogEntry(idx)
+      if not (GetQuestLogPushable and not GetQuestLogPushable()) then
+        local ok = ns.Api.Prot("QuestLogPushQuest", QuestLogPushQuest)
+        local forb = ns.db and ns.db.forbidden and (tonumber(ns.db.forbidden.QuestLogPushQuest) or 0) > 0
+        if not ok or forb then
+          -- ohne Klick geblockt: ab jetzt je Klick eine Quest
+          sh.manual = true
+          if not ok then sh.i = sh.i - 1; ns.Print((TR"Teilen %d/%d: nochmal klicken für die nächste Quest."):format(sh.i, #sh.list)); return end
+        end
+        sh.n = sh.n + 1
+        sh.cur, sh.wait = qid, {}
+        for who in pairs(Units()) do sh.wait[who] = true end
+        local cur = qid
+        C_Timer.After(ns.SHARE.WAIT_S, function() ShareDone(cur) end)
+        return
+      end
+    end
+  end
+  ShareFinish()
+end
+-- 1.4zzf (M49, M50): wahlweise eine eigene Liste (angehakte Quests im Questlog Route Fenster, Quests eines Dungeons),
+-- davon nur die im Log. Teilbar prueft ShareNext wie bisher
+function ns.ShareRouteQuests(only)
+  if not (IsInGroup and IsInGroup()) then ns.Print(TR"Teilen geht nur in einer Gruppe."); return end
+  if not (QuestLogPushQuest and SelectQuestLogEntry) then return end
+  if share then
+    -- laeuft schon: je Klick weiter (wenn der Client nur mit Klick teilt)
+    if share.manual and not share.cur then ShareNext() else ns.Print((TR"Teilen läuft: %d/%d"):format(share.i, #share.list)) end
+    return
+  end
+  local list
+  if type(only) == "table" then
+    list = {}
+    local seen = {}
+    for _, q in ipairs(only) do
+      q = tonumber(q)
+      if q and not seen[q] and LogIndex(q) then seen[q] = true; list[#list + 1] = q end
+    end
+    if #list == 0 then ns.Print(TR"Keine dieser Quests im Questlog zum Teilen."); return end
+  else
+    list = RouteQuestsInLog()
+    if #list == 0 then ns.Print(TR"Keine Quest der Route im Questlog zum Teilen."); return end
+  end
+  if not sharePat then SharePatterns() end
+  share = { list = list, i = 0, n = 0, miss = {} }
+  ns.Print(((type(only) == "table") and TR"Teile %d Quests mit der Gruppe ..." or TR"Teile %d Quests der Route mit der Gruppe ..."):format(#list))
+  ShareNext()
+end
+function ns.ShareState() return share and ("%d/%d"):format(share.i, #share.list) or nil end
+-- 1.4zzf (M49, M50, K 13:55): Teilen Knoepfe ohne Gruppe grau (nicht weg), damit man sie findet. Tip sagt warum
+do
+  local btns = setmetatable({}, { __mode = "k" })
+  function ns.ShareButtonState(b)
+    local on = (IsInGroup and IsInGroup()) and true or false
+    if b then
+      if b.SetEnabled then b:SetEnabled(on) end
+      b:SetAlpha(on and 1 or 0.45)
+    end
+    return on
+  end
+  function ns.ShareButtonSetup(b, title, tip)
+    if not b then return end
+    btns[b] = true
+    b:HookScript("OnEnter", function(self)
+      if ns.TipOwner then ns.TipOwner(self, "ANCHOR_RIGHT") else GameTooltip:SetOwner(self, "ANCHOR_RIGHT") end
+      GameTooltip:AddLine(title, 1, 0.82, 0)
+      if tip then GameTooltip:AddLine(tip, 1, 1, 1, true) end
+      if not (IsInGroup and IsInGroup()) then GameTooltip:AddLine(TR"Geht nur in einer Gruppe.", 1, 0.4, 0.4, true) end
+      GameTooltip:Show()
+    end)
+    b:HookScript("OnLeave", function() GameTooltip:Hide() end)
+    b:HookScript("OnShow", function(self) ns.ShareButtonState(self) end)
+    ns.ShareButtonState(b)
+  end
+  local ev = CreateFrame("Frame")
+  ev:RegisterEvent("GROUP_ROSTER_UPDATE")
+  ev:SetScript("OnEvent", function() for b in pairs(btns) do ns.ShareButtonState(b) end end)
+end
+local function ShareSystem(msg)
+  if not (share and share.cur and share.wait) then return end
+  if not sharePat then SharePatterns() end
+  for _, p in ipairs(sharePat) do
+    local ok, name = pcall(string.match, msg, p.pat)
+    if ok and name then
+      name = (Ambiguate and Ambiguate(name, "short")) or name
+      if share.wait[name] then
+        share.wait[name] = nil
+        if p.why then
+          local title = (ns.logProgress and ns.logProgress[share.cur] and ns.logProgress[share.cur].title) or (TR"Quest " .. share.cur)
+          share.miss[name] = share.miss[name] or {}
+          table.insert(share.miss[name], title .. " (" .. p.why .. ")")
+        end
+        if not next(share.wait) then ShareDone(share.cur) end
+      end
+      return
+    end
+  end
+end
+
 local function OnSystem(msg)
+  if share then ShareSystem(msg) end
   if not lastPush or GetTime() - lastPush.at > 15 then return end
   if not patterns then BuildPatterns() end
   for _, p in ipairs(patterns) do

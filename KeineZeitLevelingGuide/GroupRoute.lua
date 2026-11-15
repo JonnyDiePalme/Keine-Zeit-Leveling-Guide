@@ -355,6 +355,9 @@ end
 
 local function ShowMirror()
   if not (mir and ns.db) then return end
+  -- 1.4s (P164 M4 M5, Log 10.11. 19:01 bis 19:09: zweimal Neu rechnen, 2 s spaeter wieder die Gruppen Route): hast du
+  -- von Hand deine eigene Route gewaehlt, bleibt sie. Die Gruppen Route laeuft im Hintergrund mit, Menue "Gruppe folgen"
+  if ns.groupOwn then return end
   -- eigener Abstecher laeuft: der bleibt, die Gruppen Route wird im Hintergrund weiter gefuehrt
   if myAbst then return end
   -- deine eigene Spezialroute (Dungeon Aufteilung, Berufe, Farm, Tour ...) laeuft noch: die bleibt auch,
@@ -523,7 +526,7 @@ ns.Ticker(2, function()
   end
   -- eigene Route (Abstecher, Spezialroute) fertig: zurueck zur Gruppen Route
   local cur = ns.db and ns.db.opt
-  if cur ~= mir.opt and not myAbst and (not cur or (cur.idx or 1) > #(cur.steps or {})) then ShowMirror() end
+  if cur ~= mir.opt and not myAbst and not ns.groupOwn and (not cur or (cur.idx or 1) > #(cur.steps or {})) then ShowMirror() end
   ns.mirrorActive = ns.db and ns.db.opt == mir.opt or false
   if GetTime() - (mir.beat or 0) > 300 then
     EndMirror(TR"Vom Gruppenleiter kommt nichts mehr, jetzt wieder deine eigene Route.")
@@ -542,6 +545,7 @@ EndMirror = function(msg)
   if not mir then return end
   local o = mir.opt
   mir = nil
+  ns.groupOwn = nil
   ns.mirrorActive = false
   ns.groupFollow, ns.groupSet = nil, nil
   if ns.db and ns.db.opt == o then
@@ -553,6 +557,22 @@ EndMirror = function(msg)
   end
 end
 ns.GroupEndMirror = EndMirror
+-- 1.4s (P164): eigene Route statt Gruppen Route (Neu rechnen von Hand), und zurueck
+function ns.GroupHasMirror() return mir ~= nil end
+function ns.GroupGoOwn()
+  if not mir or ns.groupOwn then return end
+  ns.groupOwn = true
+  ns.mirrorActive = false
+  ns.groupFollow = nil
+  ns.Print(TR"Eigene Route: du folgst der Gruppen Route nicht mehr. Im Menü 'Gruppe folgen' geht es wieder mit der Gruppe weiter.")
+  if ns.TestLog then ns.TestLog("GRUPPE", "eigene Route statt Gruppen Route (von Hand)") end
+end
+function ns.GroupFollowAgain()
+  if not mir then ns.Print(TR"Gerade gibt es keine Gruppen Route vom Leiter."); return end
+  ns.groupOwn = nil
+  ShowMirror()
+  if ns.TestLog then ns.TestLog("GRUPPE", "folgt wieder der Gruppen Route") end
+end
 
 ------------------------------------------------------------
 -- Abstecher: eigene Klassenquests und Quests nur fuer dich

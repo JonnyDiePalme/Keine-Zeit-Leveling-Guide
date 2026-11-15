@@ -1,5 +1,5 @@
 -- Forever Wegweiser Daten Korrektur (schreibt der Daten Chat, liest das Addon). Nur Daten, kein Code.
--- Stand 2026-11-07 20:45 Daten 15 (Pr, P101: 98095 braucht 98094, Masoj gibt seine Quest erst nach Darthalias Befehl). Daten 14 (Pr: 6185 kein_gegner_npc 11878, Nathanos ist nur zu finden, kein Kampf Ziel). Daten 13 (Pr, S 17:05: Lueckenfueller aus Dungeon Abgleich, fehlt_quest 95787, fehlt_geber 78699 95250 95775 95795 95809 96395 96987; Questie geht immer vor). Daten 12 (Pr: neues Feld fraktion fuer 1198, P96). Daten 11 (Pr: 8 Forever Dungeon Vorquests aus Abgleich mit DungeonJournal, je nur die eine Pflicht Vorquest: 92457, 92458, 95682, 95776, 95809, 98815, 98823, 98824). Daten 10 (Pr: Schlafsack Reihe 79007/79008, 79192, 79980, 79974, 79975, 79976). Daten 9: 95216 braucht 451; Daten 8: Rath'mael Reihe 356, 99156, 92422). Davor 2026-11-01 13:25 Daten 7. Quellen: QuestieDB 1.0.7 (QuestieDB_Vanilla.toc und QuestieDB_Forever.toc aus _classic_era_\Interface\AddOns,
+-- Stand 2026-11-15 00:20 Daten 18 (Pr, Block 2 Fund: 96605 The Great Outdoors allein nicht planen, Ziel neben Gegner Level 12 in Mulgore). Daten 17 (Pr, M54: 78699 Eye of Bhossca zum Kloster, 93404 Rot and Regret zu Maraudon, als dungeon Eintrag und fehlt_quest). Daten 16 (Co 11.11.: Dungeons ohne Questie). Daten 15 (Pr, P101: 98095 braucht 98094, Masoj gibt seine Quest erst nach Darthalias Befehl). Daten 14 (Pr: 6185 kein_gegner_npc 11878, Nathanos ist nur zu finden, kein Kampf Ziel). Daten 13 (Pr, S 17:05: Lueckenfueller aus Dungeon Abgleich, fehlt_quest 95787, fehlt_geber 78699 95250 95775 95795 95809 96395 96987; Questie geht immer vor). Daten 12 (Pr: neues Feld fraktion fuer 1198, P96). Daten 11 (Pr: 8 Forever Dungeon Vorquests aus Abgleich mit DungeonJournal, je nur die eine Pflicht Vorquest: 92457, 92458, 95682, 95776, 95809, 98815, 98823, 98824). Daten 10 (Pr: Schlafsack Reihe 79007/79008, 79192, 79980, 79974, 79975, 79976). Daten 9: 95216 braucht 451; Daten 8: Rath'mael Reihe 356, 99156, 92422). Davor 2026-11-01 13:25 Daten 7. Quellen: QuestieDB 1.0.7 (QuestieDB_Vanilla.toc und QuestieDB_Forever.toc aus _classic_era_\Interface\AddOns,
 -- bzw. Sim Claude\ForeverWegweiser_Sim\daten\realf\rdb_forever.lua als entpackte Forever Fassung), VMaNGOS 1.12 (mangos.sqlite aus dem Gelaende
 -- Cache, deckt nur Vanilla Inhalte ab, keine Forever eigenen Zonen/Quests) als zweite Quelle fuer Drops, Elite und Vorquests.
 -- Aufbau: alle = gilt fuer Era und Forever, era und forever = nur dort (ueberschreibt alle fuer dieselbe Nummer).
@@ -16,7 +16,7 @@
 -- Jeder Eintrag hat grund und quelle in FWW_Daten_Korrektur_Gruende.md. Unbekannte Felder ignorieren, Datei kann fehlen.
 FWW_DATEN_KORREKTUR = {
   format = 1,
-  stand = "2026-11-07 20:45 Daten 15",
+  stand = "2026-11-15 00:20 Daten 18",
   alle = {
     quest = {
       [10] = { vorquest_fehlt = { 82 } },
@@ -272,6 +272,8 @@ FWW_DATEN_KORREKTUR = {
       [93160] = { vorquest_fehlt = { 93159 } },
       [94411] = { vorquest_fehlt = { 92595 } },
       [96390] = { vorquest_fehlt = { 96392 } },
+      -- Daten 18 (Pr 15.11. 00:20, Block 2 Fund rauchrc_v14zzv Mulgore: Ziel liegt neben NPC 249399 Level 12, Spieler Level 4 bis 7, Realitaets Regel)
+      [96605] = { ueberspringen = true },
       [96638] = { vorquest_fehlt = { 92470 } },
     },
     item = {
@@ -350,6 +352,25 @@ FWW_DATEN_KORREKTUR = {
     },
   },
   forever = {
+    -- Daten 16 (Co 11.11. 15:00, Vorschlag Pr P143/P160 14:10): Dungeons, die in Questie fehlen, plus Hall of Thanes Quests
+    -- ohne Zone. Quelle Zahlen aus DungeonJournal Abgleich, Level aus Plan P160. Questie geht vor
+    dungeon = {
+      { key = "The Hall of Thanes",  name_de = "Hallen der Thane",   min = 13, max = 20, map = 1455, x = 0.435, y = 0.520,
+        quests = { 96393, 96394, 96395, 96403, 98423 } },
+      { key = "The Drowned City",    name_de = "Versunkene Stadt",   min = 35, max = 40, map = 1434, x = 0.214, y = 0.279,
+        quests = { 95775, 95776, 95787, 95788, 95789, 95791, 95798, 95799, 96078, 96774, 97130 } },
+      { key = "Krol'dok Stronghold", name_de = "Krol'dok Festung",   min = 40, max = 45, map = 2548, x = 0.375, y = 0.373,
+        quests = { 94968, 94972, 94974, 94975, 94981, 94982, 94983, 94984, 94998, 96771 } },
+      { key = "Alcaz Prison",        name_de = "Gefaengnis Alcaz",   min = 48, max = 53, map = 1445, x = 0.753, y = 0.141,
+        quests = { 96772 } },
+      { key = "Blackmaw Hold",       name_de = "Blackmaw Feste",     min = 55, max = 60, map = 1447, x = 0.386, y = 0.332,
+        quests = { 92069, 92070, 92343, 92344, 97173, 97198 } },
+      { key = "Shaper's Terrace",    name_de = "Terrasse der Former", min = 58, max = 60, map = 1449, x = 0.481, y = 0.061,
+        quests = { 95928 } },
+      -- Daten 17 (Pr 14.11. 12:40, K 12:13, M54): Questie fuehrt diese Quests ohne Dungeon Zone, DungeonJournal ordnet sie zu (beide Seiten)
+      { key = "Scarlet Monastery", quests = { 78699 } },
+      { key = "Maraudon",          quests = { 93404 } },
+    },
     quest = {
 
       -- Schlafsack Reihe (Co P85, 1.3): Questie hat keine Vorquest, Kette ueber Start und Ziel Objekte belegt
@@ -400,6 +421,8 @@ FWW_DATEN_KORREKTUR = {
       [95682] = { vorquest_fehlt = { 95663 } },
       [95775] = { fehlt_geber = { name = "Kin'weelay", map = 1434 } },
       [95776] = { vorquest_fehlt = { 95773 } },
+      -- Daten 17 (Pr, M54): Rot and Regret fehlt vermutlich in Questie ganz (DungeonJournal: beide Seiten, L49 ab 35, Woodwyrd, Shen'dralas)
+      [93404] = { fehlt_quest = { name = "Rot and Regret", level = 49, min = 35, geber = "Woodwyrd", dungeon = "Maraudon" } },
       [95787] = { fehlt_quest = { name = "Take Two With Water", level = 40, min = 30, fraktion = "Alliance", geber = "Loremaster Dibbs", map = 1424, x = 0.506, y = 0.571, dungeon = "The Drowned City" } },
       [95795] = { fehlt_geber = { name = "Daewyn Songblade", innen = "Excavation Site: Wetlands" } },
       [95809] = { vorquest_fehlt = { 95647 }, fehlt_geber = { name = "Ardin Grassman", innen = "Excavation Site: Wetlands" } },

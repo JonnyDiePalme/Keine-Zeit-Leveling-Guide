@@ -2,8 +2,8 @@
 ## Title: Keine Zeit Leveling Guide
 ## Notes: Keine Zeit Leveling Guide: Leveling Route fuer WoW Forever mit Pfeil, Mini Fenster, Karte, Tempo Regler, Zielen und Gruppen Sync
 ## Author: jonnydiepalme
-## Version: 1.3
-## X-Bau: 1.3 fin4 (1.3zzn)
+## Version: 1.4
+## X-Bau: 1.4zzo
 ## X-License: GPL-3.0-or-later, see LICENSE.txt
 ## OptionalDeps: TaurenRoute, QuestieDB, NauticusClassicResurrected, ElvUI, Questie, OpenMap, GatherMate2, AtlasLootClassic, AtlasLootContinued, Auctionator, Leatrix_Maps, Leatrix_Plus, TomTom, RXPGuides, ZygorGuidesViewerClassic, WeakAuras, Details, Plater, DBM-Core, BigWigs, TradeSkillMaster, Baganator, Syndicator, Bagnon, pfQuest, Bartender4, Dominos, Prat-3.0, Altoholic, DataStore, Armory, AtlasLoot, Gargul, NovaWorldBuffs, NovaInstanceTracker, RareScanner, VuhDo, MRT, Decursive, Dejunk, WIM, OmniCC, LoonBestInSlot, Guild_Roster_Manager
 ## SavedVariables: KeineZeitLevelingGuideDB
@@ -29,6 +29,9 @@ Daten\FWW_Daten_Korrektur.lua
 Daten\FWW_Reittiere.lua
 Daten\FWW_Fisch_Gebiete.lua
 Daten\FWW_Gelernt.lua
+Daten\FWW_Stat_Gewichte.lua
+Daten\FWW_Rezepte.lua
+Daten\FWW_Quest_Drops.lua
 DatenKorrektur.lua
 TrainerData.lua
 Services.lua
@@ -92,6 +95,7 @@ Karte\Forever\Ausloeser.lua
 Karte\Forever\Stadt.lua
 Karte\Forever\Friedhof.lua
 Karte\Forever\Ersatz.lua
+Karte\Forever\Punkte.lua
 Karte\Server.lua
 Karte\Zauber.lua
 Karte\Laden_Ende.lua
@@ -114,7 +118,9 @@ MiniRoute.lua
 Daten\InnOrte.lua
 NaviFlug.lua
 Navi.lua
+GebietWahl.lua
 Unterwegs.lua
+ReiseBalken.lua
 Highlight.lua
 QuestItems.lua
 Group.lua
@@ -132,3 +138,4 @@ Popups.lua
 Setup.lua
 LogCrypt.lua
 DebugLog.lua
+TestLauf.lua

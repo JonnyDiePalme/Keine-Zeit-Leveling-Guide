@@ -362,9 +362,10 @@ do
     local said = false
     if ns.Ticker then ns.Ticker(DS.LOG_AFTER_S, function() if not said and ns.TestLogActive and ns.TestLogActive() then said = true; pcall(DatenLog) end end, true, true) end
     if ns.BookApplyFound then pcall(ns.BookApplyFound) end
-    if ns.ProfMeasTick and ns.Ticker then ns.Ticker(ns.PROF_MEAS.TICK_S, function() pcall(ns.ProfMeasTick) end) end
+    -- 1.4zzg (M51, S 17:16): sammeln und teilen auch in der Pause
+    if ns.ProfMeasTick and ns.Ticker then ns.Ticker(ns.PROF_MEAS.TICK_S, function() pcall(ns.ProfMeasTick) end, nil, true) end
     if C_Timer and C_Timer.After then C_Timer.After(DS.FIRST_S, function() pcall(SendAll) end) end
-    if ns.Ticker then ns.Ticker(DS.EVERY_S, function() pcall(SendAll) end) end
+    if ns.Ticker then ns.Ticker(DS.EVERY_S, function() pcall(SendAll) end, nil, true) end
   end)
 end
 

@@ -635,8 +635,9 @@ ef:SetScript("OnEvent", function(_, ev, ...)
     -- spaeter beitreten, damit Allgemein, Handel usw. ihre gewohnten Nummern behalten
     C_Timer.After(8, function() pcall(Join) end)
     C_Timer.After(60, function() pcall(ns.SyncPacket) end)
-    ns.Ticker(180, function() pcall(ns.SyncPacket) end)
-    ns.Ticker(2.5, function() pcall(GuildTick) end, true)
-    ns.Ticker(60, function() pcall(CheckChan); if chanState == "off" and Enabled() then pcall(Join) end end)
+    -- 1.4zzg (M51, S 17:16): sammeln und teilen auch in der Pause
+    ns.Ticker(180, function() pcall(ns.SyncPacket) end, nil, true)
+    ns.Ticker(2.5, function() pcall(GuildTick) end, true, true)
+    ns.Ticker(60, function() pcall(CheckChan); if chanState == "off" and Enabled() then pcall(Join) end end, nil, true)
   end
 end)

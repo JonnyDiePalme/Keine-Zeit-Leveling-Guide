@@ -19,8 +19,25 @@ local CATS = {}
 local function Cat(key, title, lines) CATS[#CATS + 1] = { key = key, title = title, lines = lines } end
 
 -- 1.1 (K: Versionsverlauf im Spiel nur Kernpunkte, nie Details)
-Cat("neu", TR"Neu in 1.3", function()
+Cat("neu", TR"Neu in 1.4", function()
   return {
+    -- 1.4 (P149): Kernpunkte, kurz
+    H .. TR"Neu in Version 1.4|r",
+    TR"- Reise Balken für Flug, Zeppelin und Schiff mit Abfahrt",
+    TR"- Neu rechnen fragt, wo es losgehen soll",
+    TR"- Dungeons: Kette, im Log, Ort des Gebers auf der Karte, mehr Forever Dungeons",
+    TR"- Statistik: Sitzung und Level, aufklappbare Level, Gold in Spalten",
+    TR"- Mein Weg: Figur zieht sich an jeder Karte um",
+    TR"- Ausrüstung: Filter nach Werten mit Zahl je Wert, Wertung je Klasse, Ruf und Vorquests",
+    TR"- Berufe: Erz Runde im Kreis, Rezepte mit Wert",
+    TR"- Gruppe: Mit Gruppe teilen, eigene Route statt Gruppen Route möglich",
+    TR"- Flugzeiten im Flugmenü, Lehrer zeigt nur neue Zauber",
+    TR"- Preise immer aus der neuesten Quelle (TSM oder Auctionator)",
+    TR"- Flugzeiten bleiben mit dem Vielflieger Talent richtig",
+    TR"- Lange Routen rechnen in kleineren Teilen, kein endloses Rechnen mehr",
+    TR"- Weniger Rechenzeit und Speicher im Hintergrund",
+    TR"- Weniger Chat, viele Fehler behoben",
+    "",
     -- 1.3 (S 13:22): Verlauf sehr kurz
     H .. TR"Neu in Version 1.3|r",
     TR"- Dungeon Touren mit Zielen drinnen und Abgabe",
@@ -209,7 +226,7 @@ Cat("farm", TR"Farmen", function()
     "",
     H .. TR"Berufe|r",
     TR"Kräuter, Erz, Leder, Stoff, Fleisch und Fische farmen. Oben den Beruf wählen, links die Sachen anhaken. Nur was du mit deinem Skill kannst, ist wählbar.",
-    TR"Rechts zwei Reiter: " .. k(TR"Gebiete") .. TR" (Level, Stellen, Status und " .. k(TR"Gold/Std") .. TR") und " .. k(TR"Rezepte") .. TR" (mit AtlasLoot, welcher deiner Charaktere es kann).",
+    TR"Rechts zwei Reiter: " .. k(TR"Gebiete") .. TR" (Level, Stellen, Status und " .. k(TR"Gold/Std") .. TR") und " .. k(TR"Rezepte") .. TR" (alle Rezepte aus der eingebauten Liste, und welcher deiner Charaktere es kann).",
     TR"Gold/Std ist ein Schätzwert mit Preisen aus dem Auktionshaus (TSM, Auctionator, Auctioneer, Aux oder OribosExchange). Ohne Auktionshaus Addon zählt der Händler Preis, dann ist der Wert zu tief.",
     k(TR"Route planen") .. TR"  Ziel nach Menge oder Zeit, Elitegebiete meiden, mehrere Berufe gemischt. Angeln: Open World oder Schwärme (braucht GatherMate2).",
     "",

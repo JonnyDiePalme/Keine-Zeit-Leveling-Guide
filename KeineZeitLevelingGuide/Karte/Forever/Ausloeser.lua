@@ -1,4 +1,4 @@
--- Ausloeser Bereiche (AreaTrigger) aus den Spieldaten fuer Forever Wegweiser (Forever, Build WOW-70862patch1.60.1_Retail, Werkzeug Stand 170, 2026-11-08 07:25)
+-- Ausloeser Bereiche (AreaTrigger) aus den Spieldaten fuer Forever Wegweiser (Forever, Build WOW-70938patch1.60.1_Retail, Werkzeug Stand 188, 2026-11-15 13:27)
 -- FWW_AUTO_AUSLOESER.<client>.instanzen[mapid] = { name_de, name_en, typ }  typ 1 Gruppe/Raid offen, 2 Instanz
 -- FWW_AUTO_AUSLOESER.<client>.liste[id] = { art, ui, x, y, kontinent, welt_x, welt_y, welt_z, radius, ziel, level,
 --   fraktion, schlachtzug, gebiet_de, gebiet_en }

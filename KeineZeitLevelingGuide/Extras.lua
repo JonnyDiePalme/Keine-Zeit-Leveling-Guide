@@ -75,9 +75,17 @@ local function Rebuild()
   local complete = (Questie and Questie.db and Questie.db.char and Questie.db.char.complete) or {}
   -- 1.3zd (P112): Quests, die ein Item in der Tasche startet, fuer die Route merken (ns.bagStartQ[qid] = itemID)
   local bagQ = {}
+  -- 1.4zzk (M38 Halskette, Pr BER 02:15: Item 7666 startet 2198 nur fuer Allianz): Volk/Fraktion der Quest pruefen, sonst
+  -- weder "startet die Quest" im Tip noch in der Route
+  local raceID = UnitRace and select(3, UnitRace("player"))
+  local function VolkOK(q)
+    local rr = QQ(qdb, q, "requiredRaces")
+    if ns.DKRaces then rr = ns.DKRaces(q, rr) end
+    return not (type(rr) == "number" and rr > 0 and raceID and ns.RaceOK and not ns.RaceOK(rr, raceID))
+  end
   Bags(function(id)
     local q = QI(qdb, id, "startQuest")
-    if type(q) == "number" and q > 0 and not complete[q] and not log[q] then
+    if type(q) == "number" and q > 0 and not complete[q] and not log[q] and VolkOK(q) then
       bagQ[q] = bagQ[q] or id
       if not need[id] then need[id] = TR"startet die Quest " .. (QQ(qdb, q, "name") or q) end
     end
@@ -315,7 +323,37 @@ local STAT = {
   ITEM_MOD_INTELLECT_SHORT = "INT", ITEM_MOD_SPIRIT_SHORT = "SPI", ITEM_MOD_ATTACK_POWER_SHORT = "AP",
   ITEM_MOD_RANGED_ATTACK_POWER_SHORT = "RAP", RESISTANCE0_NAME = "ARM", ITEM_MOD_SPELL_POWER_SHORT = "SP",
   ITEM_MOD_DAMAGE_PER_SECOND_SHORT = "DPS",
+  -- 1.4q (P163): weitere Werte, die die Daten Datei gewichten kann (fehlt ein Schluessel im Client, zaehlt er einfach nicht)
+  ITEM_MOD_CRIT_RATING_SHORT = "CRIT", ITEM_MOD_HIT_RATING_SHORT = "HIT", ITEM_MOD_CRIT_SPELL_RATING_SHORT = "SCRIT",
+  ITEM_MOD_HIT_SPELL_RATING_SHORT = "SHIT", ITEM_MOD_SPELL_HEALING_DONE_SHORT = "HEAL", ITEM_MOD_SPELL_DAMAGE_DONE_SHORT = "SP",
+  ITEM_MOD_DEFENSE_SKILL_RATING_SHORT = "DEF",
 }
+-- 1.4q (P163, M7 M15): Gewichte aus der Daten Datei Daten\FWW_Stat_Gewichte.lua (FWW_STAT_GEWICHTE, von K), im Code nur gelesen.
+-- W oben bleibt nur, falls die Datei fehlt. db.gearFilter = ein Stat aus der Datei (filter), dann zaehlt nur dieser Stat
+local DKEY = { str = "STR", agi = "AGI", sta = "STA", int = "INT", spi = "SPI", ap = "AP", rap = "RAP", sp = "SP", heal = "HEAL",
+  crit = "CRIT", hit = "HIT", spell_crit = "SCRIT", spell_hit = "SHIT", armor = "ARM", dps = "DPS", ranged_dps = "RDPS", def = "DEF" }
+local function Weights(cls)
+  local D = FWW_STAT_GEWICHTE
+  local f = ns.db and ns.db.gearFilter
+  if f and DKEY[f] then return { [DKEY[f]] = 1 } end
+  local d = type(D) == "table" and D[cls]
+  if type(d) == "table" then
+    local w = {}
+    for k, v in pairs(d) do if DKEY[k] and type(v) == "number" then w[DKEY[k]] = v end end
+    w.OFF = type(d.offhand) == "number" and d.offhand or nil
+    return w
+  end
+  return W[cls] or W.WARRIOR
+end
+ns.GearWeights = Weights
+-- Filter Liste fuers Fenster: { {key, code} } aus der Daten Datei
+function ns.GearFilters()
+  local out = {}
+  local f = type(FWW_STAT_GEWICHTE) == "table" and FWW_STAT_GEWICHTE.filter
+  for k, code in pairs(type(f) == "table" and f or {}) do if DKEY[code] then out[#out + 1] = { key = k, code = code } end end
+  table.sort(out, function(a, b) return a.key < b.key end)
+  return out
+end
 -- hoechste Ruestungsart: 1 Stoff, 2 Leder, 3 Kette, 4 Platte
 local function MaxArmor(cls, L)
   if cls == "WARRIOR" or cls == "PALADIN" then return L >= 40 and 4 or 3 end
@@ -347,14 +385,17 @@ local WEAPONS = {
 local function Score(link)
   if not link then return 0, nil end
   local _, cls = UnitClass("player")
-  local w = W[cls] or W.WARRIOR
+  local w = Weights(cls)
   local stats = ns.Api.GetItemStats and ns.Api.GetItemStats(link) or {}
   local s = 0
   local _, _, _, _, _, _, _, _, loc, _, _, classID, subID = ns.Api.GetItemInfo(link)
   for k, v in pairs(stats) do
     local key = STAT[k]
     if key == "DPS" and (loc == "INVTYPE_RANGED" or loc == "INVTYPE_RANGEDRIGHT" or loc == "INVTYPE_THROWN") and w.RDPS then key = "RDPS" end
-    if key and w[key] then s = s + v * w[key] end
+    if key and w[key] then
+      local f = (key == "DPS" and loc == "INVTYPE_WEAPONOFFHAND" and w.OFF) or 1
+      s = s + v * w[key] * f
+    end
   end
   -- Ruestung, die du nicht tragen kannst oder die schwaecher ist als deine
   if classID == 4 and subID and subID >= 1 and subID <= 4 then
@@ -695,21 +736,25 @@ end
 ns.BAG_HINT_FREE = 3
 do
   local last = -1000
+  -- 1.4j (M13 Teil 2, Pr CHAT_DOPPELT: "Taschen fast voll" mehrfach in 10 Min): der Hinweis kommt einmal je Taschen Stand,
+  -- wieder erst, wenn die Taschen dazwischen geleert waren oder ns.BAG_HINT_AGAIN_S vorbei sind
+  ns.BAG_HINT_AGAIN_S = 900
+  local armed = true
   local bf = CreateFrame("Frame")
   ns.RegEv(bf, "BAG_UPDATE_DELAYED")
   bf:SetScript("OnEvent", function()
     local db = ns.db
     if not (db and db.bagPlan ~= false and db.optMode and db.opt and db.opt.steps) then return end
     if InCombatLockdown and InCombatLockdown() then return end
-    if GetTime() - last < 300 then return end
     local free = ns.FreeSlots()
-    if free > ns.BAG_HINT_FREE then return end
+    if free > ns.BAG_HINT_FREE then armed = true; return end
+    if not armed and GetTime() - last < ns.BAG_HINT_AGAIN_S then return end
     -- kommt in den naechsten 3 Schritten schon ein Haendler?
     local opt = db.opt
     for i = opt.idx or 1, math.min(#opt.steps, (opt.idx or 1) + 3) do
       for _, a in ipairs(opt.steps[i].acts or {}) do if a.k == "V" then return end end
     end
-    last = GetTime()
+    last, armed = GetTime(), false
     local map = ns.PlayerMap and ns.PlayerMap()
     local pos = map and C_Map.GetPlayerMapPosition(map, "player")
     local v, dv

@@ -38,6 +38,7 @@ end
 local function AddSvc(ui, e)
   ns.svc[ui] = ns.svc[ui] or {}
   table.insert(ns.svc[ui], e)
+  ns.svcRev = (ns.svcRev or 0) + 1
 end
 
 local building
@@ -56,7 +57,9 @@ local function BuildIndex()
   end
   local fl = (lib.Enum and lib.Enum.npcFlags) or {}
   F.vendor, F.repair, F.fly, F.trainer, F.inn = fl.VENDOR or 0, fl.REPAIR or 0, fl.FLIGHT_MASTER or 0, fl.TRAINER or 0, fl.INNKEEPER or 0
-  local want = F.vendor + F.repair + F.fly + F.trainer + F.inn
+  -- 1.4c (P158, M8): Auktionatoren, fuer Quest Items, die es nur im Auktionshaus gibt
+  F.auction = fl.AUCTIONEER or 0
+  local want = F.vendor + F.repair + F.fly + F.trainer + F.inn + F.auction
   if not band or want == 0 then return end
   building = true
   local fac = Faction()
@@ -129,6 +132,25 @@ local function BuildIndex()
       end
     end
     if i < #ids then C_Timer.After(0, Step); return end
+    -- 1.4zh (P157 M16, Pr 14:55: Rog'mar in Flusslande 2548 fehlt, Questie Daten haben dort keinen NPC mit Flug Flag):
+    -- Flugmeister aus den Flug Daten der Karte (ns.TAXI knoten = { ui, x, y, fraktion, en, de, kont, wx, wy, bit, npc })
+    -- ergaenzen, wenn es den NPC als Flugmeister noch nicht gibt. Nur deine Fraktion, nur mit NPC Nummer
+    pcall(function()
+      local T = ns.TAXI
+      if not (type(T) == "table" and type(T.knoten) == "table" and F.fly and F.fly > 0) then return end
+      local have = {}
+      for _, list in pairs(ns.svc) do for _, e in ipairs(list) do if e[6] and band(e[5] or 0, F.fly) ~= 0 then have[e[6]] = true end end end
+      local n = 0
+      for _, k in pairs(T.knoten) do
+        local npc = type(k) == "table" and tonumber(k[11])
+        if npc and npc > 0 and not have[npc] and type(k[4]) == "string" and k[4]:find(fac, 1, true) and tonumber(k[1]) and tonumber(k[2]) and tonumber(k[3]) then
+          have[npc] = true
+          AddSvc(k[1], { k[2], k[3], (ns.EN and k[5] or k[6]) or k[5] or k[6] or "Flugmeister", "", F.fly, npc })
+          n = n + 1
+        end
+      end
+      if n > 0 and ns.TestLog then ns.TestLog("FLUG", ("Flugmeister aus den Flug Daten ergaenzt: %d (fehlten in Questie)"):format(n)) end
+    end)
     building = false
     ns.svcReady = true
     if ns.TravelResetCache then ns.TravelResetCache() end
@@ -343,6 +365,7 @@ local function IsKind(e, kind, forCls)
   elseif kind == "repair" then return band(f, F.repair) ~= 0
   elseif kind == "fly" then return band(f, F.fly) ~= 0
   elseif kind == "inn" then return band(f, F.inn) ~= 0
+  elseif kind == "auction" then return band(f, F.auction) ~= 0
   elseif kind == "trainer" then
     if band(f, F.trainer) == 0 then return false end
     -- Klassenname maennlich (UnitClass gibt bei Frauen "Kriegerin"), und englisch (Questie Daten oft englisch)
@@ -367,6 +390,22 @@ end
 -- naechster passender NPC; sucht in der Zone und (fuer Lehrer) in allen Zonen der Route
 local wideCache = {}
 local EMPTY = {}
+-- 1.4zzo (Pr tickprof 09:30: IsKind weiter 7 bis 8 %, Aufrufer ist diese Suche, mehrmals je Takt ueber alle Dienste einer
+-- Zone): je Zone und Art die passenden Eintraege einmal gemerkt (neu bei ns.svcRev)
+local kindIdx, kindRev, kindSrc = {}, nil, nil
+local function OfKind(ui, kind)
+  if not ui then return EMPTY end
+  if kindRev ~= ns.svcRev or kindSrc ~= ns.svc then kindIdx, kindRev, kindSrc = {}, ns.svcRev, ns.svc end
+  local z = kindIdx[ui]
+  if not z then z = {}; kindIdx[ui] = z end
+  local l = z[kind]
+  if not l then
+    l = {}
+    for _, e in ipairs(ns.svc[ui] or EMPTY) do if IsKind(e, kind) then l[#l + 1] = e end end
+    z[kind] = l
+  end
+  return l
+end
 function ns.NearestSvc(kind, mapID, px, py, wide)
   if not (ns.svcReady and mapID) then return end
   -- weite Suche ist teuer: 20 Sekunden merken
@@ -383,13 +422,11 @@ function ns.NearestSvc(kind, mapID, px, py, wide)
   if not pc then return end
   local best, bd, bui
   for _, ui in ipairs(maps) do
-    for _, e in ipairs(ns.svc[ui] or EMPTY) do
-      if IsKind(e, kind) then
-        local c, wx, wy = ns.MapWorld(ui, e[1], e[2])
-        if c == pc then
-          local d = math.sqrt((wx - pwx) ^ 2 + (wy - pwy) ^ 2)
-          if not bd or d < bd then best, bd, bui = e, d, ui end
-        end
+    for _, e in ipairs(OfKind(ui, kind)) do
+      local c, wx, wy = ns.MapWorld(ui, e[1], e[2])
+      if c == pc then
+        local d = math.sqrt((wx - pwx) ^ 2 + (wy - pwy) ^ 2)
+        if not bd or d < bd then best, bd, bui = e, d, ui end
       end
     end
   end
@@ -398,32 +435,80 @@ function ns.NearestSvc(kind, mapID, px, py, wide)
   return best, bd
 end
 
+-- 1.4zzd (P206 fp, K 11:00: db.knownFP nicht anfassen): bekannte Flugpunkte fuer die Planung. Im Szenario Test setzt TestLauf
+-- ns.simKnownFP (nur fuer die Rechnung, nie gespeichert), sonst die echten. ns.KnownFPRev aendert sich mit, damit die Zwischen
+-- Speicher (Flugzeiten, Flugmeister Liste) neu rechnen
+function ns.KnownFP() return ns.simKnownFP or (ns.db and ns.db.knownFP) or {} end
+function ns.KnownFPRev() return ((ns.db and ns.db.knownFPRev) or 0) + (ns.simKnownFP and (1000000 + (ns.simFPRev or 0)) or 0) end
+
 -- Flugmeister einer Zone, die du noch nicht kennst
 function ns.FlightMasters(ui)
   local out = {}
   if not ns.svcReady then return out end
-  local known = (ns.db and ns.db.knownFP) or {}
-  for _, e in ipairs(ns.svc[ui] or {}) do
-    if IsKind(e, "fly") and not known[e[6]] and not e.city then table.insert(out, e) end
+  local known = ns.KnownFP()
+  for _, e in ipairs(OfKind(ui, "fly")) do
+    if not known[e[6]] and not e.city then table.insert(out, e) end
   end
   return out
 end
 
+-- 1.4zzo (P217, Pr tickprof 07:30: IsKind 7 bis 8 % der Addon Zeit): die Listen unten liefen bei jedem Aufruf ueber alle
+-- Dienste. Jetzt einmal je Dienste Stand (und je bekannte Flugpunkte) gemerkt, zurueck kommt eine flache Kopie
+local SvcMemo = { src = nil, t = {} }
+local function Memo(key, build)
+  if SvcMemo.src ~= ns.svc or SvcMemo.rev ~= ns.svcRev then SvcMemo.src, SvcMemo.rev, SvcMemo.t = ns.svc, ns.svcRev, {} end
+  local l = SvcMemo.t[key]
+  if not l then l = build(); SvcMemo.t[key] = l end
+  local out = {}
+  for i = 1, #l do out[i] = l[i] end
+  return out
+end
 -- bekannte Flugmeister (fuer Fluege in der Planung)
 function ns.KnownFlightMasters()
-  local out = {}
-  if not ns.svcReady then return out end
-  local known = (ns.db and ns.db.knownFP) or {}
-  for ui, list in pairs(ns.svc) do
-    for _, e in ipairs(list) do
-      if IsKind(e, "fly") and known[e[6]] and not e.city then table.insert(out, { map = ui, x = e[1], y = e[2], name = e[3], id = e[6] }) end
+  if not ns.svcReady then return {} end
+  local known = ns.KnownFP()
+  local n = 0
+  for _ in pairs(known) do n = n + 1 end
+  return Memo("kfm|" .. tostring(known) .. "|" .. n, function()
+    local out = {}
+    for ui, list in pairs(ns.svc) do
+      for _, e in ipairs(list) do
+        if IsKind(e, "fly") and known[e[6]] and not e.city then table.insert(out, { map = ui, x = e[1], y = e[2], name = e[3], id = e[6] }) end
+      end
     end
-  end
-  return out
+    return out
+  end)
 end
 
 -- alle Flugmeister nach NPC Nummer (17.4: gemessene und geteilte Flugzeiten pruefen)
 local fmById, fmSrc
+-- 1.4zzl (M16, Ka ANT 02:25: Flusslande Rog'mar [3203], Powderfuse [3274/3275], Farholde [3276] haben in Flug.lua keine NPC):
+-- Flugpunkt Knoten Nummer > Flugmeister. Erst knoten[id][11] (NPC aus den Daten), sonst der naechste Flugmeister aus den Diensten
+-- auf derselben Karte bis 300 yd um die Knoten Lage aus Flug.lua (die stimmt, die Lage aus der offenen Flugkarte ist auf
+-- Forever bis 3000 yd daneben)
+do
+  local memo, memoSrc = {}, nil
+  function ns.TaxiNodeNpc(nodeID)
+    local T = ns.TAXI
+    local k = nodeID and T and T.knoten and T.knoten[nodeID]
+    if type(k) ~= "table" then return nil end
+    if (tonumber(k[11]) or 0) > 0 then return k[11] end
+    if not (ns.svcReady and ns.svc and k[1] and k[2] and k[3]) then return nil end
+    if memoSrc ~= ns.svc then memo, memoSrc = {}, ns.svc end
+    if memo[nodeID] ~= nil then return memo[nodeID] or nil end
+    local best, bd = false, 300
+    for ui, list in pairs(ns.svc) do
+      for _, e in ipairs(list) do
+        if e[6] and IsKind(e, "fly") then
+          local d = ns.WorldDist and ns.WorldDist({ k[1], k[2], k[3] }, { ui, e[1], e[2] })
+          if d and d < bd then best, bd = e[6], d end
+        end
+      end
+    end
+    memo[nodeID] = best
+    return best or nil
+  end
+end
 function ns.FlightMasterById(id)
   if not (ns.svcReady and id) then return nil end
   if not fmById or fmSrc ~= ns.svc then
@@ -447,44 +532,51 @@ end
 
 -- alle Haendler (fuer Taschen leeren in der Planung)
 function ns.Vendors()
-  local out = {}
-  if not ns.svcReady then return out end
-  for ui, list in pairs(ns.svc) do
-    for _, e in ipairs(list) do
-      if IsKind(e, "vendor") and not e.city then table.insert(out, { map = ui, x = e[1], y = e[2], name = e[3], id = e[6] }) end
+  if not ns.svcReady then return {} end
+  return Memo("vendor", function()
+    local out = {}
+    for ui, list in pairs(ns.svc) do
+      for _, e in ipairs(list) do
+        if IsKind(e, "vendor") and not e.city then table.insert(out, { map = ui, x = e[1], y = e[2], name = e[3], id = e[6] }) end
+      end
     end
-  end
-  return out
+    return out
+  end)
 end
 
 -- alle Lehrer deiner Klasse (fuer die Route: bis Level 10 immer zum Lehrer), cls: andere Klasse (Gruppe)
 function ns.Trainers(cls)
-  local out = {}
-  if not ns.svcReady then return out end
-  for ui, list in pairs(ns.svc) do
-    for _, e in ipairs(list) do
-      if IsKind(e, "trainer", cls) then table.insert(out, { map = ui, x = e[1], y = e[2], name = e[3], id = e[6], city = e.city }) end
+  if not ns.svcReady then return {} end
+  local _, own = UnitClass("player")
+  return Memo("trainer|" .. tostring(cls) .. "|" .. tostring(own), function()
+    local out = {}
+    for ui, list in pairs(ns.svc) do
+      for _, e in ipairs(list) do
+        if IsKind(e, "trainer", cls) then table.insert(out, { map = ui, x = e[1], y = e[2], name = e[3], id = e[6], city = e.city }) end
+      end
     end
-  end
-  return out
+    return out
+  end)
 end
 
 -- alle Gastwirte (fuer Ruhestein Planung)
 function ns.Inns()
-  local out = {}
-  if not ns.svcReady then return out end
-  for ui, list in pairs(ns.svc) do
-    for _, e in ipairs(list) do
-      if IsKind(e, "inn") and not e.city then table.insert(out, { map = ui, x = e[1], y = e[2], name = e[3], id = e[6] }) end
+  if not ns.svcReady then return {} end
+  return Memo("inn", function()
+    local out = {}
+    for ui, list in pairs(ns.svc) do
+      for _, e in ipairs(list) do
+        if IsKind(e, "inn") and not e.city then table.insert(out, { map = ui, x = e[1], y = e[2], name = e[3], id = e[6] }) end
+      end
     end
-  end
-  return out
+    return out
+  end)
 end
 
 function ns.FPKnownNear(ui, x, y)
   local known = (ns.db and ns.db.knownFP) or {}
-  for _, e in ipairs(ns.svc[ui] or {}) do
-    if IsKind(e, "fly") and known[e[6]] and math.sqrt((e[1] - x) ^ 2 + (e[2] - y) ^ 2) < 0.03 then return true end
+  for _, e in ipairs(ui and OfKind(ui, "fly") or EMPTY) do
+    if known[e[6]] and math.sqrt((e[1] - x) ^ 2 + (e[2] - y) ^ 2) < 0.03 then return true end
   end
   return false
 end
@@ -644,8 +736,20 @@ local function Hint()
 end
 
 ns.svcHint = nil
+-- 1.4zzv (Pr BER 20:35, Services.lua Takt 27 ms je Min): Hinweise (Haendler, Gasthaus, Lehrer ...) nur neu suchen, wenn du
+-- dich bewegt hast oder SVC_HINT_S um sind. Stehst du, aendert sich kaum etwas, und die Suche geht durch alle Dienste
+ns.SVC_HINT_S = 10
+local hintAt, hintMap, hintX, hintY = -999, nil, 0, 0
 local function Tick()
-  ns.svcHint = Hint()
+  local now = GetTime()
+  local m = ns.PlayerMap and ns.PlayerMap()
+  local pos = m and C_Map.GetPlayerMapPosition(m, "player")
+  local x, y = 0, 0
+  if pos then x, y = pos:GetXY() end
+  if m ~= hintMap or math.abs(x - hintX) > 0.002 or math.abs(y - hintY) > 0.002 or now - hintAt >= ns.SVC_HINT_S then
+    hintAt, hintMap, hintX, hintY = now, m, x, y
+    ns.svcHint = Hint()
+  end
   local inn = false
   for _, h in ipairs(ns.svcHints or {}) do if h.kind == "inn" then inn = true end end
   if not inn then ns.innHintFor = nil end
@@ -781,6 +885,22 @@ end
 ------------------------------------------------------------
 -- Zauber, die beim Lehrer warten (bis Level L), mit Daten aus TrainerData.lua
 local function Known(id) return (IsPlayerSpell and IsPlayerSpell(id)) or (IsSpellKnown and IsSpellKnown(id)) end
+ns.TRAINER_REP = { MIN_REACTION = 6, BONUS_S = 40 }   -- 6 = wohlwollend
+-- 1.4c (P155, S M6 "nur neue Zauber", Log 21 und 23 statt wenige): ein Rang gilt als gelernt, wenn ein hoeherer Rang
+-- vom selben Zauber (gleicher Name, hoeheres Level in den Lehrer Daten) bekannt ist. Auf Forever meldet das Spiel alte
+-- Raenge nach dem neuen nicht mehr als bekannt, dann kamen alle alten Raenge wieder in die Liste
+local function KnownHigher(data, L)
+  local hi = {}
+  for l = 1, L do
+    for _, e in ipairs(data[l] or {}) do
+      if Known(e[1]) then
+        local nm = ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(e[1])
+        if nm and (hi[nm] or 0) < l then hi[nm] = l end
+      end
+    end
+  end
+  return hi
+end
 function ns.TrainerSpells(L, onlyLevel)
   local _, cls = UnitClass("player")
   local data = ns.TRAINER_SPELLS and ns.TRAINER_SPELLS[cls or ""]
@@ -789,10 +909,15 @@ function ns.TrainerSpells(L, onlyLevel)
   local _, _, race = UnitRace("player")
   local fac = UnitFactionGroup("player")
   local out, pend = {}, {}
+  local hi = KnownHigher(data, L)
   for l = onlyLevel and L or 1, L do
     for _, e in ipairs(data[l] or {}) do
       local id = e[1]
       local ok = not Known(id)
+      if ok then
+        local nm = ns.Api.GetSpellInfo and ns.Api.GetSpellInfo(id)
+        if nm and hi[nm] and hi[nm] >= l then ok = false end
+      end
       if ok and e.t and not Known(e.t) then ok = false end
       if ok and e.race and e.race ~= race then ok = false end
       if ok and e.races then
@@ -1253,6 +1378,23 @@ ev:SetScript("OnEvent", function(_, event, ...)
   if event == "TRAINER_SHOW" then
     db.trainedAt = UnitLevel("player")
     ns.lastTrainerAt = time()
+    -- 1.4c (P155): Ruf beim Lehrer live merken (ab wohlwollend 10 Prozent Rabatt), fuer die Lehrer Wahl der Route.
+    -- Dazu ins Log: wie viele Zauber das Addon erwartet und wie viele der Lehrer anbietet
+    pcall(function()
+      local g = UnitGUID and ns.Api.U(UnitGUID, "npc")
+      local id = type(g) == "string" and tonumber(g:match("%-(%d+)%-%x+$"))
+      local re = UnitReaction and ns.Api.U(UnitReaction, "npc", "player")
+      if id and type(re) == "number" then db.trainerRep = db.trainerRep or {}; db.trainerRep[id] = re end
+      local mine = ns.TrainerSpells and #ns.TrainerSpells(UnitLevel("player")) or -1
+      local avail = 0
+      if GetNumTrainerServices and GetTrainerServiceInfo then
+        for i = 1, GetNumTrainerServices() do
+          local _, _, typ = GetTrainerServiceInfo(i)
+          if typ == "available" then avail = avail + 1 end
+        end
+      end
+      if ns.TestLog then ns.TestLog("LEHRER", ("offen: Addon %d, Lehrer %d, Ruf %s, NPC %s"):format(mine, avail, tostring(re), tostring(id))) end
+    end)
     if ns.serviceTarget and ns.serviceTarget.kind == "trainer" then ns.serviceTarget = nil end
   elseif event == "MERCHANT_SHOW" then
     if ns.serviceTarget and (ns.serviceTarget.kind == "vendor" or ns.serviceTarget.kind == "repair") then ns.serviceTarget = nil end
@@ -1288,6 +1430,18 @@ ev:SetScript("OnEvent", function(_, event, ...)
             local x, y = TaxiNodePosition(i)
             local ok, c, w = pcall(C_Map.GetWorldPosFromMapPos, cm, CreateVector2D(x, y))
             if ok and w then table.insert(nodes, { c, w:GetXY() }) end
+          end
+        end
+        -- 1.4zzl (M16): zuerst nach Knoten Nummer (Lage der offenen Flugkarte ist auf Forever teils weit daneben)
+        local okA, all = pcall(function() local tm = GetTaxiMapID and GetTaxiMapID(); return C_TaxiMap and C_TaxiMap.GetAllTaxiNodes and tm and C_TaxiMap.GetAllTaxiNodes(tm) end)
+        local unreach = Enum and Enum.FlightPathState and Enum.FlightPathState.Unreachable
+        for _, nd in ipairs(okA and type(all) == "table" and all or {}) do
+          if type(nd) == "table" and nd.nodeID and (unreach == nil or nd.state ~= unreach) then
+            local npc = ns.TaxiNodeNpc(nd.nodeID)
+            if npc and not db.knownFP[npc] then
+              db.knownFP[npc] = true
+              if ns.TestLog then ns.TestLog("FLUGKARTE", ("bekannt per Knoten %d: %s (NPC %s)"):format(nd.nodeID, tostring(nd.name), tostring(npc))) end
+            end
           end
         end
         for ui, list in pairs(ns.svc) do

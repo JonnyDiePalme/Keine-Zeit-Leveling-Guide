@@ -1054,6 +1054,30 @@ local function LineFree(ui, x1, y1, x2, y2, F)
   end
   return FineFree(ui, x1, y1, x2, y2, F, ov)
 end
+-- 1.4zzo (P217, Pr tickprof 07:30: nach Zonenwechsel Karte.lua FineFree/LineFree 13 bis 16 % der Addon Zeit, der Pfeil
+-- prueft 4 mal je Sekunde dieselbe Linie): Ergebnis je Linie (Start und Ziel auf 1/8 Feld gerundet, Zone, Felder Tabelle)
+-- LF_CACHE.TTL Sekunden merken. Hoechstens LF_CACHE.MAX Eintraege, dann von vorn
+K.LF_CACHE = { TTL = 2, MAX = 400 }
+do
+  local raw = LineFree
+  local cache, cnt = {}, 0
+  local q = CELL / FINE_SUB
+  LineFree = function(ui, x1, y1, x2, y2, F)
+    if not (ui and x1 and y1 and x2 and y2) then return raw(ui, x1, y1, x2, y2, F) end
+    F = F or ns.Felder(ui)
+    local key = ui .. ":" .. floor(x1 / q) .. ":" .. floor(y1 / q) .. ":" .. floor(x2 / q) .. ":" .. floor(y2 / q)
+    local now = GetTime()
+    local c = cache[key]
+    if c and c[2] == F and now - c[3] < K.LF_CACHE.TTL then return c[1] end
+    local r = raw(ui, x1, y1, x2, y2, F)
+    if not c then
+      cnt = cnt + 1
+      if cnt > K.LF_CACHE.MAX then cache, cnt = {}, 1 end
+    end
+    cache[key] = { r, F, now }
+    return r
+  end
+end
 K.LineFree = LineFree
 
 local function Slow() return ns.db and ns.db.slowPC and true or false end

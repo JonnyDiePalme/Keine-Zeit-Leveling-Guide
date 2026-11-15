@@ -139,7 +139,9 @@ local function FromGame()
           local mine = f == nil or f == 0 or (f == 1 and fac == "H") or (f == 2 and fac == "A")
           local k = nd.nodeID and T.knoten[nd.nodeID]
           if mine and nd.isUndiscovered then undis = undis + 1 end
-          if mine and not nd.isUndiscovered and type(k) == "table" and (k[11] or 0) > 0 then cand[#cand + 1] = k[11] end
+          -- 1.4zzl (M16): Knoten ohne NPC in den Daten (Flusslande) ueber die Lage aus Flug.lua (ns.TaxiNodeNpc)
+          local npc = type(k) == "table" and ns.TaxiNodeNpc and ns.TaxiNodeNpc(nd.nodeID)
+          if mine and not nd.isUndiscovered and npc then cand[#cand + 1] = npc end
         end
       end
     end
@@ -233,6 +235,60 @@ local function HypNet(cont, fac)
   h = { src = T, nodes = nodes, d = d }
   hyp[key] = h
   return h
+end
+
+-- 1.4zp (M39, S 22:10 Duestermarschen: "flugpunkt wurde nicht eingerechnet, wenn ich ihn noch nicht habe ist aber in der
+-- naehe"): der naechste noch unbekannte Flugpunkt deiner Fraktion bis LEARN.YD bei dir kommt als eigener Punkt ins Navi.
+-- Hinlaufen, lernen (TALK_S), von dort fliegen. Flugzeiten von ihm aus nur ueber seine direkten Strecken zu Punkten, die du
+-- kennst, und dann weiter ueber dein Netz. Nach dem Lernen plant das Navi von selbst neu (knownFPRev)
+-- 1.4zr (M39, S Log 222157: Schlammrad lag auf dem Weg nach Tanaris, nicht direkt bei dir): bis zu N Kandidaten bis YD,
+-- das Navi nimmt einen nur, wenn der Weg damit schneller ist (Dijkstra)
+ns.NAVI_LEARN = { YD = 2500, N = 3, TALK_S = 10 }
+function ns.NaviLearnFP(S)
+  if not (S and S.cont and S.wx) then return nil end
+  if ns.db and ns.db.useFlights == false then return nil end
+  local T = Taxi()
+  local fac = MyFac()
+  if not (T and fac and T.kanten) then return nil end
+  local known = (ns.db and ns.db.knownFP) or {}
+  if not next(known) then return nil end
+  local h = HypNet(S.cont, fac)
+  local cand = {}
+  for _, n in ipairs(h and h.nodes or {}) do
+    if not known[n.npc] then
+      local d = math.sqrt((n.wx - S.wx) ^ 2 + (n.wy - S.wy) ^ 2)
+      if d <= ns.NAVI_LEARN.YD then cand[#cand + 1] = { n = n, d = d } end
+    end
+  end
+  table.sort(cand, function(a, b) return a.d < b.d end)
+  local out = {}
+  for ci = 1, math.min(ns.NAVI_LEARN.N, #cand) do
+    local best, bd = cand[ci].n, cand[ci].d
+    local nb = {}
+    for _, e in ipairs(T.kanten) do
+      if e[1] == best.id and type(e[3]) == "number" then
+        local k = T.knoten[e[2]]
+        local npc = type(k) == "table" and k[11]
+        if npc and known[npc] and (not nb[npc] or e[3] < nb[npc]) then nb[npc] = e[3] end
+      end
+    end
+    local hyp, any = {}, false
+    for _, n in ipairs(h.nodes) do
+      if known[n.npc] then
+        local bt
+        for npc, sec in pairs(nb) do
+          local t = (npc == n.npc) and 0 or (ns.TaxiTime and ns.TaxiTime(npc, n.npc))
+          if type(t) == "number" and (not bt or sec + t < bt) then bt = sec + t end
+        end
+        if bt then hyp[n.npc] = bt; any = true end
+      end
+    end
+    if any then
+      out[#out + 1] = { map = best.map, x = best.x, y = best.y, cont = best.cont, wx = best.wx, wy = best.wy, name = best.name, id = best.npc,
+        fp = true, learn = true, hyp = hyp, learnD = math.floor(bd) }
+    end
+  end
+  return #out > 0 and out or nil
 end
 
 local TIP_MIN_SAVE, TIP_MIN_PART = 180, 0.25
@@ -649,14 +705,17 @@ local function FromTaxiMap()
     end
   end
   -- 1.3p (P97): gespeicherte Liste bereinigen. Auf der Karte nur DISTANT und nie echt bestaetigt = nicht bekannt
-  local fernRaus = 0
+  -- 1.4zzz3 (M64, S 14:53, K 14:55): einmal bekannte Flugpunkte nie mehr loeschen. Ein bekannter Punkt steht auf der Karte
+  -- auch dann als DISTANT, wenn von hier keine Strecke ueber deine Punkte hingeht. Vorher (1.3p P97) flog er raus, wenn er nie
+  -- per Landung oder Karte bestaetigt war, und das Navi lief zu Fuss. Nur vermutete (oben, 2. Durchgang) gehen noch raus.
+  local fernBleibt = 0
   if lesbar and vertrauen and db and db.knownFP then
     local echt = type(db.fpEcht) == "table" and db.fpEcht or {}
     for npc in pairs(fern) do
-      if db.knownFP[npc] and not echt[npc] then db.knownFP[npc] = nil; fernRaus = fernRaus + 1 end
+      if db.knownFP[npc] and not echt[npc] then fernBleibt = fernBleibt + 1 end
     end
   end
-  if fernRaus > 0 then Log("FLUG", ("Flugkarte: %d Flugpunkte nur DISTANT und nie bestaetigt, als unbekannt entfernt"):format(fernRaus)); raus = raus + fernRaus end
+  if fernBleibt > 0 then Log("FLUG", ("Flugkarte: %d bekannte Flugpunkte nur DISTANT, bleiben bekannt (nie loeschen)"):format(fernBleibt)) end
   if db and lesbar then db.fpKarteGesehen = true end
   if raus > 0 then Log("FLUG", ("Flugkarte: %d vermutete Flugpunkte doch unbekannt, entfernt"):format(raus)) end
   if n > 0 or raus > 0 then Bump() end
@@ -823,6 +882,16 @@ NaviFlugLeg = function()
       if d and d < 80 then return nx end
     end
   end
+  -- 1.4zs (M42, S Log 235235 22:56 Rog'mar: Navi Weg Ruhestein, Zeppelin, dann Flug nach Zarise; du standest mit offener
+  -- Flugkarte am Flugmeister, nichts leuchtete, kein Auto Flug): kommt spaeter im Weg ein Flug, gilt dessen Ziel auch hier.
+  -- Ist es von hier direkt erreichbar, fliegt AutoFly hin (sonst nur markieren, wie immer)
+  for k = nv.cur + 1, #nv.legs do
+    local fl = nv.legs[k]
+    if fl.kind == "fly" and fl.to then
+      if not (nv.directLeg and nv.directLeg.src == fl) then nv.directLeg = { kind = "fly", to = fl.to, direct = true, src = fl } end
+      return nv.directLeg
+    end
+  end
   return nil
 end
 -- Knoten auf der offenen Flugkarte, der zum Ziel (Welt Position) passt: Nummer, Abstand in yd
@@ -941,6 +1010,8 @@ local function AutoFly()
   GlowHide()
   local db = ns.db
   if not taxiOpen or not db or db.useFlights == false then return end
+  -- 1.4zzk (M42, S Abhak 01:45): in der Pause kein Auto Flug und keine Flugziel Markierung
+  if db.paused then Log("FLUG_AUTO", "Pause: kein Auto Flug, keine Markierung"); return end
   local lg = FlugLeg()
   if not (lg and lg.to) then return end
   -- 1.3g (P87): Flug Kette (lg.hops): an welchem Flugmeister der Kette stehst du? Von dort Endziel, wenn erreichbar,
@@ -976,6 +1047,7 @@ local function AutoFly()
   end
   local tgt = hopTo or lg.to
   local i, dist = FindNode(tgt)
+  if lg.direct and i then Log("FLUG_AUTO", ("Navi: Flug nach %s kommt spaeter im Weg, hier schon auf der Flugkarte (Typ %s)"):format(tostring(tgt.name), tostring(TaxiNodeGetType(i)))) end
   local want = tgt.name or "?"
   if not i then
     Log("FLUG_AUTO", ("Ziel %s nicht auf der Flugkarte gefunden, nichts markiert"):format(tostring(want)))

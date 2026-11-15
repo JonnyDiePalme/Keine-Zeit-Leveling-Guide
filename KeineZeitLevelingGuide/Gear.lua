@@ -7,6 +7,7 @@ local TR = ns.TR
 -- Ruestungstyp, Waffen die du tragen kannst) gegen das, was du gerade anhast.
 
 local AHEAD = 3   -- auch Quests, die du in ein paar Levels annehmen kannst
+local GEAR = { REP_COST = 3 }   -- 1.4q: Ruf fehlt zaehlt im Wert wie so viele Quests mehr
 
 local busy = false
 function ns.GearBusy() return busy end
@@ -24,19 +25,31 @@ local function RequestItem(id)
   return ns.Api.GetItemInfo(id)
 end
 
+-- 1.4zf (M29, S Durchsicht 13:44: Liste leer, "Suche Quests ..." blieb stehen): jeder Abbruch ruft den Rueckruf mit Grund,
+-- waehrend einer laufenden Suche warten weitere Rufer auf deren Ende
+local gearWait = {}
+local function GearDone(out, why)
+  ns.gearScanWhy = why
+  if why and ns.TestLog then ns.TestLog("AUSRUESTUNG", "Suche ohne Ergebnis: " .. tostring(why)) end
+  local w = gearWait; gearWait = {}
+  for _, f in ipairs(w) do pcall(f, out, why) end
+end
 function ns.GearScan(done)
+  if done then gearWait[#gearWait + 1] = done end
   if busy then return end
-  if not ns.QDBAccess then return end
+  if not ns.QDBAccess then GearDone(nil, TR"Questie fehlt."); return end
   local QDB, ZDB, QLib, QPlayer = ns.QDBAccess()
-  if not (QDB and QLib) then ns.Print(TR"Ausrüstung Quests brauchen Questie, die Daten sind noch nicht geladen."); return end
+  if not (QDB and QLib) then ns.Print(TR"Ausrüstung Quests brauchen Questie, die Daten sind noch nicht geladen."); GearDone(nil, TR"Questie Daten noch nicht geladen, gleich nochmal Neu suchen."); return end
   local lib = LibQuestieDB
   local IF = lib and lib.Item
   local ids = IF and IF.GetAllIds and IF.GetAllIds()
   if type(ids) ~= "table" or #ids == 0 then
     ns.Print(TR"Questie liefert keine Item Liste, Ausrüstung Quests gehen damit nicht.")
     ns.gearQuests, ns.gearLvl = {}, UnitLevel("player")
+    GearDone({}, TR"Questie liefert keine Item Liste.")
     return
   end
+  done = nil -- die Rufer stehen in gearWait
   busy = true
   local L = UnitLevel("player")
   local _, _, classID = UnitClass("player")
@@ -71,14 +84,19 @@ function ns.GearScan(done)
         local okD, doable = pcall(QDB.IsDoable, qid)
         if okD and doable == false and not (Q(qid, "preQuestSingle") or Q(qid, "preQuestGroup")) then fine = false end
       end
-      if fine and ns.RepCheck and not inLog[qid] and not ns.RepCheck(qid) then fine = false end
-      r = fine and { ql = ql, rl = rl } or false
+      -- 1.4q (P163 M10 M12): Ruf fehlt heisst nicht mehr raus, die Quest bleibt mit Hinweis und zaehlt im Wert weniger
+      local rep
+      if fine and ns.RepCheck and not inLog[qid] then
+        local okR, txt = ns.RepCheck(qid)
+        if not okR then rep = txt or true end
+      end
+      r = fine and { ql = ql, rl = rl, rep = rep } or false
     end
     qOk[qid] = r
     return r
   end
 
-  local Evaluate
+  local Evaluate, SafeEval
   local SafeStep
   local function Step()
     local n = 0
@@ -102,7 +120,7 @@ function ns.GearScan(done)
       end
     end
     if i < #ids then C_Timer.After(0, SafeStep); return end
-    C_Timer.After(1, function() Evaluate(1) end)
+    C_Timer.After(1, function() SafeEval(1) end)
   end
 
   Evaluate = function(round)
@@ -173,24 +191,38 @@ function ns.GearScan(done)
           end
         end
         Need(qid, 0)
+        -- 1.4q (P163 M10 M12): Aufwand = die Quest plus alle offenen Vorquests, Ruf fehlt zaehlt wie GEAR.REP_COST Quests.
+        -- Wert = Gewinn je Quest Aufwand, danach wird sortiert. Die ganze Reihe (vor und nach) fuer die Anzeige
+        local cost = 1 + #pre + (q.rep and GEAR.REP_COST or 0)
+        local chain = ns.QuestChain and ns.QuestChain(qid) or nil
         table.insert(out, { id = qid, name = Q(qid, "name") or (TR"Quest " .. qid), ql = q.ql, rl = q.rl, items = items, gain = best, pct = bestPct,
-          giver = giver, zone = zone, dungeon = dungeon, elite = elite, pre = pre, inLog = inLog[qid] and true or false })
+          giver = giver, zone = zone, dungeon = dungeon, elite = elite, pre = pre, inLog = inLog[qid] and true or false,
+          rep = q.rep, cost = cost, value = best / cost, chain = chain })
       end
     end
     if missing > 0 and round < 4 then
-      C_Timer.After(1.5, function() Evaluate(round + 1) end)
+      C_Timer.After(1.5, function() SafeEval(round + 1) end)
       return
     end
+    -- 1.4q (M15): Dungeon Quests ganz unten, dann jetzt annehmbar zuerst, dann der Wert (Gewinn je Aufwand)
     table.sort(out, function(a, b)
+      if a.dungeon ~= b.dungeon then return not a.dungeon end
       local na, nb = a.rl <= L, b.rl <= L
       if na ~= nb then return na end
-      return a.gain > b.gain
+      return (a.value or a.gain) > (b.value or b.gain)
     end)
+    if ns.TestLog then
+      local nd, nr, np = 0, 0, 0
+      for _, q in ipairs(out) do if q.dungeon then nd = nd + 1 end if q.rep then nr = nr + 1 end if #q.pre > 0 then np = np + 1 end end
+      local _, cls = UnitClass("player")
+      ns.TestLog("AUSRUESTUNG", ("Wertung %s (%s), %d Quests, %d Dungeon unten, %d mit Ruf, %d mit Vorquests"):format(
+        tostring(ns.db and ns.db.gearFilter or "Klasse"), tostring(cls), #out, nd, nr, np))
+    end
     ns.gearQuests = out
     ns.gearLvl = L
     ns.gearScanAt = GetTime()
     busy = false
-    if done then done(out) end
+    GearDone(out, nil)
   end
   -- Fehler im Aufbau: nicht fuer immer "busy" lassen
   SafeStep = function()
@@ -198,6 +230,16 @@ function ns.GearScan(done)
     if not ok then
       busy = false
       if ns.TestLog then ns.TestLog("FEHLER", "Ausruestung Scan: " .. tostring(err)) end
+      GearDone(nil, TR"Fehler bei der Suche (steht im Log).")
+    end
+  end
+  -- 1.4zf (M29): auch beim Werten nicht fuer immer "busy" lassen
+  SafeEval = function(round)
+    local ok, err = pcall(Evaluate, round)
+    if not ok then
+      busy = false
+      if ns.TestLog then ns.TestLog("FEHLER", "Ausruestung Wertung: " .. tostring(err)) end
+      GearDone(nil, TR"Fehler bei der Suche (steht im Log).")
     end
   end
   SafeStep()
@@ -268,6 +310,24 @@ function ns.GearLines(q)
   end
   table.insert(out, (TR"Questgeber: %s%s"):format(q.giver or "?", q.zone and (TR" in " .. (ns.ZoneName and ns.ZoneName(q.zone) or "?")) or ""))
   if q.dungeon then table.insert(out, TR"|cffff5050Dungeon Quest: läuft über die Seite Dungeons, nicht in dieser Route.|r") end
+  -- 1.4q (P163 M10 M12)
+  if q.rep then
+    table.insert(out, (TR"|cffff9030Ruf nötig: %s|r"):format(type(q.rep) == "string" and q.rep or TR"ja"))
+  end
+  if q.cost and q.cost > 1 then
+    table.insert(out, (TR"Aufwand: %d Quests (mit Vorquests%s), Wert je Quest %.1f"):format(1 + #(q.pre or {}), q.rep and TR" und Ruf" or "", q.value or 0))
+  end
+  if type(q.chain) == "table" and #q.chain > 1 then
+    local QDB = ns.QDBAccess and ns.QDBAccess()
+    local names = {}
+    for _, id in ipairs(q.chain) do
+      local ok, nm = false, nil
+      if QDB then ok, nm = pcall(QDB.QueryQuestSingle, id, "name") end
+      nm = ok and nm or (TR"Quest " .. id)
+      names[#names + 1] = (id == q.id) and ("|cffffd100" .. nm .. "|r") or nm
+    end
+    table.insert(out, TR"Questreihe: " .. table.concat(names, " > "))
+  end
   if q.elite then table.insert(out, TR"|cffff5050Elite oder Gruppenquest|r") end
   if #q.pre > 0 then
     local names = {}

@@ -64,8 +64,12 @@ local function Take(part)
         local t = { skip = (e.ueberspringen == true) or nil, noFoe = Set(e.kein_gegner_npc), noLvl = Set(e.dropper_nicht_fuers_level),
           pre = List(e.vorquest_fehlt), timer = (type(e.zeitlimit_s) == "number" and e.zeitlimit_s > 0) and e.zeitlimit_s or nil,
           fac = (e.fraktion == "Alliance" or e.fraktion == "Horde") and e.fraktion or nil,
-          fq = MissQ(e.fehlt_quest), fg = MissG(e.fehlt_geber) }
-        if t.skip or t.noFoe or t.noLvl or t.pre or t.timer or t.fac or t.fq or t.fg then
+          -- 1.4zzq (M54, Pr BER 13:25): seiten = "Beide" ueberschreibt die Rassen Maske von Questie (zb Hallen der Thane, 95140)
+          both = (e.seiten == "Beide" or e.seiten == "beide") or nil,
+          fq = MissQ(e.fehlt_quest), fg = MissG(e.fehlt_geber),
+          -- 1.4ze (P197): Fest Quest, die in Questies Fest Liste fehlt (Wert = Name vom Fest oder true)
+          fest = (e.fest == true or (type(e.fest) == "string" and e.fest ~= "")) and e.fest or nil }
+        if t.skip or t.noFoe or t.noLvl or t.pre or t.timer or t.fac or t.both or t.fq or t.fg or t.fest then
           if not DK.quest[id] then DK.nQ = DK.nQ + 1 end
           DK.quest[id] = t
         end
@@ -77,6 +81,21 @@ local function Take(part)
       if type(id) == "number" and type(e) == "table" and e.kein_gegner == true then
         if not DK.npc[id] then DK.nN = DK.nN + 1 end
         DK.npc[id] = { noFoe = true }
+      end
+    end
+  end
+  -- 1.4i (P160, Pr P143, K 08:00): Dungeons, die in Questie (dungeons.lua) fehlen oder deren Quests dort keine Zone
+  -- haben (Lueckenfueller aus DungeonJournal Abgleich). Liste dungeon = { { key, name_de, min, max, map, x, y, quests } }.
+  -- Questie geht vor: kennt Questie den Dungeon, kommen nur fehlende Quests dazu
+  if type(part.dungeon) == "table" then
+    DK.dungeon = DK.dungeon or {}
+    for _, e in ipairs(part.dungeon) do
+      if type(e) == "table" and type(e.key) == "string" then
+        local qs = {}
+        for _, q in ipairs(type(e.quests) == "table" and e.quests or {}) do if type(q) == "number" then qs[#qs + 1] = q end end
+        local m, x, y = tonumber(e.map), tonumber(e.x), tonumber(e.y)
+        DK.dungeon[#DK.dungeon + 1] = { key = e.key, name = type(e.name_de) == "string" and e.name_de ~= "" and e.name_de or nil,
+          min = tonumber(e.min), max = tonumber(e.max), entrance = (m and x and y) and { m, x, y } or nil, quests = qs }
       end
     end
   end
@@ -122,6 +141,9 @@ end
 
 -- Hilfen fuer die Route und den Sim (play\pagent.lua nutzt dieselben)
 function ns.DKQuest(qid) return qid and DK.quest[qid] or nil end
+function ns.DKDungeons() return DK.dungeon or {} end
+-- 1.4ze (P197): Fest laut Daten Korrektur (nil = nicht bekannt)
+function ns.DKFest(qid) local e = qid and DK.quest[qid]; return e and e.fest or nil end
 -- 1.3q (Daten 13): Questie geht immer vor. qHas = Questie kennt die Quest (Name) bzw den Geber. Log DATEN einmal je Quest
 function ns.DKMissQuest(qid, qHas)
   local e = qid and DK.quest[qid]
@@ -152,8 +174,12 @@ local DK_FAC_RACES = { Alliance = { 1, 3, 4, 7 }, Horde = { 2, 5, 6, 8 } }
 local DK_FAC_MASK = {}
 for f, ids in pairs(DK_FAC_RACES) do local m = 0; for _, r in ipairs(ids) do m = m + 2 ^ (r - 1) end; DK_FAC_MASK[f] = m end
 function ns.DKRaces(qid, rr)
-  if type(rr) == "number" and rr > 0 then return rr end
   local e = qid and DK.quest[qid]
+  if e and e.both then
+    if ns.DKLog then ns.DKLog("Quest", qid, "seiten Beide") end
+    return 0
+  end
+  if type(rr) == "number" and rr > 0 then return rr end
   if e and e.fac then
     if ns.DKLog then ns.DKLog("Quest", qid, "fraktion") end
     return DK_FAC_MASK[e.fac]
