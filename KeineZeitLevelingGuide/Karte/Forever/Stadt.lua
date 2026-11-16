@@ -1,4 +1,4 @@
--- Stadt Tore (Kandidaten aus dem Gelaende Raster, sicher=0 bis S Ja sagt, Nein Tore fehlen) und Ziele innen (Gebaeude oder mehr als 10 yd Hoehen Unterschied) fuer Forever Wegweiser (Forever, Werkzeug Stand 188, 2026-11-15 13:27)
+-- Stadt Tore (Kandidaten aus dem Gelaende Raster, sicher=0 bis S Ja sagt, Nein Tore fehlen) und Ziele innen (Gebaeude oder mehr als 10 yd Hoehen Unterschied) fuer Forever Wegweiser (Forever, Werkzeug Stand 194, 2026-11-16 12:34)
 -- FWW_AUTO_STADT.forever.staedte[stadtUi] = { name, zone, rect = {minX, minY, maxX, maxY}, tore = { {id, x, y, art, breite_yd, sicher} }, innen = { {x, y, art, grund} }, wege = { { {x, y}, {x, y}, ... } } }
 -- wege: Linien, die S in der Stadt Karte gezeichnet hat (Welt X Norden, Y Westen), bewiesene Wege, vor allem fuer Eisenschmiede und Unterstadt unter Tage
 -- netz (Stand 166): eigenes Wegnetz der Stadt, knoten = { {x, y, z oder false} } (z aus NPC Laufwegen, false = Linie von S ohne Hoehe), kanten = { a, b, a, b, ... } (Knoten Nummern ab 1, je zwei = eine Kante, beide Richtungen), tore = { {tor_id, knoten} }

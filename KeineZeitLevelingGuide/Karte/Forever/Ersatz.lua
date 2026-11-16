@@ -1,4 +1,4 @@
--- Ersatz Ziele fuer Orte ohne Weg (Forever, Werkzeug Stand 188, 2026-11-15 13:27)
+-- Ersatz Ziele fuer Orte ohne Weg (Forever, Werkzeug Stand 194, 2026-11-16 12:34)
 -- FWW_AUTO_ERSATZ.<client>[ui] = { x, y, ex, ey, yd, art, grund, ... } je 7 Werte. x, y = Ort (Questgeber, Gegner Spawn) wie C_Map 0 bis 1,
 -- ex, ey = naechster erreichbarer Punkt auf der grossen Flaeche (bei Wasser das Ufer), yd = Abstand. ex = -1: unerreichbar, nicht als Pfeil Ziel.
 -- art: q Questgeber, n Gegner. grund: w tiefes Wasser, m Wand/Fels/Objekt (Ort auf keinem begehbaren Feld), a abgehaengt (eigene Insel ohne Weg).

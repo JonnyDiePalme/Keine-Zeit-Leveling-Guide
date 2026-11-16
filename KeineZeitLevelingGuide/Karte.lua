@@ -39,6 +39,8 @@ local SWIM_SPEED = 4.72  -- Yards pro Sekunde im Wasser (ohne Wasserform und Buf
 local SWIM_TOOL = 7      -- so waehlt das Werkzeug die Wege fuer t (Schwimmen achtmal so teuer wie Laufen)
 local NEAR_K = 4         -- so viele naechste Knoten als Einstieg ins Netz pruefen
 local NEAR_MAX = 700     -- Yards: weiter weg ist kein Einstieg
+-- 1.5b (N1): Nachsuche mit mehr Einstiegen, ON = false wie 1.5a
+ns.N1 = { ON = true, ENDEN_MUL = 6 }
 local OFF_BAD = 1.8      -- Einstieg, dessen Luftlinie ueber einen Berg geht: so viel teurer
 local CLUSTER = 250      -- Planung: Uebergaenge zwischen denselben zwei Zonen naeher als so viele Yards zaehlen als einer
 local XLINK = 1.1        -- feste Verbindung (Tunnel, Bruecke, Aufzug): Luftlinie mal 1.1
@@ -1737,8 +1739,8 @@ function K.Route(ui, fx, fy, tx, ty)
   -- 19.9: die Zielseite bleibt hier bewusst Ziel > Knoten (wie bis 19.8). Mit Knoten > Ziel sprang der Pfeil an einem
   -- Uebergang auf einer Kante zwischen zwei Uebergaengen hin und her (t10 Era Feralas > Un'Goro, 267 > 266 von 279).
   -- In der Planung (ZoneDist, FromPoint) gilt die Richtung, dort aendert sie nur die Schaetzung.
-  local function Ends(x, y, toPt)
-    local list = Near(Q.bk, Q.px, Q.py, x, y, w, h, NEAR_K, use, NEAR_MAX)
+  local function Ends(x, y, toPt, kMul)
+    local list = Near(Q.bk, Q.px, Q.py, x, y, w, h, NEAR_K * (kMul or 1), use, NEAR_MAX)
     if #list == 0 then list = Near(Q.bk, Q.px, Q.py, x, y, w, h, 2, use) end
     local out = {}
     for _, e in ipairs(list) do
@@ -1764,6 +1766,49 @@ function K.Route(ui, fx, fy, tx, ty)
   if not endN and opt.block and #A > 0 and #B > 0 then
     opt.block = nil
     endN, prevE, len = Search(Q, md, A, B, opt)
+  end
+  -- 1.5b (N1 Fix, S Ja 00:04, Log S 01:32: 153 von 340 Faellen gehen so): findet die Suche nichts, einmal mit mehr Enden
+  -- (ns.N1.ENDEN_MUL mal so viele naechste Knoten, an beiden Seiten). Liegen die naechsten Knoten auf einem kleinen Netz Stueck,
+  -- kommen so die Knoten vom grossen Teil dazu. Im schwachen PC (nur k1) danach einmal mit k2
+  local n1why
+  if not endN and #A > 0 and #B > 0 and ns.N1.ON then
+    local A2, B2 = Ends(fx, fy, false, ns.N1.ENDEN_MUL), Ends(tx, ty, true, ns.N1.ENDEN_MUL)
+    endN, prevE, len = Search(Q, md, A2, B2, opt)
+    if endN then A, B, n1why = A2, B2, "mehr Enden" end
+    if not endN and md == 1 and Q.E[2] and Q.E[2].n > 0 then
+      local A3, B3 = Ends(fx, fy, false, ns.N1.ENDEN_MUL), Ends(tx, ty, true, ns.N1.ENDEN_MUL)
+      local e3, p3, l3 = Search(Q, 2, A3, B3, opt)
+      if e3 then endN, prevE, len, md, A, B, n1why = e3, p3, l3, 2, A3, B3, "k2" end
+    end
+    if n1why and ns.TestLog and ns.naviFromTest then ns.TestLog("NETZWEG", ("Zone %d: Weg gefunden mit %s"):format(ui, n1why)) end
+  end
+  if not endN and ns.naviFromTest and ns.TestLog then
+    -- 1.5a (N1 Diagnose, nur im Karten Test): woran scheitert die Suche? Je eine Bedingung weg und nochmal suchen
+    local why = {}
+    if #A == 0 or #B == 0 then why[#why + 1] = ("enden %d/%d"):format(#A, #B)
+    else
+      -- Search sperrt nur ueber block (feindliche Stadt), Sprung Hoehe und md 1 (nur k1). Dazu die Enden: liegen die
+      -- naechsten Knoten auf einem kleinen Netz Stueck (Dach, Insel), findet die Suche nichts
+      local function Try(md2, a2, b2, o2) local e2 = Search(Q, md2, a2, b2, o2); return e2 ~= nil end
+      local o2 = {}
+      for k2, v2 in pairs(opt) do o2[k2] = v2 end
+      o2.block = nil
+      if opt.block and Try(md, A, B, o2) then why[#why + 1] = "geht ohne Stadt Sperre" end
+      o2.block, o2.jump = opt.block, 99
+      if Try(md, A, B, o2) then why[#why + 1] = "geht mit Sprung" end
+      if md == 1 and Q.E[2] and Q.E[2].n > 0 and Try(2, A, B, opt) then why[#why + 1] = "geht mit k2" end
+      local function Wide(x, y)
+        local out = {}
+        for _, e in ipairs(Near(Q.bk, Q.px, Q.py, x, y, w, h, NEAR_K * 6, use)) do out[#out + 1] = { e[1], e[2] * OFF_BAD + 30, e[2] } end
+        return out
+      end
+      local WA, WB = Wide(fx, fy), Wide(tx, ty)
+      if Try(md, WA, B, opt) then why[#why + 1] = "geht mit mehr Enden am Start" end
+      if Try(md, A, WB, opt) then why[#why + 1] = "geht mit mehr Enden am Ziel" end
+      if Try(md, WA, WB, opt) then why[#why + 1] = "geht mit mehr Enden an beiden" end
+      if #why == 0 then why[#why + 1] = "auch ohne Bedingungen nicht" end
+    end
+    ns.TestLog("NETZWEG", ("Zone %d %.3f,%.3f nach %.3f,%.3f: kein Netz Weg (md %d, Enden %d/%d): %s"):format(ui, fx, fy, tx, ty, md, #A, #B, table.concat(why, ", ")))
   end
   if not endN then
     -- Notweg ueber die Tabelle
@@ -1975,7 +2020,37 @@ local function WalkedNovel()
   end
   return out
 end
+-- 1.5a (Z1, M64 b, S Ja 18:09 mit 8 Level): Zonen Level Malus. Wege durch eine Zone, deren Mindest Level (ns.zones, Route.lua)
+-- mehr als UEBER ueber deinem Level liegt, zaehlen im Zonen Graph F mal so lang. Dann nimmt das Navi den Flug oder den Umweg.
+-- Gilt nur fuer den Weg durch die Zone (Kanten im Graph), nicht fuer den Teil in Start und Ziel Zone. ON = false schaltet aus
+-- 1.5a2 (Pr 20:55: L20 Brill nach Revantusk blieb in den Westl Pestlaendern, min 51): Faktor waechst mit dem Abstand,
+-- F + (Abstand - UEBER - 1) * PRO_LEVEL, hoechstens F_MAX. Beispiel L20: Alterac (30) 2.75, Hinterland (40) 5.25, Pestlaender (51) 6
+ns.ZONE_MALUS = { ON = true, UEBER = 8, F = 2.5, PRO_LEVEL = 0.25, F_MAX = 6 }
+local zm = { L = -1, sig = "", set = {} }
+local function ZoneMalus()
+  local M = ns.ZONE_MALUS
+  local L = math.floor((UnitLevel and UnitLevel("player")) or 1)
+  if ns.simLevel then L = math.floor(ns.simLevel) end
+  if zm.L == L and zm.on == M.ON and zm.u == M.UEBER and zm.f == M.F and zm.pl == M.PRO_LEVEL and zm.fm == M.F_MAX then return zm end
+  zm.L, zm.on, zm.u, zm.f, zm.pl, zm.fm = L, M.ON, M.UEBER, M.F, M.PRO_LEVEL, M.F_MAX
+  local set, ids = {}, {}
+  if M.ON then
+    for z, zt in pairs(ns.zones or EMPTY) do
+      if type(zt) == "table" and zt.min and zt.min > L + M.UEBER then
+        local f = (M.F or 2.5) + (zt.min - L - M.UEBER - 1) * (M.PRO_LEVEL or 0)
+        set[z] = math.max(1, math.min(M.F_MAX or f, f))
+        ids[#ids + 1] = z .. "x" .. string.format("%.2f", set[z])
+      end
+    end
+  end
+  table.sort(ids)
+  zm.set, zm.n = set, #ids
+  zm.sig = #ids > 0 and table.concat(ids, ",") or "-"
+  return zm
+end
+K.ZoneMalus = ZoneMalus
 -- Stand des Zonen Graphen: neu rechnen nur bei neuen unbekannten Uebergaengen oder "schwacher PC" an/aus
+-- 1.5a (Z1): und wenn sich die Menge der zu hohen Zonen aendert (ein paar Mal je Charakter)
 local xrv = { cr = -1 }
 local function XRev()
   local db = ns.db
@@ -1989,7 +2064,7 @@ local function XRev()
   end
   -- neue unbekannte Uebergaenge hoechstens alle 10 Minuten einrechnen (der Graph braucht etwa eine Sekunde)
   local now = GetTime and GetTime() or 0
-  local sf = K.SwimF() .. ":" .. K.PlanMode().sig
+  local sf = K.SwimF() .. ":" .. K.PlanMode().sig .. ":" .. ZoneMalus().sig
   if xrv.sl ~= sl or xrv.sf ~= sf or (xrv.ns ~= xrv.n and (not xrv.t or now - xrv.t > 600)) then
     xrv.sl, xrv.ns, xrv.t, xrv.sf = sl, xrv.n, now, sf
     xrv.str = tostring(xrv.n) .. ":" .. (sl and "s" or "f") .. ":" .. sf
@@ -2167,6 +2242,9 @@ local function XBuild(cont, Tick)
     end
   end
   -- 4. Kanten: in jeder Zone zwischen allen Knoten (Tabelle), dazu die festen Verbindungen
+  -- 1.5a (Z1): in zu hohen Zonen mal ns.ZONE_MALUS.F
+  local zmal = ZoneMalus()
+  local zmN = 0
   local adj = {}
   for i = 1, #nodes do adj[i] = {} end
   local function Edge(u, v, d)
@@ -2187,10 +2265,14 @@ local function XBuild(cont, Tick)
           local r = rows[ia] and rows[ia][ib]
           d = r and math.max(r, d) or nil
         end
-        if d then Edge(u.id, v.id, d) end
+        if d then
+          if zmal.set[z] then d = d * zmal.set[z] end
+          Edge(u.id, v.id, d)
+        end
       end
       if Tick then Tick() end
     end
+    if zmal.set[z] then zmN = zmN + 1 end
   end
   for _, f in ipairs(fixed) do Edge(f[1], f[2], f[3]) end
   -- 5. kuerzeste Wege zwischen allen Knoten, pro Knoten eine Zeile als Text (je 2 Zeichen mal 5 Yards wie die Tabelle t,
@@ -2240,7 +2322,7 @@ local function XBuild(cont, Tick)
   end
   local cnt = { pass = 0, walk = 0, link = 0 }
   for _, nd in ipairs(nodes) do cnt[nd.src] = (cnt[nd.src] or 0) + 1 end
-  return { nodes = nodes, byZone = byZone, D = D, zones = #zones, cnt = cnt }
+  return { nodes = nodes, byZone = byZone, D = D, zones = #zones, cnt = cnt, malus = zmN, malusL = zmal.L }
 end
 K.XBuild = XBuild
 
@@ -2266,7 +2348,7 @@ local function XGraph(cont)
       res.rev = rev
       XG[cont] = res
       K.XGen()
-      if ns.TestLog then ns.TestLog("WEGE", ("Karte Zonen Wege fertig: Kontinent %s, %d Zonen, %d Knoten"):format(tostring(cont), res.zones or 0, #(res.nodes or EMPTY))) end
+      if ns.TestLog then ns.TestLog("WEGE", ("Karte Zonen Wege fertig: Kontinent %s, %d Zonen, %d Knoten, Zonen Malus %d Zonen (Level %s, ueber %d)"):format(tostring(cont), res.zones or 0, #(res.nodes or EMPTY), res.malus or 0, tostring(res.malusL), ns.ZONE_MALUS.UEBER)) end
     end
     if ns.xzoneSync or not (C_Timer and C_Timer.After and coroutine) then
       local ok, res = pcall(XBuild, cont, nil)
@@ -2930,7 +3012,11 @@ end
 function K.PathPts(m, fx, fy, tx, ty)
   local z, a, b = OnZone(m, fx, fy)
   local _, c, d = OnZone(m, tx, ty)
-  if not (z and c) or not K.HasZone(z) then return nil, "fail" end
+  if not (z and c) or not K.HasZone(z) then
+    -- 1.5a (N1 Diagnose, nur im Karten Test)
+    if ns.naviFromTest and ns.TestLog then ns.TestLog("NETZWEG", ("Karte %s: kein Netz (Zone %s/%s, HasZone %s)"):format(tostring(m), tostring(z), tostring(c), tostring(z and K.HasZone(z)))) end
+    return nil, "fail"
+  end
   local through = SegHostile(z, a, b, c, d) and not (K.HostileCity(z, a, b) or K.HostileCity(z, c, d))
   if not through and LineFree(z, a, b, c, d) then return nil, "free" end
   local pts = K.Route(z, a, b, c, d)
@@ -2958,6 +3044,15 @@ function K.ResetCaches()
   fcCache, fcN, rcCache, rcN = {}, 0, {}, 0
   XG = {}
   K.ResetRoutes()
+end
+-- 1.5b (Pr BER 03:25: nach dem Karten Test bleibt das Addon bei 143 statt 77 MB): nach einem Test die Zwischenspeicher
+-- der Wegsuche leeren (die Zonen Graphen bleiben, die braucht die Route). Die Test Ziele selbst haengen an nichts mehr
+function K.FreeTest()
+  zdCache, zdN = {}, 0
+  xcache, xcacheN = {}, 0
+  fcCache, fcN, rcCache, rcN = {}, 0, {}, 0
+  K.ResetRoutes()
+  reachCache, hcCache, linkCache = {}, {}, {}
 end
 
 ------------------------------------------------------------
@@ -3149,6 +3244,87 @@ do
       end
       -- Hinweis (fehlende Daten, oder 19.4: altes Daten Addon kann weg)
       if C_Timer and C_Timer.After then C_Timer.After(8, K.Warn) end
+    end)
+  end
+end
+
+------------------------------------------------------------
+-- 1.5a (K4, P217 Punkt 2, S 18:09): Zonen bei Bedarf laden
+------------------------------------------------------------
+-- Ka legt Zonen als eigene Load on Demand Addons ab (Ordner ForeverWegweiser_Z<zone>, im Release <Name>_Z<zone>), die Liste
+-- steht in Kopf.lua: FWW_KARTE_LOD = { [zone] = "Ordner" }. Die Planung braucht alle Zonen des Kontinents (Zonen Graph,
+-- Wege ueber Zonen), darum laedt K.LoadCont immer den ganzen Kontinent, auf dem du bist: beim Einloggen und nach jedem
+-- Ladebildschirm, nie im Kampf (dann gleich danach). Gespart wird der andere Kontinent, solange du nicht dort warst. Ein
+-- geladenes Addon bleibt bis /reload. Fehlt ein Ordner (geloescht, deaktiviert): die Zone gilt wie heute als ohne Karte,
+-- das Navi faellt auf Luftlinie und die Nachbar Zonen zurueck, Log KARTE "fehlt". Kein Fehler.
+K.LOD = { state = {}, n = 0 }
+local function LodList()
+  local l = _G.FWW_KARTE_LOD
+  if type(l) == "table" then ns.KARTE_LOD = l end
+  return ns.KARTE_LOD
+end
+-- was ein Zonen Addon in FWW_AUTO_KARTE_RAW gelegt hat, nach ns.KARTE_RAW holen (wie Laden_Ende)
+local function LodTake()
+  local g = _G.FWW_AUTO_KARTE_RAW
+  if type(g) ~= "table" then return 0 end
+  ns.KARTE_RAW = ns.KARTE_RAW or {}
+  local n = 0
+  for z, v in pairs(g) do
+    if type(z) == "number" and ns.KARTE_RAW[z] == nil then ns.KARTE_RAW[z] = v; noZone[z] = nil; n = n + 1 end
+  end
+  _G.FWW_AUTO_KARTE_RAW = ns.KARTE_SAVE and ns.KARTE_SAVE.raw or nil
+  return n
+end
+K.LodTake = LodTake
+function K.LodState() return K.LOD.state end
+local lodWait
+function K.LoadCont(cont, why)
+  local L = LodList()
+  if type(L) ~= "table" or not cont then return 0 end
+  if InCombatLockdown and InCombatLockdown() then lodWait = cont; return 0 end
+  local Load = (C_AddOns and C_AddOns.LoadAddOn) or LoadAddOn
+  if not Load then return 0 end
+  local got, miss = {}, {}
+  for z, name in pairs(L) do
+    -- 1.5b (Pr 01:25): Zone schon da (zb von einem frueheren Laden oder im Sim): Zustand "da", damit LodState vollstaendig ist
+    if type(z) == "number" and not K.LOD.state[z] and ns.KARTE_RAW and ns.KARTE_RAW[z] then K.LOD.state[z] = "da" end
+    if type(z) == "number" and type(name) == "string" and not K.LOD.state[z] and not (ns.KARTE_RAW and ns.KARTE_RAW[z])
+      and ContMap(z) == cont then
+      -- im Release heisst der Ordner <Haupt Addon>_Z<zone> (release_paket benennt um): Vorsilbe vom eigenen Addon Namen
+      local addonName = (type(ADDON) == "string" and ADDON ~= "") and ADDON or "ForeverWegweiser"
+      name = name:gsub("^ForeverWegweiser_", addonName .. "_")
+      local ok, loaded, reason = pcall(Load, name)
+      local n = LodTake()
+      if ok and loaded and n > 0 then K.LOD.state[z] = "ok"; got[#got + 1] = z
+      else K.LOD.state[z] = "fehlt"; miss[#miss + 1] = ("%d (%s)"):format(z, tostring(ok and reason or loaded)) end
+    end
+  end
+  if #got > 0 then
+    K.LOD.n = K.LOD.n + #got
+    ns.blockRev = (ns.blockRev or 0) + 1
+    -- Zonen Graph fuer diesen Kontinent neu (die Zonen gehoeren jetzt dazu)
+    XG[cont] = nil
+    if K.XGen then K.XGen() end
+  end
+  if (#got > 0 or #miss > 0) and ns.TestLog then
+    ns.TestLog("KARTE", ("Zonen nachgeladen (%s): Kontinent %s, %d Zonen%s"):format(tostring(why), tostring(cont), #got, #miss > 0 and (", fehlt " .. table.concat(miss, ", ")) or ""))
+  end
+  return #got
+end
+do
+  local lf = CreateFrame and CreateFrame("Frame")
+  if lf then
+    lf:RegisterEvent("PLAYER_LOGIN")
+    lf:RegisterEvent("PLAYER_ENTERING_WORLD")
+    lf:RegisterEvent("PLAYER_REGEN_ENABLED")
+    lf:SetScript("OnEvent", function(_, e)
+      if e == "PLAYER_REGEN_ENABLED" then
+        if lodWait then local c = lodWait; lodWait = nil; pcall(K.LoadCont, c, "nach Kampf") end
+        return
+      end
+      local m = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+      local c = m and ContMap(m)
+      if c then pcall(K.LoadCont, c, e == "PLAYER_LOGIN" and "Login" or "Ladebildschirm") end
     end)
   end
 end

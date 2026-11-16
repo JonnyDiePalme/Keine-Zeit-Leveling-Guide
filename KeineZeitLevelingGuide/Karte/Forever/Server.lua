@@ -1,10 +1,10 @@
--- Server Daten 1.12 (Herkunft vmangos112, VMaNGOS Datenbank) fuer Forever Wegweiser, Werkzeug Stand 188, 2026-11-15 13:27
+-- Server Daten 1.12 (Herkunft vmangos112, VMaNGOS Datenbank) fuer Forever Wegweiser, Werkzeug Stand 191, 2026-11-15 20:14
 -- FWW_AUTO_SERVER[uiMap].quests[questId] = { level, mindestlevel, xp, kupfer, kupfer_auf_60 }
 --   xp = Grundwert (RewXP), gilt bis Quest Level plus 5, darueber weniger (wie im Spiel). Zone 0 = Klassen und Berufe.
 --   kupfer = Geld Belohnung, kupfer_auf_60 = Geld statt XP auf Level 60. Forever Zonen (Hyjal, Riverglades,
 --   Shen'dralas, Zephras) sind leer, die gibt es in 1.12 nicht.
 FWW_AUTO_SERVER = FWW_AUTO_SERVER or {}
-FWW_AUTO_SERVER_INFO = { herkunft = "vmangos112", stand = "188" }
+FWW_AUTO_SERVER_INFO = { herkunft = "vmangos112", stand = "191" }
 FWW_AUTO_SERVER[0] = { herkunft = "vmangos112", quests = {
   [26] = { 16, 16, 115, 0, 60 },
   [27] = { 16, 16, 115, 0, 60 },

@@ -1032,7 +1032,40 @@ local function BuildHud0()
     end
     local small = (ns.db.hudSize == "small")
     -- Navi aktiv (17.5): das Mini Fenster zeigt den Navi Abschnitt statt dem Routen Schritt
-    local i = (not ns.db.paused) and ((ns.navi and ns.NaviHudInfo and ns.NaviHudInfo()) or (ns.HudInfo and ns.HudInfo())) or {}
+    -- 1.5a (M69, Pr 20:10: UI.lua Takt in einer Sitzung 294 ms je Min statt 34): HudInfo nicht jede Sekunde neu, wenn du
+    -- stehst (unter 2 yd), Schritt und Navi Teil gleich sind und es hoechstens 3 s alt ist. Dauert es ueber 20 ms, eine Zeile
+    -- LANGSAM ins Log (je Profil und Schritt Art hoechstens alle 60 s), damit man sieht, wo es haengt
+    local i
+    if not ns.db.paused then
+      local c = hud.infoCache
+      local pm = ns.PlayerMap and ns.PlayerMap()
+      local pp = pm and C_Map.GetPlayerMapPosition(pm, "player")
+      local px, py = 0, 0
+      if pp then px, py = pp:GetXY() end
+      local o = ns.db.opt
+      local key = tostring(pm) .. "|" .. tostring(o and o.idx) .. "|" .. tostring(ns.navi and ns.navi.cur) .. "|" .. tostring(ns.navi and ns.navi.made)
+      local now = GetTime()
+      local still = c and c.key == key and now - c.t < 3 and pm and ns.WorldDist and (ns.WorldDist({ pm, px, py }, { pm, c.x, c.y }) or 99) < 2
+      if still then
+        i = c.i
+      else
+        local t0 = debugprofilestop and debugprofilestop() or 0
+        i = (ns.navi and ns.NaviHudInfo and ns.NaviHudInfo()) or (ns.HudInfo and ns.HudInfo()) or {}
+        local ms = (debugprofilestop and debugprofilestop() or 0) - t0
+        hud.infoCache = { key = key, t = now, x = px, y = py, i = i }
+        if ms > 20 and ns.TestLog then
+          local st = o and o.steps and o.steps[o.idx or 1]
+          local sk = tostring(ns.ProfileOf and ns.ProfileOf(o)) .. ":" .. tostring(st and st.acts and st.acts[1] and st.acts[1].k) .. (ns.navi and ":navi" or "")
+          hud.slowSaid = hud.slowSaid or {}
+          if not hud.slowSaid[sk] or now - hud.slowSaid[sk] > 60 then
+            hud.slowSaid[sk] = now
+            ns.TestLog("LANGSAM", ("Mini Fenster Info %d ms (%s, %d Schritte)"):format(math.floor(ms), sk, o and o.steps and #o.steps or 0))
+          end
+        end
+      end
+    else
+      i = {}
+    end
     -- 1.3.1a (P119): im Flug "Flug nach X, noch m:ss" und der Schritt danach
     if not ns.db.paused and ns.UwHud then local okU, iu = pcall(ns.UwHud, i); if okU and iu then i = iu end end
     if ns.db.paused then
@@ -1356,7 +1389,9 @@ local function BuildHud0()
   ns.RefreshHud = function() Update(); if hud.ShowMenu then hud.ShowMenu() end; if ns.HudGroupUpdate then pcall(ns.HudGroupUpdate) end end
   -- 1.3x (P108, S 03:41): auch in der Pause, damit XP Balken, Level Prozent, XP pro Stunde, Zeit bis Level und Lauftempo
   -- aktuell bleiben. In der Pause liest Update keine Route (siehe unten), nur die Werte vom Charakter
-  ns.Ticker(1, function() Update(); if not ns.db.paused and ns.HudGroupUpdate then pcall(ns.HudGroupUpdate) end end, false, true)
+  -- 1.5a (M69): zwei Takte, damit die Messung (tickProf) zeigt, welcher Teil teuer ist
+  ns.Ticker(1, function() Update() end, false, true)
+  ns.Ticker(1, function() if not ns.db.paused and ns.HudGroupUpdate then pcall(ns.HudGroupUpdate) end end, false, true)
   hud.ShowMenu()
 
   if db.hudSize == "arrow" then db.hudSize = "small" end
@@ -1893,7 +1928,9 @@ do
     if ns.TestLogAvailable and ns.TestLogAvailable() and ns.TestLogCmd then ITEMS[#ITEMS + 1] = LOG_ITEM end
     -- 1.4h (P188): mit dem Zusatz Addon _Test ein Eintrag "Test starten" (TestLauf.lua)
     if ns.TestAvailable and ns.TestAvailable() and ns.TestStart then
-      ITEMS[#ITEMS + 1] = { sep = not (ns.TestLogAvailable and ns.TestLogAvailable()), label = function() return "|cffffd100" .. TR"Test starten" .. "|r" end, run = ns.TestStart }
+      -- 1.5a3 (M71, S 00:42): "Alle Tests" nacheinander (TestLauf.lua ns.TestAlleStart), ganz oben in der Test Gruppe
+      if ns.TestAlleStart then ITEMS[#ITEMS + 1] = { sep = not (ns.TestLogAvailable and ns.TestLogAvailable()), label = function() return "|cffffd100" .. TR"Alle Tests" .. "|r" end, run = ns.TestAlleStart } end
+      ITEMS[#ITEMS + 1] = { sep = not ns.TestAlleStart and not (ns.TestLogAvailable and ns.TestLogAvailable()), label = function() return "|cffffd100" .. TR"Test starten" .. "|r" end, run = ns.TestStart }
       -- 1.4zy (P203): eigener Karten Test (TestLauf.lua)
       if ns.KartenTestStart then ITEMS[#ITEMS + 1] = { label = function() return "|cffffd100" .. TR"Karten Test" .. "|r" end, run = function() ns.KartenTestStart() end } end
       -- 1.4zzh (P212 Punkt 2): Karten Test nur hier, vom Standort in den Umkreis

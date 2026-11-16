@@ -1,7 +1,31 @@
-Keine Zeit Leveling Guide 1.4 (WoW Forever)
+Keine Zeit Leveling Guide 1.5 (WoW Forever)
 Autor: jonnydiepalme. Lizenz: GNU General Public License Version 3 oder später (GPLv3), Volltext in LICENSE.txt.
 Copyright (C) 2026 jonnydiepalme. Dieses Programm ist freie Software: du kannst es unter den Bedingungen der GPLv3
 weitergeben und verändern. Es wird OHNE JEDE GEWÄHRLEISTUNG bereitgestellt, Einzelheiten in LICENSE.txt.
+
+Neu in Version 1.5
+- Navi findet mehr Wege über Zonen Grenzen, weniger Luftlinie
+- Zonen, die für dich viel zu hoch sind, werden umgangen
+- Warnung, wenn beim Ziel viel stärkere Gegner sind
+- Kurz vor dem Ziel Level zeigt die Route das beste Grind Gebiet
+- Erz und Kräuter Runde kürzer
+- Flug Balken auch in der Pause, Abfahrten früher sichtbar
+- Hinweis für neue Charaktere: einmal die Flugkarte öffnen
+- Karten Daten laden erst bei Bedarf, weniger Speicher
+- Geteilte Daten bleiben klein, alte werden aufgeräumt
+- Weniger Ruckeln, Menü Punkt Alle Tests
+
+New in version 1.5
+- Navi finds more paths across zone borders, less straight lines
+- Zones far above your level are avoided
+- Warning when much stronger enemies are near the target
+- Close to the target level the route shows the best grind area
+- Shorter ore and herb loops
+- Flight bar also while paused, departures shown earlier
+- Hint for new characters: open the flight map once
+- Map data loads only when needed, less memory
+- Shared data stays small, old entries are cleaned up
+- Less stutter, menu entry Run all tests
 
 Neu in Version 1.4
 - Reise Balken für Flug, Zeppelin und Schiff mit Abfahrt

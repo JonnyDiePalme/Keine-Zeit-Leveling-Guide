@@ -1,0 +1,9 @@
+## Interface: 16001
+## Title: Keine Zeit Leveling Guide: Karte Durotar
+## Notes: Gelaende und Wegnetz einer Zone, wird bei Bedarf geladen
+## Author: Sascha
+## Version: 1.5
+## LoadOnDemand: 1
+## Dependencies: KeineZeitLevelingGuide
+
+Z1411.lua

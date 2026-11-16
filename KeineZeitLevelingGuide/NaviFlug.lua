@@ -1130,6 +1130,22 @@ ns.NAVI_FLUG_HINWEIS = TR"Öffne einmal die Flugkarte bei einem Flugmeister, dan
 
 -- Pruefer A9: den Flug Tipp pro Ziel nur einmal pro Sitzung im Chat sagen (Mini Fenster zeigt ihn weiter)
 local tipSaid = {}
+ns.FP_HINT = { MIN_L = 10, PER_L = 8 }
+function ns.FlugkarteHinweis()
+  local db = ns.db
+  if not db or db.fpHintDone or not ns.svcReady then return end
+  local L = UnitLevel and UnitLevel("player") or 1
+  if L < ns.FP_HINT.MIN_L then return end
+  local n = 0
+  for _ in pairs(db.knownFP or {}) do n = n + 1 end
+  local want = math.floor(L / ns.FP_HINT.PER_L)
+  db.fpHintDone = true
+  if ns.TestLog then ns.TestLog("FLUG", ("Hinweis Flugkarte: Level %d, Addon kennt %d Flugpunkte, erwartet etwa %d, %s"):format(L, n, want, n < want and "gesagt" or "nicht noetig")) end
+  if n < want then
+    ns.Print(TR"Navi: Flugpunkte, die du schon vor dem Addon gelernt hast, kennt es erst, wenn du einmal bei einem Flugmeister die Flugkarte öffnest. Am besten einmal je Kontinent, dann plant das Navi deine Flüge mit ein.")
+  end
+end
+
 function ns.NaviFlugTippNeu(dest)
   if not dest then return true end
   local key = ("%s:%.2f:%.2f"):format(tostring(dest.map), dest.x or 0, dest.y or 0)
@@ -1154,6 +1170,9 @@ ef:SetScript("OnEvent", function(_, e, a1, a2, a3)
   if e == "PLAYER_LOGIN" then
     if ns.Ticker then ns.Ticker(1, function() pcall(LandCheck) end, true) end
     if C_Timer then C_Timer.After(12, function() pcall(FromGame) end) end
+    -- 1.5a (F1, M64 Rest): einmal je Charakter sagen, dass das Addon Flugpunkte erst ueber die Flugkarte kennt, wenn es
+    -- deutlich weniger kennt, als der Char mit dem Level wohl hat (ns.FP_HINT: ab MIN_L, je PER_L Level ein Punkt)
+    if C_Timer then C_Timer.After(25, function() pcall(ns.FlugkarteHinweis) end) end
     -- Ruhestein Ort: hoechstens 6 Versuche alle 10 s nach dem Einloggen (Pruefer 04:50), danach nur bei Zonenwechsel,
     -- beim Betreten eines Gasthauses (ausruhen) und nach dem Binden
     if ns.Ticker then

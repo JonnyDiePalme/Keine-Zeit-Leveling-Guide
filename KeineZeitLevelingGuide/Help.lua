@@ -19,8 +19,21 @@ local CATS = {}
 local function Cat(key, title, lines) CATS[#CATS + 1] = { key = key, title = title, lines = lines } end
 
 -- 1.1 (K: Versionsverlauf im Spiel nur Kernpunkte, nie Details)
-Cat("neu", TR"Neu in 1.4", function()
+Cat("neu", TR"Neu in 1.5", function()
   return {
+    -- 1.5 (K 20:44, S Ja 20:41): Kernpunkte, kurz
+    H .. TR"Neu in Version 1.5|r",
+    TR"- Navi findet mehr Wege über Zonen Grenzen, weniger Luftlinie",
+    TR"- Zonen, die für dich viel zu hoch sind, werden umgangen",
+    TR"- Warnung, wenn beim Ziel viel stärkere Gegner sind",
+    TR"- Kurz vor dem Ziel Level zeigt die Route das beste Grind Gebiet",
+    TR"- Erz und Kräuter Runde kürzer",
+    TR"- Flug Balken auch in der Pause, Abfahrten früher sichtbar",
+    TR"- Hinweis für neue Charaktere: einmal die Flugkarte öffnen",
+    TR"- Karten Daten laden erst bei Bedarf, weniger Speicher",
+    TR"- Geteilte Daten bleiben klein, alte werden aufgeräumt",
+    TR"- Weniger Ruckeln, Menü Punkt Alle Tests",
+    "",
     -- 1.4 (P149): Kernpunkte, kurz
     H .. TR"Neu in Version 1.4|r",
     TR"- Reise Balken für Flug, Zeppelin und Schiff mit Abfahrt",

@@ -641,3 +641,146 @@ ef:SetScript("OnEvent", function(_, ev, ...)
     ns.Ticker(60, function() pcall(CheckChan); if chanState == "off" and Enabled() then pcall(Join) end end, nil, true)
   end
 end)
+
+------------------------------------------------------------
+-- 1.5b (S 02:44 Ja, K 03:05 und 03:10): Deckel fuer alles Geteilte und eine kurze Log Zeile TEILEN
+-- Wege: Raster begrenzt (80 x 80 Felder je Zone), dazu W.Trim mit WEGE_MB fuer alle drei Teile (shared, X, D).
+-- Flugzeiten: nur echte Flugmeister Paare, je Strecke 9 Absender (Flights.lua), dazu hier FLUG_TAGE nichts, die Werte
+-- tragen keine Zeit (bleiben gueltig, Flugzeiten aendern sich nicht).
+-- Raten (Berufe) und Daten (Teilen.lua): Eintraege aelter als RATE_TAGE / DATA_TAGE weg, leere Schluessel weg, und je Art
+-- hoechstens RATE_KARTEN / DATA_SCHLUESSEL Schluessel. Darueber fallen zuerst die mit den wenigsten Absendern (nur einer
+-- meldet es), bei Gleichstand die aeltesten. Laeuft einmal nach dem Login und dann alle AUFR_MIN Minuten, je Art ein Bild.
+-- Log Zeile beim Login (LOG_START_S) und dann alle LOG_MIN Minuten: Kanal Stand, Zaehler, Absender nur als Zahl, Groesse je Art
+------------------------------------------------------------
+ns.TEILEN_DECKEL = { ON = true, WEGE_MB = 5, RATE_TAGE = 60, RATE_KARTEN = 400, DATA_TAGE = 30, DATA_SCHLUESSEL = 3000,
+  AUFR_START_S = 90, AUFR_MIN = 60, LOG_START_S = 30, LOG_MIN = 10 }
+local TD = ns.TEILEN_DECKEL
+
+-- m = { [absender] = { t = Zeit, ... } }: alte raus, gibt Anzahl und neueste Zeit zurueck
+local function AgeOut(m, maxAge, now)
+  local n, newest = 0, 0
+  for k, e in pairs(m) do
+    if type(e) ~= "table" or now - (e.t or 0) > maxAge then m[k] = nil
+    else n = n + 1; if (e.t or 0) > newest then newest = e.t or 0 end end
+  end
+  return n, newest
+end
+-- tab = { [schluessel] = m }: alte Eintraege raus, leere Schluessel raus, ueber cap die schwaechsten raus
+local function CapTable(tab, maxAge, cap, now)
+  if type(tab) ~= "table" then return 0, 0 end
+  local list, gone = {}, 0
+  for key, m in pairs(tab) do
+    if type(m) ~= "table" then tab[key] = nil; gone = gone + 1
+    else
+      local n, newest = AgeOut(m, maxAge, now)
+      if n == 0 then tab[key] = nil; gone = gone + 1 else list[#list + 1] = { key, n, newest } end
+    end
+  end
+  if #list > cap then
+    table.sort(list, function(a, b) if a[2] ~= b[2] then return a[2] < b[2] end return a[3] < b[3] end)
+    for i = 1, #list - cap do tab[list[i][1]] = nil; gone = gone + 1 end
+  end
+  return math.min(#list, cap), gone
+end
+
+function ns.TeilenAufraeumen(done)
+  local db = ns.db
+  if not (TD.ON and db) then if done then done() end return end
+  local now = time and time() or 0
+  local steps, out = {}, {}
+  local R = db.prof and db.prof.rateShared
+  if type(R) == "table" then
+    for kind, maps in pairs(R) do
+      steps[#steps + 1] = function()
+        local n, g = CapTable(maps, TD.RATE_TAGE * 86400, TD.RATE_KARTEN, now)
+        if g > 0 then out[#out + 1] = ("Raten %s -%d"):format(tostring(kind), g) end
+        if n == 0 then R[kind] = nil end
+      end
+    end
+  end
+  local DSd = db.dataShared
+  if type(DSd) == "table" then
+    for kind, keys in pairs(DSd) do
+      steps[#steps + 1] = function()
+        local n, g = CapTable(keys, TD.DATA_TAGE * 86400, TD.DATA_SCHLUESSEL, now)
+        if g > 0 then out[#out + 1] = ("Daten %s -%d"):format(tostring(kind), g) end
+        if n == 0 then DSd[kind] = nil end
+      end
+    end
+  end
+  if W and W.Trim then steps[#steps + 1] = function() W.Trim() end end
+  local i = 0
+  local function Next()
+    i = i + 1
+    local f = steps[i]
+    if not f then
+      if #out > 0 and ns.TestLog then ns.TestLog("TEILEN", "Deckel aufgeraeumt: " .. table.concat(out, ", ")) end
+      if done then done() end
+      return
+    end
+    pcall(f)
+    C_Timer.After(0.1, Next)
+  end
+  Next()
+end
+
+-- Groesse je Art (geschaetzt in KB: Zeichen der gespeicherten Texte, Tabellen Eintraege mal ungefaehre Bytes)
+function ns.TeilenGroesse()
+  local db = ns.db or EMPTY
+  local r = {}
+  local wb, wz = 0, 0
+  for ui, s in pairs(db.shared or EMPTY) do
+    wz = wz + 1
+    wb = wb + #s + #((db.sharedX and db.sharedX[ui]) or "") + #((db.sharedD and db.sharedD[ui]) or "")
+  end
+  r.wege = ("Wege %d Zonen %d KB"):format(wz, math.floor(wb / 1024))
+  local fk, fv = 0, 0
+  for _, sh in pairs(type(db.flightsShared) == "table" and db.flightsShared or EMPTY) do
+    fk = fk + 1
+    if type(sh) == "table" then for _ in pairs(sh) do fv = fv + 1 end end
+  end
+  r.flug = ("Flug %d Strecken %d Werte ca %d KB"):format(fk, fv, math.floor((fk * 40 + fv * 20) / 1024))
+  local rk, re = 0, 0
+  for _, maps in pairs(type(db.prof) == "table" and type(db.prof.rateShared) == "table" and db.prof.rateShared or EMPTY) do
+    for _, m in pairs(type(maps) == "table" and maps or EMPTY) do
+      rk = rk + 1
+      if type(m) == "table" then for _ in pairs(m) do re = re + 1 end end
+    end
+  end
+  r.raten = ("Raten %d Karten %d Eintraege ca %d KB"):format(rk, re, math.floor((rk * 40 + re * 150) / 1024))
+  local parts, de = {}, 0
+  for kind, keys in pairs(type(db.dataShared) == "table" and db.dataShared or EMPTY) do
+    local k, e = 0, 0
+    for _, m in pairs(type(keys) == "table" and keys or EMPTY) do
+      k = k + 1
+      if type(m) == "table" then for _ in pairs(m) do e = e + 1 end end
+    end
+    de = de + k * 40 + e * 50
+    parts[#parts + 1] = ("%s %d/%d"):format(tostring(kind), k, e)
+  end
+  table.sort(parts)
+  r.daten = ("Daten %s ca %d KB"):format(#parts > 0 and table.concat(parts, " ") or "keine", math.floor(de / 1024))
+  return r
+end
+
+local function TeilenZeile(wann)
+  if not ns.TestLog then return end
+  local g = ns.TeilenGroesse()
+  ns.TestLog("TEILEN", ("%s | Kanal %s, beigetreten %s, lesbar %d, geheim %d | recv %d sent %d gsent %d absender %d bad %d dropped %d secret %d echo %d cells %d | %s, %s, %s, %s%s"):format(
+    wann, tostring(chanState), chanState == "ok" and "ja" or "nein", S.readable or 0, S.secret or 0,
+    S.recv or 0, S.sent or 0, S.gsent or 0, S.nsenders or 0, S.bad or 0, S.dropped or 0, S.secret or 0, S.echo or 0, S.cells or 0,
+    g.wege, g.flug, g.raten, g.daten, Enabled() and "" or " | teilen aus"))
+end
+ns.TeilenZeile = TeilenZeile
+
+do
+  local f = CreateFrame("Frame")
+  ns.RegEv(f, "PLAYER_LOGIN")
+  f:SetScript("OnEvent", function()
+    if not (C_Timer and ns.Ticker) then return end
+    C_Timer.After(TD.LOG_START_S, function() pcall(TeilenZeile, "Login") end)
+    ns.Ticker(TD.LOG_MIN * 60, function() pcall(TeilenZeile, "Stand") end, nil, true)
+    C_Timer.After(TD.AUFR_START_S, function() pcall(ns.TeilenAufraeumen) end)
+    ns.Ticker(TD.AUFR_MIN * 60, function() pcall(ns.TeilenAufraeumen) end, nil, true)
+  end)
+end

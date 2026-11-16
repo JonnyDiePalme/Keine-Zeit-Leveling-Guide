@@ -2988,6 +2988,18 @@ function ns.HudInfo()
       i.warn = (TR"Bei %s noch nicht %s: %s"):format(ns.missed.name or "?", ns.missed.turnin and (ns.EN and "turned in" or "abgegeben") or (ns.EN and "accepted" or "angenommen"), table.concat(ns.missed.names, ", "))
     elseif ns.levelWarn and not ns.levelWarn.ignored then
       i.warn = (TR"Unterlevelt, Ziel Level %d"):format(ns.levelWarn.need)
+    else
+      -- 1.5a (Q2, Pr 06:15, K 18:12): starker Gegner (auch Elite oder wandernd) nahe am Ziel dieses Schritts: Hinweis
+      local cs = opt and opt.steps and opt.steps[opt.idx or 1]
+      local L = UnitLevel and UnitLevel("player") or 1
+      local worst
+      for _, a in ipairs(cs and cs.acts or {}) do
+        if a.foeMax and a.foeMax - L >= ns.FOE_NEAR.UEBER and not (ns.ActDone and ns.ActDone(a)) and (not worst or a.foeMax > worst) then worst = a.foeMax end
+      end
+      if worst then
+        i.warn = (TR"Vorsicht: Gegner bis Level %d in der Nähe vom Ziel"):format(worst)
+        if ns.TestLog and ns.foeNearSaid ~= cs then ns.foeNearSaid = cs; ns.TestLog("GEGNER", ("starker Gegner nahe am Ziel: Level %d, du %d"):format(worst, L)) end
+      end
     end
     -- kein Questziel in diesem Schritt: Stand einer Quest aus diesem Schritt (nicht irgendeine aus der Zone)
     if #i.objs == 0 and ns.ProgressText then
@@ -4499,6 +4511,8 @@ local function SaneOpt(o)
 end
 -- P217 Punkt 1: Packen und Auspacken der Daten anderer Charaktere (siehe Login)
 ns.CHAR_PACK = { ON = true, V = 1, NIE = { knownFP = true, fpEcht = true, fpVermutet = true } }
+-- 1.5a (Q2): Hinweis im Mini Fenster, wenn ein Gegner so viele Level ueber dir nahe am Ziel steht
+ns.FOE_NEAR = { UEBER = 5 }
 local function EU()
   local E = C_EncodingUtil
   if not (ns.CHAR_PACK.ON and E and E.SerializeCBOR and E.DeserializeCBOR and E.CompressString and E.DecompressString
@@ -4712,6 +4726,8 @@ f:SetScript("OnEvent", function(_, event, ...)
         -- 20.3l (Na J1, Log 20.3j): vermutete Flugpunkte und ob die Flugkarte schon gesehen wurde, pro Charakter
         -- (sonst mischt sich die Vermutung vom Tauren L6 mit dem Troll L60)
         "fpVermutet", "fpKarteGesehen",
+        -- 1.5a (F1): Hinweis "Flugkarte oeffnen" schon gesagt
+        "fpHintDone",
         -- 18.5: uebersprungene Quests (erst 3 Level spaeter wieder in der Route)
         "skipQ",
         -- 20.1b (P13): grosses Fenster nach der Einrichtung einmal von selbst gezeigt

@@ -2,7 +2,7 @@
 ## Title: Keine Zeit Leveling Guide: Farming
 ## Notes: Zusatz zum Keine Zeit Leveling Guide: Berufe (Kraeuter, Erz, Leder, Stoff, Fleisch, Fische) und Gold farmen. Ohne dieses Addon blendet der Guide alles zum Farmen aus.
 ## Author: jonnydiepalme
-## Version: 1.4
+## Version: 1.5
 ## X-License: GPL-3.0-or-later, see LICENSE.txt
 ## Dependencies: KeineZeitLevelingGuide
 

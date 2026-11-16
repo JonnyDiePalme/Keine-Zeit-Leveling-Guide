@@ -199,6 +199,27 @@ local function Mem()
   return ok and kb or 0
 end
 
+-- 1.5b (Pr BER 03:25: Addon nach dem Test 143 statt 77 MB): nach Test und Karten Test die Zwischenspeicher der Wegsuche
+-- leeren, dann in kleinen Schritten aufraeumen (kein grosser Haker) und eine Zeile SPEICHER mit dem Stand danach
+ns.TEST_FREI = { ON = true, STEPS = 20, STEP_KB = 4096, STEP_S = 0.25 }
+function ns.TestFreigeben(was)
+  local F = ns.TEST_FREI
+  if not (F.ON and C_Timer and C_Timer.NewTicker) then return end
+  local a0, l0 = Mem(), collectgarbage("count")
+  if ns.Karte and ns.Karte.FreeTest then pcall(ns.Karte.FreeTest) end
+  local n = 0
+  local tk
+  tk = C_Timer.NewTicker(F.STEP_S, function()
+    n = n + 1
+    collectgarbage("step", F.STEP_KB)
+    if n >= F.STEPS then
+      tk:Cancel()
+      Log("SPEICHER", ("nach %s freigegeben: Addon %d auf %d KB, Lua gesamt %d auf %d KB"):format(tostring(was or "Test"),
+        math.floor(a0), math.floor(Mem()), math.floor(l0), math.floor(collectgarbage("count"))))
+    end
+  end, F.STEPS)
+end
+
 -- Frame Baum: Name oder Art, Lage, Groesse, Text (gekuerzt), nur sichtbare
 local function Tree(f, depth, out, path)
   if #out >= TL.TREE_MAX or not (f and f.IsVisible and f:IsVisible()) then return end
@@ -663,6 +684,7 @@ function ns.TestStart()
       Log("TEST", "Ende")
       ns.Print(TR"Test fertig, Ergebnis steht im Log.")
       Bar.Done()
+      if not (ns.TestAlleRunning and ns.TestAlleRunning()) then ns.TestFreigeben("Test") end
       return
     end
     Bar.Step(jobs, i)
@@ -820,6 +842,7 @@ function ns.KartenTestStart(hier)
       Log("TEST", "Karten Test Ende")
       ns.Print(TR"Karten Test fertig, Ergebnis steht im Log.")
       Bar.Done()
+      ns.TestFreigeben("Karten Test")
       return
     end
     Bar.Step(jobs, i)
@@ -1126,4 +1149,92 @@ function ns.FunktionJobs(p, jobs)
   end
   jobs[#jobs + 1] = function() F("Gefahr Stelle", "uebersprungen", "setzen rechnet die Route neu") end
   jobs[#jobs + 1] = function() F("Englisch", "uebersprungen", "prueft Pr auf dem PC (TR Texte gegen Locale_enUS)") end
+end
+
+------------------------------------------------------------
+-- 1.5a3 (M72, S 00:41: mit 1.5a2 liessen sich die Tests nicht starten): beim Einloggen einmal pruefen, ob das Test Addon
+-- da ist und geladen wurde. Ist ein Ordner <Haupt>_Test installiert, aber KZLG_TEST fehlt, sagt der Chat warum (Grund vom
+-- Spiel: deaktiviert, veraltet, fehlende Abhaengigkeit ...). Log TESTADDON immer, damit Pr es im Log sieht.
+------------------------------------------------------------
+function ns.TestAddonCheck()
+  local addonName = (type(ADDON) == "string" and ADDON ~= "") and ADDON or "ForeverWegweiser"
+  local names = { addonName .. "_Test", "KeineZeitLevelingGuide_Test", "ForeverWegweiser_Test" }
+  local GetInfo = (C_AddOns and C_AddOns.GetAddOnInfo) or GetAddOnInfo
+  local IsLoaded = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
+  local found, why
+  for _, n in ipairs(names) do
+    if GetInfo then
+      local ok, name, _, _, loadable, reason = pcall(GetInfo, n)
+      if ok and name then
+        local okL, loaded = pcall(IsLoaded or function() return nil end, n)
+        found = n
+        why = (okL and loaded) and "geladen" or ("nicht geladen" .. (reason and (", Grund " .. tostring(reason)) or "") .. (loadable == false and ", nicht ladbar" or ""))
+        break
+      end
+    end
+  end
+  local T = _G.KZLG_TEST
+  local P = _G.KZLG_TESTPAKET
+  Log("TESTADDON", ("Test Addon %s: %s, KZLG_TEST %s (Version %s), Testpaket %s, Log %s, Haupt Addon %s"):format(
+    tostring(found or "nicht installiert"), tostring(why or "-"), type(T) == "table" and "da" or "fehlt", tostring(type(T) == "table" and T.version or "-"),
+    type(P) == "table" and tostring(P.stand or "da") or "fehlt", (ns.TestLogActive and ns.TestLogActive()) and "an" or "aus", addonName))
+  if found and type(T) ~= "table" then
+    ns.Print((TR"Test Addon %s ist installiert, aber nicht geladen (%s). Im Addon Menü aktivieren, dann /reload."):format(found, tostring(why)))
+  end
+  return found, why
+end
+do
+  local cf = CreateFrame("Frame")
+  cf:RegisterEvent("PLAYER_LOGIN")
+  cf:SetScript("OnEvent", function() C_Timer.After(8, function() pcall(ns.TestAddonCheck) end) end)
+end
+
+------------------------------------------------------------
+-- 1.5a3 (M71, S 00:42): "Alle Tests" startet alles nacheinander: Test (Fenster, Klick, Navi, Szenarien mit Flug und Was
+-- waere wenn, Funktionen, Events), danach Karten Test. Nur ausser Kampf. Ist das Log aus, wird es dafuer angemacht.
+-- Jeder Teil zeigt wie bisher seinen Balken mit Gesamt (M57 lernt die Dauer), dazu im Chat "Alle Tests: Teil n von m".
+------------------------------------------------------------
+ns.TEST_ALLE = { WAIT_S = 2 }
+local alleRunning = false
+function ns.TestAlleRunning() return alleRunning end
+function ns.TestAlleStart()
+  if alleRunning or running or ktRunning then ns.Print(TR"Test läuft schon."); return end
+  if InCombatLockdown and InCombatLockdown() then ns.Print(TR"Test nur ausserhalb vom Kampf."); return end
+  if not (ns.TestLogActive and ns.TestLogActive()) and ns.TestLogAvailable and ns.TestLogAvailable() and ns.TestLogCmd then
+    ns.TestLogCmd("an")
+  end
+  if not (ns.TestLogActive and ns.TestLogActive()) then ns.Print(TR"Für den Test bitte zuerst das Log starten (Minimap Menü)."); return end
+  local list = {}
+  list[#list + 1] = { name = TR"Test", start = ns.TestStart, busy = function() return running end }
+  local kn = Paket().karte_navi
+  if ns.KartenTestStart and type(kn) == "table" and type(kn.zonen) == "table" and #kn.zonen > 0 then
+    list[#list + 1] = { name = TR"Karten Test", start = function() ns.KartenTestStart() end, busy = function() return ktRunning end }
+  end
+  alleRunning = true
+  Log("TEST", ("Alle Tests Start: %d Teile"):format(#list))
+  local k = 0
+  local function Next()
+    if InCombatLockdown and InCombatLockdown() then
+      alleRunning = false
+      Log("TEST", ("Alle Tests Abbruch: Kampf bei Teil %d von %d"):format(k, #list))
+      ns.Print(TR"Alle Tests abgebrochen (Kampf). Nochmal starten macht weiter.")
+      return
+    end
+    k = k + 1
+    local t = list[k]
+    if not t then
+      alleRunning = false
+      Log("TEST", "Alle Tests Ende")
+      ns.Print(TR"Alle Tests fertig, Ergebnis steht im Log.")
+      return
+    end
+    ns.Print((TR"Alle Tests: Teil %d von %d (%s)"):format(k, #list, t.name))
+    local ok, err = pcall(t.start)
+    if not ok then Log("TEST", ("Alle Tests Teil %d Fehler: %s"):format(k, tostring(err))) end
+    local function Wait()
+      if t.busy() then C_Timer.After(ns.TEST_ALLE.WAIT_S, Wait) else C_Timer.After(1, Next) end
+    end
+    C_Timer.After(ns.TEST_ALLE.WAIT_S, Wait)
+  end
+  C_Timer.After(0.2, Next)
 end

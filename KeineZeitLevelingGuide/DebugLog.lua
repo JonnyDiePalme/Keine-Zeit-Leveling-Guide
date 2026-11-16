@@ -263,6 +263,7 @@ local function L(cat, msg)
   if c0 then Q.spent = Q.spent + (debugprofilestop() - c0) end
 end
 ns.LOG_SEALQ = { q = {}, h = 1, MS = 4, spent = 0 }
+ns.LOG_LOGOUT = { GC_MAX_MB = 300 }
 function ns.LogSealPump()
   local Q = ns.LOG_SEALQ
   local c0 = debugprofilestop and debugprofilestop()
@@ -1348,8 +1349,11 @@ function ns.TestLogEvent(e, a1, a2, a3)
     pcall(ns.LogSealPump)
     pcall(ErrSum)
     -- beim Ausloggen darf es kurz haken: Speicher genau messen (erst aufraeumen, dann pro Addon)
+    -- 1.5b (Pr BER 03:25, S 1.4 Log 21:28: "LogCrypt.lua:112 script ran too long" beim Ausloggen): volles Aufraeumen bei
+    -- 1 GB und mehr Lua dauert Sekunden, danach reicht die Zeit fuer die letzten Zeilen nicht mehr. Nur noch unter GC_MAX_MB
     local okM, msg = pcall(function()
-      collectgarbage("collect")
+      local gcNote = ""
+      if collectgarbage("count") < ns.LOG_LOGOUT.GC_MAX_MB * 1024 then collectgarbage("collect") else gcNote = " (ohne Aufraeumen)" end
       local total = collectgarbage("count")
       local up = (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage) or UpdateAddOnMemoryUsage
       local get = (C_AddOns and C_AddOns.GetAddOnMemoryUsage) or GetAddOnMemoryUsage
@@ -1361,7 +1365,7 @@ function ns.TestLogEvent(e, a1, a2, a3)
           if okG and kb and kb > 0 then parts[#parts + 1] = ("%s %.0f MB"):format(nm, kb / 1024) end
         end
       end
-      return ("%.0f MB, davon %s"):format(total / 1024, #parts > 0 and table.concat(parts, ", ") or "?")
+      return ("%.0f MB%s, davon %s"):format(total / 1024, gcNote, #parts > 0 and table.concat(parts, ", ") or "?")
     end)
     L("SPEICHER", okM and msg or tostring(msg))
     pcall(MsgLine, true)

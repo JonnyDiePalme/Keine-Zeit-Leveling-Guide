@@ -60,6 +60,15 @@ local function Q(id, k)
   if k == "preQuestGroup" and ns.DKPreGroup then return ns.DKPreGroup(id, v) end -- 19.34 (vorquest_1934): negative Id
   return v
 end
+-- 1.5a (Q1): Quest Level wie Questie (pcall), das Mindest Level aber hoechstens so tief wie in der Daten Korrektur (min_level)
+function ns.OptQLvl(id)
+  local ok, ql, rl = pcall(QLib.GetEffectiveQuestLevel, id)
+  if ok and ns.DKMinLevel then
+    local m = ns.DKMinLevel(id)
+    if m and (tonumber(rl) or 0) < m then rl = m end
+  end
+  return ok, ql, rl
+end
 -- 19.33b (Pruefer 09:42 MITTEL 2): Questie Wert ohne die Daten Korrektur (fuer die Pruefung "Questie: nicht machbar")
 local function QRaw(id, k) local d = DBX(); if not d then return end local ok, v = pcall(d.QueryQuestSingle, id, k); if ok then return v end end
 local function N(id, k) local d = DBX(); if not d then return end local ok, v = pcall(d.QueryNPCSingle, id, k); if ok then return v end end
@@ -138,25 +147,29 @@ local function AreaGrid(ui)
   local fac = (UnitFactionGroup and UnitFactionGroup("player") == "Alliance") and "A" or "H"
   local mg = KA and KA.MobGrid and KA.MobGrid(ui, fac)
   if mg then
-    g = { s = {}, n = {} }
+    g = { s = {}, n = {}, mx = {} }
     for k, n in pairs(mg.n) do
       local nn, lv = n - (mg.e[k] or 0), mg.lv[k] or 0
+      local key = math.floor((k % 100) / 2) * 1000 + math.floor(math.floor(k / 100) / 2)
       if nn > 0 and lv > 1 then
-        local key = math.floor((k % 100) / 2) * 1000 + math.floor(math.floor(k / 100) / 2)
         g.s[key] = (g.s[key] or 0) + lv * nn
         g.n[key] = (g.n[key] or 0) + nn
       end
+      -- 1.5a (Q2): staerkster Gegner je Feld, Elite mitgezaehlt
+      if n > 0 and lv > 1 and lv > (g.mx[key] or 0) then g.mx[key] = lv end
     end
     areaGrid[ui] = g
     return g
   end
   local list = ns.hostileIds and ns.hostileIds[ui]
   if not list then return nil end -- Dienste noch nicht fertig: spaeter nochmal
-  g = { s = {}, n = {} }
+  g = { s = {}, n = {}, mx = {} }
   for i, id in ipairs(list) do
     if i % 20 == 0 then Tick() end
     local mx = tonumber(N(id, "maxLevel")) or 0
-    if mx > 1 and (tonumber(N(id, "rank")) or 0) == 0 then
+    -- 1.5a (Q2): Elite zaehlt nur fuer den staerksten Gegner je Feld (g.mx), nicht fuer das typische Level
+    local normal = (tonumber(N(id, "rank")) or 0) == 0
+    if mx > 1 then
       local mn = tonumber(N(id, "minLevel")) or mx
       local lv = (math.min(mn, mx) + mx) / 2
       local sp = N(id, "spawns")
@@ -166,8 +179,11 @@ local function AreaGrid(ui)
             if k > 80 then break end
             if type(c) == "table" and c[1] and c[1] > 0 and c[2] then
               local key = math.floor(c[1] / 100 / AREA_CELL) * 1000 + math.floor(c[2] / 100 / AREA_CELL)
-              g.s[key] = (g.s[key] or 0) + lv
-              g.n[key] = (g.n[key] or 0) + 1
+              if normal then
+                g.s[key] = (g.s[key] or 0) + lv
+                g.n[key] = (g.n[key] or 0) + 1
+              end
+              if mx > (g.mx[key] or 0) then g.mx[key] = mx end
             end
           end
         end
@@ -193,6 +209,20 @@ local function AreaMobLevel(ui, x, y)
   return s / n, n
 end
 ns.OptAreaMobLevel = AreaMobLevel
+-- 1.5a (Q2, Pr 06:15 Quest 1140): staerkster Gegner im Umkreis von ca 150 Yards (auch Elite, auch wandernde Spawns)
+function ns.OptAreaMobMax(ui, x, y)
+  local g = ui and x and y and AreaGrid(ui)
+  if not (g and g.mx) then return nil end
+  local cx, cy = math.floor(x / AREA_CELL), math.floor(y / AREA_CELL)
+  local m
+  for dx = -1, 1 do
+    for dy = -1, 1 do
+      local v = g.mx[(cx + dx) * 1000 + cy + dy]
+      if v and (not m or v > m) then m = v end
+    end
+  end
+  return m
+end
 
 -- 20.3v (Punkt 26 Tausend Nadeln, K 09:56): Fundorte, die zu Fuss nicht erreichbar sind (unter der Klippe, im Berg,
 -- abseits vom Netz), fallen raus, wie beim Angeln (Karte ReachPoint). Wasser bleibt (Mobs und Objekte unter Wasser).
@@ -697,7 +727,7 @@ ns.LVL_UNKNOWN = 9999
 local RANDOM_DROP_N = 12
 local function BuildQuest(qid, allowed, cont, inLog, prog)
   local name = Q(qid, "name") or (TR"Quest " .. qid)
-  local okL, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
+  local okL, ql, rl = ns.OptQLvl(qid)
   if not okL then ql, rl = nil, nil end
   local q = { id = qid, name = name, ql = ql or 1, rl = rl or 1, inLog = inLog, nodes = {} }
   -- 19.32 (Daten 1 vom Daten Chat): Korrekturen zu dieser Quest (Dropper Ausreisser, Gegner die keine sind)
@@ -1256,6 +1286,11 @@ local SAREA
 -- 15 Minuten: etwa so lang wie eine Runde in einem Quest Lager, auf Level 20 bis 50 ein Fuenftel Level. Kurz genug,
 -- dass es eine Pause bleibt, lang genug, dass sich der Weg zum Spot lohnt (Laufen 1 bis 3 Minuten).
 ns.GRIND_BLOCK_MIN = ns.GRIND_BLOCK_MIN or 15
+-- 1.5c: Hinweis "Level fehlt" am Ende der Route erst ab so viel fehlender XP (MIN_XP oder SPAN_F vom Level), bei leerer
+-- Route schon ab LEER_AB (sonst bleibt die Route kurz vor dem Ziel Level ganz leer)
+-- ORT: Hinweis an das beste Grind Gebiet (XP pro Std geteilt durch 1 plus Weg in s / WEG_S), wenn es BESSER_F mal besser
+-- ist als das beste am letzten Ort
+ns.GAP_HINT = { MIN_XP = 500, SPAN_F = 0.3, LEER_AB = 0, ORT = true, WEG_S = 600, BESSER_F = 1.5 }
 -- 19.35 (absprache zeitmodell_1934 B2): Rest Hinweis "Level fehlt" in Stuecke zu hoechstens maxSec teilen. Gibt eine Liste
 -- { dur, gain }, Summe gleich wie vorher (Zeit und XP). Hoechstens 6 Stuecke, das letzte nimmt dann den Rest (im Spiel
 -- rechnet die Route nach dem ersten Stueck ohnehin neu)
@@ -2035,7 +2070,7 @@ function ns.Optimize(targetLevel, done, opts)
   local seedOn = not special0 and L0 < 6 and not awayStart
   local seeds = {}
   SeedQuest = function(qid)
-    local okS, qlS = pcall(QLib.GetEffectiveQuestLevel, qid)
+    local okS, qlS = ns.OptQLvl(qid)
     if not okS or not qlS or qlS > 2 then return end
     local rc, rr = Q(qid, "requiredClasses"), ns.DKRaces(qid, Q(qid, "requiredRaces"))
     if rc and rc > 0 and classID and not ns.HasBit(rc, classID - 1) then return end
@@ -2108,7 +2143,7 @@ function ns.Optimize(targetLevel, done, opts)
       curQ = qid
       if seedOn then SeedQuest(qid) end
       if not complete[qid] and not blocked[qid] and not (ns.OfferNo and ns.OfferNo(qid)) then
-        local ok, ql, rl = pcall(QLib.GetEffectiveQuestLevel, qid)
+        local ok, ql, rl = ns.OptQLvl(qid)
         local repAmt
         if opts.rep then
           local rr = Q(qid, "reputationReward")
@@ -2800,6 +2835,13 @@ function ns.Optimize(targetLevel, done, opts)
         end
       end
       q.areaL = area and math.floor(area + 0.5) or nil
+      -- 1.5a (Q2): staerkster Gegner um jedes Ziel der Quest, fuer den Hinweis im Mini Fenster (act.foeMax)
+      for _, n in ipairs(q.nodes or {}) do
+        if n.map and n.x and n.y and (n.kind == "O" or n.kind == "K") then
+          local mx = ns.OptAreaMobMax(n.map, n.x, n.y)
+          n.foeMax = mx and math.floor(mx + 0.5) or nil
+        end
+      end
       -- Sascha 08:35: Gegner, die man toeten muss, hoechstens 2 ueber dir; Gegner, die am Zielort nur herumstehen,
       -- hoechstens 4 ueber dir; in der Gruppe je 1 Level mehr
       local foeCap
@@ -3344,7 +3386,7 @@ function ns.Optimize(targetLevel, done, opts)
               if okV and type(txt) == "string" then st = TR"Questie: " .. txt end
             end
           else
-            local okL, ql2, rl2 = pcall(QLib.GetEffectiveQuestLevel, id)
+            local okL, ql2, rl2 = ns.OptQLvl(id)
             st = okL and rl2 and (TR"nicht im Level Fenster, ab " .. rl2) or TR"unbekannt"
           end
           return nm .. " (" .. st .. ")"
@@ -3995,7 +4037,8 @@ function ns.Optimize(targetLevel, done, opts)
     if not opts.speed and fills == 0 then
       local lv0 = math.floor(LevelAt(xp0 + have))
       local span0 = (ns.xpTotal[lv0 + 1] or 0) - (ns.xpTotal[lv0] or 0)
-      if gap < span0 * (opts.emergency and 0.5 or 0.3) then Later(HearthPlan); return end
+      -- 1.5c: leere Route kurz vor dem Ziel: trotzdem der Hinweis Level fehlt (sonst 0 Schritte und Rechnen im Kreis)
+      if gap < span0 * (opts.emergency and 0.5 or 0.3) then Later((#route == 0 and fillGap) and GapHint or HearthPlan); return end
     end
     local F = ns.FLOW or {}
     -- laengster Grind Block am Stueck: ns.GRIND_BLOCK_MIN (Minuten), der Rest kommt an einer anderen Stelle
@@ -4111,8 +4154,29 @@ function ns.Optimize(targetLevel, done, opts)
     local gap = xpNeed - have
     local lv = math.floor(LevelAt(xp0 + have))
     local span = (ns.xpTotal[lv + 1] or 0) - (ns.xpTotal[lv] or 0)
-    if gap > math.max(500, span * 0.3) then
+    -- 1.5c (Pr BER 04:55, rauchrc_v15b: L59.87 und L59.97 in Mondlichtung, Route leer, 85 mal "0 Schritte"): unter 30 Prozent
+    -- vom Level fehlte der Hinweis, auch wenn gar kein Schritt mehr da war. Ist die Route leer, reicht jede fehlende XP
+    local GH = ns.GAP_HINT
+    if gap > ((#route == 0 and GH.LEER_AB) or math.max(GH.MIN_XP, span * GH.SPAN_F)) then
       local last = route[#route] or start
+      -- 1.5c (Pr BER 07:20: L59.74 grindet in Mondlichtung, 394 Min fuer 6472 XP): der Hinweis steht am besten Grind
+      -- Gebiet fuers Level (XP pro Std mit Weg dorthin), nicht einfach am letzten Ort. Nur wenn es eins mit Rate gibt
+      if GH.ORT and not grpDung then
+        if #spots == 0 then pcall(BuildSpots, true) end
+        local bestSp, bestS, hereS = nil, 0, 0
+        for _, sp in ipairs(spots) do
+          local r = SpotRate(sp, lv + 0.5)
+          if r > 0 then
+            local s = r / (1 + D(last, sp) / (speed or 7) / GH.WEG_S)
+            if s > bestS then bestSp, bestS = sp, s end
+            if sp.map == last.map and s > hereS then hereS = s end
+          end
+        end
+        if bestSp and bestS > hereS * GH.BESSER_F then
+          if ns.TestLog then ns.TestLog("RECHNEN", ("Hinweis Level fehlt bei %s (Karte %s) statt Karte %s"):format(tostring(bestSp.name), tostring(bestSp.map), tostring(last.map))) end
+          last = { map = bestSp.map, x = bestSp.x, y = bestSp.y, wx = bestSp.wx, wy = bestSp.wy, cont = bestSp.cont }
+        end
+      end
       local rate = (grind > 0 and grind or 6000) * (grpDung and DUNG_F or 1)
       local dn = ns.DungeonSuggest and ns.DungeonSuggest(lv, grpDung) or nil
       -- 19.35 (B2): in Stuecken zu hoechstens GRIND_BLOCK_MIN. 20.3d (Si rauch203cn, 5 von 5 Duo Laeufen mit Block bis
@@ -4910,6 +4974,7 @@ function ns.Optimize(targetLevel, done, opts)
           item = n.item, pre = n.pre and not acceptedQ[n.q] or nil, guess = n.guess, npc = n.npc, buyAt = n.buyAt,
           srcItem = n.srcItem, srcFor = n.srcFor, mob = n.mob, bagItem = n.bagItem }
         if n.kind == "O" then act.foe, act.foeA = n.mobL, n.areaL; act.pdur = n.raw end -- 19.13: Gegner Level am Ziel
+        act.foeMax = n.foeMax -- 1.5a (Q2)
         -- 19.31: Questlevel und hoechster Gegner der Quest fuer die Pruefung beim Annehmen (Realitaets Regel)
         if n.kind == "A" and n.q then act.ql, act.foeQ = n.q.ql, n.q.mobMax end
         -- 19.32 (Sim rauch1931dev, Elite allein mit Gegnern auf deinem Level): Elite Level der Quest fuer die Pruefung beim
@@ -5082,7 +5147,7 @@ function ns.Optimize(targetLevel, done, opts)
           local rc, rr = Q(id, "requiredClasses"), ns.DKRaces(id, Q(id, "requiredRaces"))
           if rc and rc > 0 and classID and not ns.HasBit(rc, classID - 1) then return false end
           if rr and rr > 0 and raceID and not ns.RaceOK(rr, raceID) then return false end
-          local okL, _, rl = pcall(QLib.GetEffectiveQuestLevel, id)
+          local okL, _, rl = ns.OptQLvl(id)
           if okL and rl and rl > math.floor((lvl or 0) + 0.001) then return false end
           if IsHiddenQuest and IsHiddenQuest(id) then return false end
           if ns.IsEventQuestSkipped and ns.IsEventQuestSkipped(id) then return false end
@@ -8062,7 +8127,7 @@ function ns.DiscoverZones(done)
           -- Klassenquests zaehlen nicht (die verzerren den Levelbereich, zb Mondlichtung fuer Druiden)
           local rc = Q(qid, "requiredClasses")
           if ui and not ns.zones[ui] and not (ns.cityParent and ns.cityParent[ui]) and not (type(rc) == "number" and rc > 0) then
-            local ok, ql = pcall(QLib.GetEffectiveQuestLevel, qid)
+            local ok, ql = ns.OptQLvl(qid)
             if ok and type(ql) == "number" and ql > 0 and ql <= 60 then
               levels[ui] = levels[ui] or {}
               table.insert(levels[ui], ql)

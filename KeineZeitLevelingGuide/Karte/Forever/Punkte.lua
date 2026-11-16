@@ -1,8 +1,8 @@
--- Markante Punkte fuer die Karte (Forever, Werkzeug Stand 188, 2026-11-15 13:27)
+-- Markante Punkte fuer die Karte (Forever, Werkzeug Stand 194, 2026-11-16 12:34)
 -- FWW_AUTO_PUNKTE.forever[ui] = { {x, y, art, name_en, name_de, ziel_ui}, ... } x y wie C_Map 0 bis 1
 -- art: f Flugmeister, t Stadttor, a Aufzug, s Schiff, z Zeppelin, u Tunnel oder Tiefenbahn, d Dungeon Eingang; name_de leer = name_en nehmen; ziel_ui nur bei s z u d, sonst nil
 FWW_AUTO_PUNKTE = FWW_AUTO_PUNKTE or {}
-FWW_AUTO_PUNKTE.stand = 188
+FWW_AUTO_PUNKTE.stand = 194
 FWW_AUTO_PUNKTE.format = 1
 FWW_AUTO_PUNKTE.forever = {
   [1411] = { { 0.0144, 0.7551, "d", "Wailing Caverns", "", nil }, { 0.5090, 0.1390, "z", "Zeppelin", "", 1420 }, { 0.5060, 0.1260, "z", "Zeppelin", "", 1434 } },

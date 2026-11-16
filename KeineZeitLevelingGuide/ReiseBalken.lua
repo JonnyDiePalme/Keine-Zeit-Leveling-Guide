@@ -10,7 +10,8 @@ local TR = ns.TR
 -- stehen nur noch Abfahrt und Fahrt (Zeppelin, Schiff, Tiefenbahn).
 -- Abfahrt nur, wenn sie in den naechsten 3 Schritten kommt und du in hoechstens 15 Min dort bist (Navi.lua ns.DepartBar).
 -- Puffer = Abfahrt minus deine Ankunft. Zwischen minus und plus RB.KNAPP_S oder darunter: Balken rot.
-ns.RB = { W = 170, H = 14, GAP = 3, KNAPP_S = 30, TICK_S = 0.5, NAME_MAX = 22, NAME_PUF = 16, STEG_YD = 200 }
+ns.RB = { W = 170, H = 14, GAP = 3, KNAPP_S = 30, TICK_S = 0.5, NAME_MAX = 22, NAME_PUF = 16, STEG_YD = 600 }
+-- 1.5a (M66, S 17:46): Abfahrten am Steg oder Turm schon ab 600 yd (vorher 200), auch in der Pause. Nur hier einstellen
 local RB = ns.RB
 ns.ReiseBalkenOn = true
 
@@ -100,10 +101,12 @@ local function Lines()
     end
   end
   -- 1.4zj (M35, S 14:43): im Flug oder in der Pause nur der Flug Balken, Abfahrt und Fahrt weg
-  if flying or (ns.db and ns.db.paused) then return out end
+  -- 1.5a (M66): in der Pause bleibt die Liste der Abfahrten am Steg (unten), nur Fahrt und Abfahrt der Route fallen weg
+  if flying then return out end
+  local paused = ns.db and ns.db.paused
   -- 1.4zf (M28, S Durchsicht 13:44: Zeppelin fehlt als Teilstrecke): auf Schiff oder Zeppelin ein Balken wie beim Flug,
   -- Fahrzeit aus Travel.lua (ns.TravelRide), Start beim Einsteigen (ns.WalkOnBoat)
-  if not flying then
+  if not flying and not paused then
     local nv = ns.navi
     local lg = nv and not nv.hidden and nv.legs and nv.legs[nv.cur]
     local onBoat = ns.WalkOnBoat and ns.WalkOnBoat()
@@ -118,7 +121,7 @@ local function Lines()
       rideOn, rideAt = nil, nil
     end
   end
-  local d = ns.DepartBar and ns.DepartBar()
+  local d = not paused and ns.DepartBar and ns.DepartBar() or nil
   if d then
     local key = tostring(d.name)
     local tot = totals[key]
@@ -170,7 +173,11 @@ local function Lines()
                 ns.lastNautRaw = keep
                 local dest = tostring(o[4] or "?")
                 if ok and type(w) == "number" and not (routeDest and routeDest:find(dest, 1, true)) then
-                  out[#out + 1] = { key = "steg", val = 0, max = 1, col = { 0.45, 0.45, 0.45 },
+                  -- 1.5a (M67, S 18:15): auch hier ein Balken, der sich bis zur Abfahrt fuellt (wie die Abfahrt der Route, grau)
+                  local tk = "steg:" .. key
+                  local tot = totals[tk]
+                  if not tot or w > tot + 1 then tot = math.max(1, w); totals[tk] = tot end
+                  out[#out + 1] = { key = "steg", val = tot - w, max = tot, col = { 0.45, 0.45, 0.45 },
                     text = ("%s  %s"):format(Short(ShortName((TR"%s nach %s"):format(tostring(l.kind), dest)), RB.NAME_MAX), MS(w)),
                     tip = { (TR"%s nach %s"):format(tostring(l.kind), dest), (TR"Fährt in %s"):format(Clock(w)), TR"Nur zur Info, nicht in deiner Route" } }
                 end
@@ -327,5 +334,7 @@ local ev = CreateFrame("Frame")
 ns.RegEv(ev, "PLAYER_LOGIN")
 ev:SetScript("OnEvent", function()
   -- 1.4zj (M35, S 14:43: Balken beim Pausieren eingefroren): laeuft auch in der Pause (der Ticker stand dort still)
-  C_Timer.After(2, function() ns.Ticker(RB.TICK_S, function() local ok, err = pcall(Update); if not ok and ns.TestLog then ns.TestLog("REISE", "Fehler " .. tostring(err)) end end, nil, true) end)
+  -- 1.5a (M65, S 17:44: in der Pause nur alle 5 s): keep = true, sonst drosselt der Ruhe Modus (ns.Idle, ns.LowPower) den
+  -- Takt. Der Balken ist klein und zaehlt immer jede Sekunde weiter, der Rest vom Ruhe Modus bleibt
+  C_Timer.After(2, function() ns.Ticker(RB.TICK_S, function() local ok, err = pcall(Update); if not ok and ns.TestLog then ns.TestLog("REISE", "Fehler " .. tostring(err)) end end, true, true) end)
 end)

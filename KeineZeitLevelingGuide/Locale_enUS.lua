@@ -4850,3 +4850,27 @@ T["- Preise immer aus der neuesten Quelle (TSM oder Auctionator)"] = "- Prices a
 T["- Flugzeiten bleiben mit dem Vielflieger Talent richtig"] = "- Flight times stay correct with the faster flight talent"
 T["- Lange Routen rechnen in kleineren Teilen, kein endloses Rechnen mehr"] = "- Long routes are calculated in smaller parts, no more endless calculating"
 T["- Weniger Rechenzeit und Speicher im Hintergrund"] = "- Less background CPU time and memory"
+-- 1.5a
+T["Vorsicht: Gegner bis Level %d in der Nähe vom Ziel"] = "Careful: enemies up to level %d near the target"
+T["Navi: Flugpunkte, die du schon vor dem Addon gelernt hast, kennt es erst, wenn du einmal bei einem Flugmeister die Flugkarte öffnest. Am besten einmal je Kontinent, dann plant das Navi deine Flüge mit ein."] = "Navi: flight points you learned before the addon are only known once you open the flight map at a flight master. Best once per continent, then the navi plans your flights."
+-- 1.5a3
+T["Test Addon %s ist installiert, aber nicht geladen (%s). Im Addon Menü aktivieren, dann /reload."] = "Test addon %s is installed but not loaded (%s). Enable it in the addon menu, then /reload."
+T["Alle Tests"] = "All tests"
+T["Test"] = "Test"
+T["Alle Tests abgebrochen (Kampf). Nochmal starten macht weiter."] = "All tests stopped (combat). Start again to continue."
+T["Alle Tests fertig, Ergebnis steht im Log."] = "All tests done, results are in the log."
+T["Alle Tests: Teil %d von %d (%s)"] = "All tests: part %d of %d (%s)"
+
+-- 1.5 (Hilfe Neu in 1.5)
+T["Neu in 1.5"] = "New in 1.5"
+T["Neu in Version 1.5|r"] = "New in version 1.5|r"
+T["- Navi findet mehr Wege über Zonen Grenzen, weniger Luftlinie"] = "- Navi finds more paths across zone borders, less straight lines"
+T["- Zonen, die für dich viel zu hoch sind, werden umgangen"] = "- Zones far above your level are avoided"
+T["- Warnung, wenn beim Ziel viel stärkere Gegner sind"] = "- Warning when much stronger enemies are near the target"
+T["- Kurz vor dem Ziel Level zeigt die Route das beste Grind Gebiet"] = "- Close to the target level the route shows the best grind area"
+T["- Erz und Kräuter Runde kürzer"] = "- Shorter ore and herb loops"
+T["- Flug Balken auch in der Pause, Abfahrten früher sichtbar"] = "- Flight bar also while paused, departures shown earlier"
+T["- Hinweis für neue Charaktere: einmal die Flugkarte öffnen"] = "- Hint for new characters: open the flight map once"
+T["- Karten Daten laden erst bei Bedarf, weniger Speicher"] = "- Map data loads only when needed, less memory"
+T["- Geteilte Daten bleiben klein, alte werden aufgeräumt"] = "- Shared data stays small, old entries are cleaned up"
+T["- Weniger Ruckeln, Menü Punkt Alle Tests"] = "- Less stutter, menu entry Run all tests"

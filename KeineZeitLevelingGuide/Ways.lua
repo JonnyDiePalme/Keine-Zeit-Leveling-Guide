@@ -567,12 +567,19 @@ end
 
 -- Platz begrenzen: ueber 5 MB fallen die am wenigsten bestaetigten Felder weg (nur ein Spieler, nur ein Tag).
 -- Eigene Laufwege sind davon nie betroffen (die liegen woanders).
+-- 1.5b (S 02:44 Ja, Deckel fuer geteilte Daten): auch die Zusatz Felder (sharedX, sharedD) zaehlen mit, Grenze aus
+-- ns.TEILEN_DECKEL.WEGE_MB (Sync.lua), sonst 5 MB
 local CAP = 5 * 1024 * 1024
+local function ZB(db, ui)
+  return #(db.shared[ui] or "") + #((db.sharedX and db.sharedX[ui]) or "") + #((db.sharedD and db.sharedD[ui]) or "")
+end
 function W.Trim()
   local db = ns.db
   if not (db and db.shared) then return end
+  local D = ns.TEILEN_DECKEL
+  local CAP = (D and D.ON and D.WEGE_MB) and D.WEGE_MB * 1024 * 1024 or CAP
   local total = 0
-  for _, s in pairs(db.shared) do total = total + #s end
+  for ui in pairs(db.shared) do total = total + ZB(db, ui) end
   if total <= CAP then return end
   local minBits = 1
   while total > CAP * 0.9 and minBits <= 3 do
@@ -583,9 +590,9 @@ function W.Trim()
           local sk, _, _, _, days = Unpack(v)
           if Pop31(sk) <= minBits and days <= 1 then z.V[k] = nil; z.X[k] = nil; z.dirty = true end
         end
-        local before = #(db.shared[ui] or "")
+        local before = ZB(db, ui)
         SaveZone(ui, z)
-        total = total - before + #(db.shared[ui] or "")
+        total = total - before + ZB(db, ui)
       end
       if total <= CAP * 0.9 then break end
     end

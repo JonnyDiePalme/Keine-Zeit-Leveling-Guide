@@ -68,8 +68,10 @@ local function Take(part)
           both = (e.seiten == "Beide" or e.seiten == "beide") or nil,
           fq = MissQ(e.fehlt_quest), fg = MissG(e.fehlt_geber),
           -- 1.4ze (P197): Fest Quest, die in Questies Fest Liste fehlt (Wert = Name vom Fest oder true)
-          fest = (e.fest == true or (type(e.fest) == "string" and e.fest ~= "")) and e.fest or nil }
-        if t.skip or t.noFoe or t.noLvl or t.pre or t.timer or t.fac or t.both or t.fq or t.fg or t.fest then
+          fest = (e.fest == true or (type(e.fest) == "string" and e.fest ~= "")) and e.fest or nil,
+          -- 1.5a (Q1, Pr 01:50): min_level = Mindest Level fuer die Planung (hoeher als Questie, zb Ziel neben starken Gegnern)
+          minL = (type(e.min_level) == "number" and e.min_level > 1) and math.floor(e.min_level) or nil }
+        if t.skip or t.noFoe or t.noLvl or t.pre or t.timer or t.fac or t.both or t.fq or t.fg or t.fest or t.minL then
           if not DK.quest[id] then DK.nQ = DK.nQ + 1 end
           DK.quest[id] = t
         end
@@ -144,6 +146,8 @@ function ns.DKQuest(qid) return qid and DK.quest[qid] or nil end
 function ns.DKDungeons() return DK.dungeon or {} end
 -- 1.4ze (P197): Fest laut Daten Korrektur (nil = nicht bekannt)
 function ns.DKFest(qid) local e = qid and DK.quest[qid]; return e and e.fest or nil end
+-- 1.5a (Q1): Mindest Level aus der Daten Korrektur (nil = nur Questie)
+function ns.DKMinLevel(qid) local e = qid and DK.quest[qid]; return e and e.minL or nil end
 -- 1.3q (Daten 13): Questie geht immer vor. qHas = Questie kennt die Quest (Name) bzw den Geber. Log DATEN einmal je Quest
 function ns.DKMissQuest(qid, qHas)
   local e = qid and DK.quest[qid]

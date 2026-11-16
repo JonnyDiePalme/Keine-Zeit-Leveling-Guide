@@ -201,8 +201,13 @@ function ns.DataShareReceive(text, sbit)
     if ok then
       local m = S[kind][k] or {}
       S[kind][k] = m
-      local cnt = 0
-      for _ in pairs(m) do cnt = cnt + 1 end
+      local cnt, oldK, oldT = 0, nil, nil
+      for sk, e in pairs(m) do
+        cnt = cnt + 1
+        if type(e) == "table" and tnow - (e.t or 0) >= DS.KEEP_DAYS * 86400 and (not oldT or (e.t or 0) < oldT) then oldK, oldT = sk, e.t or 0 end
+      end
+      -- 1.5b (Deckel): voll, aber ein Eintrag ist abgelaufen: der macht Platz
+      if not m[sbit] and cnt >= DS.KEEP_SENDERS and oldK then m[oldK] = nil; cnt = cnt - 1 end
       if m[sbit] or cnt < DS.KEEP_SENDERS then m[sbit] = { v = v, t = tnow }; took = took + 1 else drop = drop + 1; why = "voll" end
     else
       drop = drop + 1; why = w

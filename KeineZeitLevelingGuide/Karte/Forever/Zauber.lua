@@ -1,4 +1,4 @@
--- Zauber fuers Reisetempo und XP Buffs fuer Forever Wegweiser, Werkzeug Stand 188, 2026-11-15 13:27
+-- Zauber fuers Reisetempo und XP Buffs fuer Forever Wegweiser, Werkzeug Stand 191, 2026-11-15 20:14
 -- FWW_AUTO_ZAUBER.tempo = { { id, name, art, prozent, dauer, klassen, level, quelle }, ... }
 --   art: lauf, reit (Reittier schneller), reittier (ist ein Reittier), schwimm. prozent = mehr Tempo.
 --   dauer in Sekunden, -1 = bis man es ausmacht, -2 = unbekannt. klassen = Maske (1 Krieger, 2 Paladin, 4 Jaeger,

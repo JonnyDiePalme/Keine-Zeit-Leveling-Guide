@@ -1390,12 +1390,14 @@ local function W(map, x, y)
 end
 
 -- Runde: naechster Nachbar ab dem Punkt nahe beim Start, dann 2 opt
-local function Tour(pts, sx, sy)
-  if #pts <= 1 then return pts end
+-- 1.5a (E1, Pr 03:10: Durotar 1044 yd zurueck zur ersten Stelle): geschlossene Runde. Der Rueckweg zaehlt mit (2 opt war
+-- schon im Kreis), dazu Or opt (1 bis 3 Stellen an einen besseren Platz) und mehrere Startpunkte (ns.TOUR.STARTS).
+-- Danach beginnt die Runde bei der Stelle, die dir am naechsten ist
+ns.TOUR = { STARTS = 6, OROPT = 3 }
+local function TourOne(pts, cx, cy)
   local left = {}
   for i, p in ipairs(pts) do left[i] = p end
   local out = {}
-  local cx, cy = sx or left[1].wx, sy or left[1].wy
   while #left > 0 do
     local bi, bd
     for i, p in ipairs(left) do
@@ -1425,8 +1427,95 @@ local function Tour(pts, sx, sy)
         end
       end
     end
+    -- Or opt: Stueck aus 1 bis OROPT Stellen an die guenstigste andere Stelle im Kreis setzen
+    if not improved and n >= 5 then
+      for seg = 1, math.min(ns.TOUR.OROPT, n - 3) do
+        for i = 1, n do
+          local p0, s1 = out[(i - 2) % n + 1], out[i]
+          local se = out[(i + seg - 2) % n + 1]
+          local p1 = out[(i + seg - 1) % n + 1]
+          local gain = D(p0, s1) + D(se, p1) - D(p0, p1)
+          if gain > 1 then
+            local piece, rest = {}, {}
+            for k = 0, seg - 1 do piece[#piece + 1] = out[(i + k - 1) % n + 1] end
+            local inP = {}
+            for _, p in ipairs(piece) do inP[p] = true end
+            for _, p in ipairs(out) do if not inP[p] then rest[#rest + 1] = p end end
+            local bj, bc, rev
+            for j = 1, #rest do
+              local a, b = rest[j], rest[j % #rest + 1]
+              local c1 = D(a, piece[1]) + D(piece[#piece], b) - D(a, b)
+              local c2 = D(a, piece[#piece]) + D(piece[1], b) - D(a, b)
+              if not bc or c1 < bc then bj, bc, rev = j, c1, false end
+              if c2 < bc then bj, bc, rev = j, c2, true end
+            end
+            if bc and bc < gain - 1 then
+              local nw = {}
+              for j = 1, #rest do
+                nw[#nw + 1] = rest[j]
+                if j == bj then
+                  if rev then for k = #piece, 1, -1 do nw[#nw + 1] = piece[k] end
+                  else for k = 1, #piece do nw[#nw + 1] = piece[k] end end
+                end
+              end
+              out = nw
+              improved = true
+              break
+            end
+          end
+        end
+        if improved then break end
+      end
+    end
   end
   return out
+end
+local function CycAir(o)
+  local len = 0
+  for i = 1, #o do
+    local a, b = o[i], o[i % #o + 1]
+    len = len + math.sqrt((a.wx - b.wx) ^ 2 + (a.wy - b.wy) ^ 2)
+  end
+  return len
+end
+local function Tour(pts, sx, sy)
+  if #pts <= 1 then return pts end
+  local n = #pts
+  -- Startpunkte: der naechste zu dir (oder der erste), dazu gleichmaessig verteilt
+  local first = 1
+  if sx and sy then
+    local bd
+    for i, p in ipairs(pts) do
+      local d = (p.wx - sx) ^ 2 + (p.wy - sy) ^ 2
+      if not bd or d < bd then first, bd = i, d end
+    end
+  end
+  local starts, seen = { first }, { [first] = true }
+  local k = math.min(ns.TOUR.STARTS, n)
+  for j = 1, k - 1 do
+    local idx = math.floor(j * n / k) + 1
+    if idx <= n and not seen[idx] then seen[idx] = true; starts[#starts + 1] = idx end
+  end
+  local best, bl
+  for _, si in ipairs(starts) do
+    local o = TourOne(pts, pts[si].wx, pts[si].wy)
+    local l = CycAir(o)
+    if not bl or l < bl then best, bl = o, l end
+  end
+  -- im Kreis drehen: Beginn bei der Stelle, die dir am naechsten ist
+  if sx and sy and best then
+    local bi, bd
+    for i, p in ipairs(best) do
+      local d = (p.wx - sx) ^ 2 + (p.wy - sy) ^ 2
+      if not bd or d < bd then bi, bd = i, d end
+    end
+    if bi and bi > 1 then
+      local r = {}
+      for i = 0, #best - 1 do r[#r + 1] = best[(bi + i - 1) % #best + 1] end
+      best = r
+    end
+  end
+  return best
 end
 local function TourLen(pts)
   local len = 0
@@ -2117,12 +2206,23 @@ end
 -- 1.3zj (Pr 09:55 PROF_HALT_NICHT_FERTIG, K 10:44 Punkt 1): Halt wurde nie fertig. Jetzt: Act gehoert zum jetzigen Schritt
 -- (gleiche Tabelle oder gleicher Halt: k P und gleiches what), Abstand auch ohne Weltkoordinaten (gleiche Karte direkt), und
 -- je Act einmal ein Log mit dem Grund, wenn er nicht fertig wird
+-- 1.5a (M68, Pr VOR 20:10: 6427 Zeilen in 40 Min): der Grund traegt den Abstand ("noch n yd") und war damit fast jedes Mal
+-- neu. Jetzt: neue Zeile, wenn sich der Grund ohne Zahl aendert, sonst nur bei mehr als 50 yd Unterschied und hoechstens
+-- alle 10 s (ns.PROF_WHY_LOG)
+ns.PROF_WHY_LOG = { YD = 50, S = 10 }
 local profWhy = setmetatable({}, { __mode = "k" })
 local function ProfWhy(a, why)
-  if ns.TestLog and profWhy[a] ~= why then
-    profWhy[a] = why
-    ns.TestLog("BERUFE", "Halt noch nicht fertig: " .. why)
+  if not ns.TestLog then return end
+  why = tostring(why)
+  local kind = why:gsub("%d+", "#")
+  local d = tonumber(why:match("(%d+) yd"))
+  local now = GetTime and GetTime() or 0
+  local o = profWhy[a]
+  if o and o.kind == kind then
+    if not (d and o.d and math.abs(d - o.d) > ns.PROF_WHY_LOG.YD and now - o.t >= ns.PROF_WHY_LOG.S) then return end
   end
+  profWhy[a] = { kind = kind, d = d, t = now }
+  ns.TestLog("BERUFE", "Halt noch nicht fertig: " .. why)
 end
 function ns.ProfActDone(a)
   local s = ns.ProfSession()

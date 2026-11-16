@@ -1,4 +1,4 @@
--- Gebiete (Unterzonen) mit einem Punkt im Gebiet fuer Entdecken (Forever, Werkzeug Stand 188, 2026-11-15 13:27)
+-- Gebiete (Unterzonen) mit einem Punkt im Gebiet fuer Entdecken (Forever, Werkzeug Stand 191, 2026-11-15 20:14)
 -- FWW_AUTO_GEBIETE.<client>[areaId] = { ui, x, y (wie C_Map, 0 bis 1), welt_x (Norden), welt_y (Westen), kontinent, chunks (Groesse, je 33 yd), eltern areaId, name_de, name_en }
 -- Punkt = Chunk des Gebiets am naechsten zum Schwerpunkt (liegt im Gebiet). ui 0 = keine Zonen Karte bekannt.
 FWW_AUTO_GEBIETE = FWW_AUTO_GEBIETE or {}
